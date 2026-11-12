@@ -181,7 +181,23 @@ export interface PasswordBundle {
   salt: string;
   /** Kept in the record so any device can recompute the same verifier. */
   iterations: number;
-  algo: 'pbkdf2-sha256';
+  /** `firebase-auth` = parola Firebase Auth'ta doğrulanır, belgede hash tutulmaz. */
+  algo: 'pbkdf2-sha256' | 'firebase-auth';
+}
+
+/**
+ * Firebase Auth kullanılırken üyelik belgesine yazılan işaretçi.
+ * Doğrulama Firebase'de yapılır; belgede hash/salt tutulmaz.
+ */
+export const AUTH_PASSWORD_BUNDLE: PasswordBundle = {
+  verifier: '',
+  salt: '',
+  iterations: 0,
+  algo: 'firebase-auth',
+};
+
+export function isFirebaseAuthBundle(record?: { algo?: string } | null): boolean {
+  return record?.algo === 'firebase-auth';
 }
 
 const ITERATIONS = 1200;

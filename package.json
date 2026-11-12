@@ -37,7 +37,8 @@
     "web": "expo start --web",
     "setup:firestore": "node scripts/setup-firestore.mjs",
     "check:firestore": "node scripts/setup-firestore.mjs --check",
-    "deploy:rules": "node scripts/setup-firestore.mjs --deploy"
+    "deploy:rules": "node scripts/setup-firestore.mjs --deploy",
+    "test:auth": "bash scripts/auth-contract.sh"
   },
   "private": true
 }

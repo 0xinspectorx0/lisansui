@@ -40,6 +40,15 @@ import {
   AdminToggle,
 } from '../components/admin/ui';
 import { AdminGate } from '../components/admin/AdminGate';
+import {
+  currentSession,
+  isAuthConfigured,
+  maskKey,
+  probeAuth,
+  resolveAuthConfig,
+  resetAuthConfigCache,
+  signOut as authSignOut,
+} from '../lib/authClient';
 
 export const AdminSettingsScreen: React.FC = () => {
   const { colors } = useAppTheme();
@@ -77,6 +86,34 @@ export const AdminSettingsScreen: React.FC = () => {
       'Root kök (“.”) ama proje hâlâ kpss-asistani — eski projede /courses beklenen veri yok, panelde tohumlama yapman gerekir.'
     );
   }
+
+  /* Firebase Auth durumu */
+  const [authProbe, setAuthProbe] = useState<{
+    busy: boolean;
+    text: string;
+    tone: 'info' | 'success' | 'danger';
+  }>({ busy: false, text: 'Henüz test edilmedi', tone: 'info' });
+  const [authInfo, setAuthInfo] = useState<string | null>(null);
+  // render sırasında okunur; runAuthProbe cache'i sıfırladığı için anahtar sonradan
+  // .env.local'a eklendiyse test sonrası kart kendini tazeler.
+  const authCfg = resolveAuthConfig();
+
+  const runAuthProbe = async () => {
+    setAuthProbe({ busy: true, text: 'Deniyor…', tone: 'info' });
+    resetAuthConfigCache();
+    try {
+      const r = await probeAuth();
+      const s2 = await currentSession();
+      setAuthInfo(
+        s2
+          ? `${s2.email} • uid ${s2.uid.slice(0, 10)}… • token ${s2.expiresAt > Date.now() ? 'geçerli' : 'yenilenecek'}`
+          : 'Bu cihazda kayıtlı Firebase oturumu yok.'
+      );
+      setAuthProbe({ busy: false, text: r.note, tone: r.ok ? 'success' : 'danger' });
+    } catch (e) {
+      setAuthProbe({ busy: false, text: `Test yapılamadı: ${String(e)}`, tone: 'danger' });
+    }
+  };
 
   /* içerik tohumlama (bootstrap) */
   const [seedPlan, setSeedPlan] = useState<SeedPlan | null>(null);
@@ -423,6 +460,105 @@ export const AdminSettingsScreen: React.FC = () => {
               />
             }
           />
+        </AdminCard>
+
+        {/* Firebase Auth */}
+        <AdminSectionTitle
+          label="Firebase Auth (kimlik doğrulama)"
+          hint=".env.local içinde EXPO_PUBLIC_FIREBASE_API_KEY tanımlıysa parola Firebase’de doğrulanır ve Firestore istekleri idToken taşır. Anahtar yoksa yerel PBKDF2 modu devam eder."
+        />
+        <AdminCard>
+          <AdminRow
+            icon="key-outline"
+            title="Kimlik modu"
+            subtitle={
+              isAuthConfigured()
+                ? 'Firebase Auth açık — üyelik belgelerinde parola hash’i tutulmuyor.'
+                : 'Yerel mod — parola cihazda hash’lenip belgeye yazılıyor.'
+            }
+            right={
+              <AdminChip
+                label={isAuthConfigured() ? 'firebase-auth' : 'pbkdf2'}
+                tone={isAuthConfigured() ? 'success' : 'info'}
+              />
+            }
+          />
+          {authCfg ? (
+            <AdminRow
+              icon="pulse-outline"
+              title="API anahtarı"
+              subtitle="EXPO_PUBLIC_FIREBASE_API_KEY (pakete gömülür; public web anahtarı, gizli değil)"
+              right={
+                <Text style={{ fontSize: 11.5, fontWeight: '800', color: colors.textMuted }}>
+                  {maskKey(authCfg.apiKey)}
+                </Text>
+              }
+            />
+          ) : null}
+          <AdminRow
+            icon="person-circle-outline"
+            title="Bu cihazdaki oturum"
+            subtitle={authInfo ?? 'Test edince görünür (Firestore işlemleri bu token ile gider).'}
+            right={
+              <AdminButton
+                small
+                tone="neutral"
+                label="Oturumu kapat"
+                onPress={() => {
+                  void authSignOut().then(() =>
+                    setAuthInfo('Oturum kapatıldı (üyelik belgesine dokunulmadı).')
+                  );
+                }}
+              />
+            }
+          />
+          <AdminRow
+            icon="flask-outline"
+            title="Sağlayıcı testi"
+            subtitle={authProbe.text}
+            right={
+              <AdminButton
+                small
+                label={authProbe.busy ? 'Test ediliyor' : 'Test et'}
+                disabled={authProbe.busy}
+                tone={authProbe.tone === 'danger' ? 'danger' : authProbe.tone === 'success' ? 'success' : 'primary'}
+                onPress={() => void runAuthProbe()}
+              />
+            }
+          />
+          <View
+            style={{
+              padding: 10,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.surfaceSecondary,
+              marginBottom: 4,
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: '900', color: colors.textMuted, marginBottom: 4 }}>
+              AUTH’U BAĞLAMA SIRASI
+            </Text>
+            <Text style={{ fontSize: 10.5, color: colors.textSecondary, lineHeight: 16 }}>
+              1) Console → Authentication → Sign-in method → Email/Password → Enable{'\n'}
+              2) Console → Project settings → Your apps → Web app → SDK config → API anahtarı{'\n'}
+              3) Terminalde:
+            </Text>
+            <Text
+              selectable
+              style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace', marginTop: 4 }}
+            >
+              npm run setup:firestore -- {fsTarget.projectId} --root . --api-key &lt;ANAHTAR&gt;
+            </Text>
+            <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace' }} selectable>
+              npm run deploy:rules
+            </Text>
+            <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
+              4) Metro’yu `--clear` ile yeniden başlat, sonra buradan “Test et”.{'\n'}
+              5) Katı moda geçmek için firestore.rules içinde authRequired() → true:
+              o andan sonra kimliksiz istekler üyelik belgesi okuyamaz/yazamaz.
+            </Text>
+          </View>
         </AdminCard>
 
         {/* Content bootstrap */}

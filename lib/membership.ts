@@ -17,6 +17,8 @@ export interface MemberDoc {
   emailNormalized: string;
   displayName: string;
   password: { verifier: string; salt: string; iterations: number; algo: string };
+  /** Firebase Auth uid'si (EXPO_PUBLIC_FIREBASE_API_KEY tanımlıysa doldurulur). */
+  authUid?: string;
   role: MemberRole;
   status: MembershipStatus;
   vip: boolean;
@@ -199,6 +201,7 @@ export function memberToFields(m: MemberDoc): Record<string, FbValue> {
     salt: s(m.password?.salt),
     iterations: n(m.password?.iterations),
     algo: s(m.password?.algo || 'pbkdf2-sha256'),
+    ...(m.authUid ? { authUid: s(m.authUid) } : {}),
     role: s(m.role),
     status: s(m.status),
     vip: b(m.vip),
@@ -259,6 +262,7 @@ export function memberFromFields(f: any, id: string): MemberDoc {
       iterations: readNum(f, 'iterations'),
       algo: readStr(f, 'algo', 'pbkdf2-sha256'),
     },
+    ...(readStr(f, 'authUid') ? { authUid: readStr(f, 'authUid') } : {}),
     role: (['user', 'editor', 'admin', 'owner'].includes(readStr(f, 'role'))
       ? readStr(f, 'role')
       : 'user') as MemberRole,

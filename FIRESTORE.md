@@ -1,9 +1,19 @@
 # Firestore kurulumu — sıfırdan yeni proje
 
 Bu depo Firebase SDK **kullanmaz**: hem içerik (soru bankası, hap bilgiler) hem de
-üyelikler Firestore **REST API** üzerinden, anonim (API anahtarsız) okunur/yazılır.
-Yeni bir Firestore hesabı/projesi kurduğunda yapman gereken iki şey var:
-**projeyi uygulamaya tanıtmak** ve **güvenlik kurallarını yayımlamak**.
+üyelikler Firestore **REST API** üzerinden okunur/yazılır. Yeni bir Firestore
+hesabı/projesi kurduğunda yapman gereken iki şey var: **projeyi uygulamaya
+tanıtmak** ve **güvenlik kurallarını yayımlamak**.
+
+Kimlik doğrulama iki moddan birinde çalışır (otomatik seçilir, kod değişikliği yok):
+
+| Mod | Ne zaman | Parola nerede | Firestore isteği |
+| --- | --- | --- | --- |
+| **Firebase Auth** | `.env.local` içinde `EXPO_PUBLIC_FIREBASE_API_KEY` varsa | Firebase'de (belgede yalnızca `algo: 'firebase-auth'` + `authUid` işaretçisi) | `Authorization: Bearer <idToken>` |
+| **Yerel** (bugünkü) | anahtar tanımlı değilse | cihazda PBKDF2-SHA256 hash, belgede `verifier/salt/iterations` | anonim |
+
+İstersen anahtarı vermeden başlayabilirsin; sonra tek satırla Auth'a geçersin
+(aşağıda **2b**). İki modda da çalışma anında Firestore belgesindeki veri aynıdır.
 
 | Dosya | Ne yapar |
 | --- | --- |
@@ -15,9 +25,13 @@ Yeni bir Firestore hesabı/projesi kurduğunda yapman gereken iki şey var:
 `kpss-asistani` projesi ve `artifacts/kpss-asistani/public/data` düzeni **varsayılan**
 olarak duruyor. Hiçbir şey değiştirmezsen uygulama bugünkü gibi çalışmaya devam eder.
 
+> **Senin projen (bu oturumda verildi):** ad `kpssasistani`,
+> Project ID **`kpssasistani-01`**, proje numarası `674719983447`.
+> Bu depodaki `.env.example` ve aşağıdaki komutlar bu kimliği kullanıyor.
+
 ## 1) Firebase projesi + Firestore veritabanı
-1. https://console.firebase.google.com/ → **Add project** (ör. `kpss-prod`), Analytics kapalı olabilir.
-2. Sol menü → **Build → Firestore Database → Create database**
+1. https://console.firebase.google.com/ → **Add project** (ör. `kpssasistani-01`), Analytics kapalı olabilir.
+2. Sol menü → **Build → Firestore Database → Create database** (bu proje için tamamlandıysa atla)
    - **Native mode** seç (Datastore mode REST `/v1/projects/.../documents` akışıyla uyumsuz olabilir).
    - Region: `europe-west1` (Belçika) Türkiye için iyi bir seçim.
    - Database ID: **`(default)`** olmalı — kod `databases/(default)` kullanıyor.
@@ -36,7 +50,7 @@ olarak duruyor. Hiçbir şey değiştirmezsen uygulama bugünkü gibi çalışma
 Kod tarafında gereken her şeyi tek satır yapar (`.env.local` + `.firebaserc`),
 sonra sana kalan Console işlerini sırayla sayar:
 ```bash
-npm run setup:firestore -- kpss-prod --root .   # dosyaları yaz
+npm run setup:firestore -- kpssasistani-01 --root .   # dosyaları yaz
 npm run check:firestore                          # kuralları/okumayı dene
 npm run deploy:rules                             # npx firebase-tools ile yayınla
 ```
@@ -58,7 +72,7 @@ silme**, (legacy düzen seçiliyse) yol öneki. Ağın engelli olduğu bir makin
    ```
 2. İçini doldur — **iki satarı birlikte ver**, tek başına proje kimliği yetmez:
    ```bash
-   EXPO_PUBLIC_FIRESTORE_PROJECT=kpss-prod
+   EXPO_PUBLIC_FIRESTORE_PROJECT=kpssasistani-01
    EXPO_PUBLIC_FIRESTORE_ROOT=.
    # opsiyonel: EXPO_PUBLIC_FIRESTORE_DATABASE=(default)
    # emulator:   EXPO_PUBLIC_FIRESTORE_HOST=http://localhost:8080/v1
@@ -68,16 +82,21 @@ silme**, (legacy düzen seçiliyse) yol öneki. Ağın engelli olduğu bir makin
    - `EXPO_PUBLIC_FIRESTORE_ROOT=.` → koleksiyonlar veritabanının **kökünde**
      (`/courses`, `/daily_tips`, `/memberships`). Boş bırakmak da aynı işi görür;
      `.` yazman tavsiye edilir (bazı araçlar boş değeri düşürür).
-     Kök yerine eski düzeni kullanmak istersen: `artifacts/kpss-prod/public/data`.
+     Kök yerine eski düzeni kullanmak istersen: `artifacts/kpssasistani-01/public/data`.
 3. **Metro'yu temiz önbellekle yeniden başlat** (env, derleme zamanında pakete
    gömülür; canlı yeniden yükleme ile değişmez):
    ```bash
    npx expo start --clear
    # web export alacaksan: CI=1 npx expo export --platform web
    ```
+   > **Tuzak:** `expo export`/`expo start --port` aynı Metro önbelleğini paylaşır.
+   > Yalnızca `.env.local` değiştiyse eski transform kullanılabilir ve pakete **eski**
+   > proje kimliği gömülür. `expo export`'un `--clear` bayrağı yoktur; önbelleği sil:
+   > `rm -rf "$TMPDIR/metro-cache" /tmp/metro-cache`. Kontrol:
+   > `grep -c "kpssasistani-01" <export>/_expo/static/js/web/*.js` > 0 olmalı.
 4. Doğrula (iki yerden):
    - Uygulama: kalkan ikonu → PIN `2468` → **Uygulama Ayarları → “Firestore bağlantısı”**
-     kartında `Proje kimliği: kpss-prod`, `Yol öneki: (kök)`, `Ayar kaynağı: env`
+     kartında `Proje kimliği: kpssasistani-01`, `Yol öneki: (kök)`, `Ayar kaynağı: env`
      yazmalı. Kart, proje ile root birbirine uymuyorsa **uyarı satırı** gösterir.
    - **Test et** düğmesi → `memberships: OK | 404 (koleksiyon henüz yok — normal)` ve
      `daily_tips: …` satırlarını döndürür.
@@ -89,7 +108,7 @@ silme**, (legacy düzen seçiliyse) yol öneki. Ağın engelli olduğu bir makin
 ```json
 "extra": {
   "firestore": {
-    "projectId": "kpss-prod",
+    "projectId": "kpssasistani-01",
     "databaseId": "(default)",
     "root": "."
   }
@@ -102,15 +121,13 @@ kullan; `root` için `.` ya da tam önek yazılabilir (boş string de kabul).
 Tek projeyle uzun vadeli çalışacaksan en basiti: varsayılanı kendi projen yap,
 `.env` ile uğraşma.
 
-### D) Firebase Auth’a geçiş için hazırlık (sırada bu var)
-Üyelik doğrulaması Firebase Auth’a (Email/Password) taşınırsa `memberships`
-belgeleri `request.auth.uid` ile korunur ve anonim okuma riski biter. O zaman
-`.env.local`'a dört satır daha eklenecek (Console → Project settings → Your apps →
-SDK config). `.env.example` bunları hazır içeriyor:
+### D) Firebase Auth’a geçiş için hazırlık
+Ayrıntılı sıra yukarıda **2b)** bölümünde; özetle `.env.local`'a şu dört satır eklenir
+(değerler Console → Project settings → Your apps → SDK config):
 ```bash
 EXPO_PUBLIC_FIREBASE_API_KEY=...
-EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=<proje>.firebaseapp.com
-EXPO_PUBLIC_FIREBASE_PROJECT_ID=<proje>
+EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=kpssasistani-01.firebaseapp.com
+EXPO_PUBLIC_FIREBASE_PROJECT_ID=kpssasistani-01
 EXPO_PUBLIC_FIREBASE_APP_ID=1:...:web:...
 ```
 Bunlar public web yapılandırmasıdır (pakete gömülür, gizli değil).
@@ -123,13 +140,43 @@ konulmaz** — o yalnızca Admin SDK script'leri içindir.
 eas build --platform all --env-file .env.local
 ```
 veya EAS dashboard → Variables → **`EXPO_PUBLIC_FIRESTORE_PROJECT`,
-`EXPO_PUBLIC_FIRESTORE_ROOT`** değerlerini Production/Preview değişkeni olarak ekle
+`EXPO_PUBLIC_FIRESTORE_ROOT`** (+ Auth kullanıyorsan `EXPO_PUBLIC_FIREBASE_API_KEY`)
+değerlerini Production/Preview değişkeni olarak ekle
 (EAS, build sırasında bunları da paketin içine gömer).
+
+## 2b) Firebase Auth'a geç (önerilen, ~2 dakika)
+1. **Console → Authentication → Sign-in method → Email/Password → Enable.**
+2. **Project settings → General → Your apps → Add app → Web** → `SDK config` içindeki
+   `apiKey` değerini kopyala (public web anahtarı; servis hesabı JSON'u **değil**).
+3. Tek komutla yazdır:
+```bash
+npm run setup:firestore -- kpssasistani-01 --root . --api-key AIza...
+npm run deploy:rules
+npx expo start --clear
+npm run check:firestore     # "Firebase Auth testi: API anahtarı geçerli ve sağlayıcı açık"
+```
+4. Panelde **Uygulama Ayarları → Firebase Auth (kimlik doğrulama) → Test et**:
+   mod rozeti `firebase-auth` olmalı; kart, bu cihazdaki oturumu da gösterir.
+
+Ne değişir:
+- Üyelik belgesine parola hash'i **yazılmaz**; `lib/crypto.ts` yalnızca yerel modda kullanılır.
+- Kayıt/giriş `identitytoolkit.googleapis.com` üzerinden yapılır (`lib/authClient.ts`);
+  hata mesajları Türkçeye çevrilir (`EMAIL_EXISTS`, `INVALID_LOGIN_CREDENTIALS`,
+  `OPERATION_NOT_ALLOWED` → "Email/Password açık değil" gibi).
+- Oturum native'de `expo-secure-store`, web'de `AsyncStorage` içinde durur; idToken
+  süresi dolunca `refresh_token` ile sessizce yenilenir. Uygulama açılışında
+  `SESSION_KEY` akışı aynen çalışmaya devam eder.
+- Panel → “Şifremi unuttum” (giriş ekranında) `PASSWORD_RESET` e-postası gönderir.
+- Katı mod: `firestore.rules` içinde `authRequired()` → `true` yaparsan kimliksiz
+  istekler üyelik belgesi **okuyamaz/yazamaz** olur (yalnızca kendi e-postasıyla
+  eşleşen token). Panelin tam yetkili kalması için Admin SDK ile şu komut yeterli:
+  `firebase auth:setCustomClaim <uid> kpss_admin true` (claim adı `kpss_admin`).
+  Bunu yapmadan `authRequired()` = true, paneli de kilitler — sırayı bozma.
 
 ## 3) Kuralları yayımla
 ```bash
 # .firebaserc içindeki projectId'i kendi projenle değiştir:
-#   { "projects": { "default": "kpss-prod" } }
+#   { "projects": { "default": "kpssasistani-01" } }
 npx firebase-tools login
 npx firebase-tools deploy --only firestore:rules
 ```
@@ -180,6 +227,9 @@ oluşturacaksan şu alanlar **zorunlu** (firestore.rules biçimi denetliyor):
 (PBKDF2 cihazda hesaplanır).
 
 ## 5) Doğrulama
+```bash
+npm run test:auth      # sahte Identity Toolkit ile 59 kontrol (ağ gerekmez)
+```
 `{P}` = proje kimliğin, `{R}` = kök öneki (kök düzen için boş, `{R}/` kısmını atla):
 
 ```
@@ -224,8 +274,10 @@ projede eski soru bankasının tamamını (9.5k+ soru) kopyalamak için iki prat
 | İçerik Console'da var, app boş gösteriyor | Koleksiyon/yol birebir `courses/{courseId}/topics/{docId}` olmalı; `questions` bir **array of map**. |
 
 ## 9) Güvenlik notu
-Firebase Auth olmadığı için kurallar istemciyi UID ile ayıramaz; yalnızca veri
-şeklini denetler. Bu set `role` değiştirmeyi kapatır (kendi kendine yöneticilik
+Auth anahtarı tanımlıysa kurallar `request.auth.uid`/`request.auth.token.email` ile
+istemciyi tanır ve `authRequired()` bayrağıyla yalnızca kendi belgesine erişim
+verilebilir. Anahtarsız (yerel) modda kurallar istemciyi UID ile ayıramaz; yalnızca
+veri şeklini denetler. Bu set `role` değiştirmeyi kapatır (kendi kendine yöneticilik
 engeli), şifre alanlarının biçimini zorunlu kılar ve içeriği anonim yazıma kapatır.
 Sertleştirme seçenekleri `firestore.rules` dosyasının altındaki notlarda:
 “sadece Console” varyantı ve Firebase Auth ile `request.auth.token.email == memberId`

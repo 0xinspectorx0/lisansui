@@ -32,7 +32,8 @@ import {
   remainingTests,
   validateMembership,
 } from './membership';
-import { hashPassword, verifyPassword } from './crypto';
+import { AUTH_PASSWORD_BUNDLE, hashPassword, isFirebaseAuthBundle, verifyPassword } from './crypto';
+import * as auth from './authClient';
 import {
   CloudOutcome,
   createMemberDoc,
@@ -59,6 +60,11 @@ interface MembershipContextValue {
   error: string | null;
   cloudStatus: CloudStatus;
   cloudMessage: string | null;
+
+  /** true ise kimlik doğrulama Firebase Auth üzerinden yapılır (API anahtarı tanımlı). */
+  authMode: boolean;
+  /** Firebase Auth açıkken “şifremi unuttum” e-postası. */
+  sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
 
   quota: QuotaState;
   /** Effective VIP: cloud member doc (or admin local profile when cloudVip is off). */
@@ -307,25 +313,37 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setError('Yeni kayıtlar yönetim tarafından kapatıldı.');
         return { ok: false, reason: 'closed' };
       }
+      const authMode = auth.isAuthConfigured();
       setBusy(true);
       try {
-        const existing = await fetchMemberByEmail(emailKey);
-        if (existing.ok && existing.data) {
-          setError('Bu e-posta ile kayıtlı bir üye var. Giriş yapmayı dene.');
-          return { ok: false, reason: 'exists' };
+        let authUid = '';
+        if (authMode) {
+          // Kimlik Firebase Auth'ta: önce hesabı aç, sonra üyelik belgesini yaz.
+          const account = await auth.signUp(emailKey, input.password);
+          if (!account.ok) {
+            setError(account.error || 'Kayıt başarısız.');
+            return { ok: false, reason: 'auth' };
+          }
+          authUid = account.session?.uid || '';
+        } else {
+          const existing = await fetchMemberByEmail(emailKey);
+          if (existing.ok && existing.data) {
+            setError('Bu e-posta ile kayıtlı bir üye var. Giriş yapmayı dene.');
+            return { ok: false, reason: 'exists' };
+          }
+          if (!existing.ok && existing.reason !== 'notfound' && existing.reason !== 'denied' && existing.reason !== 'offline') {
+            // Lookup failed for another reason — block creation to avoid duplicates.
+            setError(existing.error);
+            noteCloud(existing);
+            return { ok: false, reason: 'lookup' };
+          }
+          if (!existing.ok && existing.reason === 'offline') {
+            setError('Firestore’a ulaşılamadı. İnternet bağlantınla üye olman gerekiyor.');
+            noteCloud(existing);
+            return { ok: false, reason: 'offline' };
+          }
         }
-        if (!existing.ok && existing.reason !== 'notfound' && existing.reason !== 'denied' && existing.reason !== 'offline') {
-          // Lookup failed for another reason — block creation to avoid duplicates.
-          setError(existing.error);
-          noteCloud(existing);
-          return { ok: false, reason: 'lookup' };
-        }
-        if (!existing.ok && existing.reason === 'offline') {
-          setError('Firestore’a ulaşılamadı. İnternet bağlantınla üye olman gerekiyor.');
-          noteCloud(existing);
-          return { ok: false, reason: 'offline' };
-        }
-        const sec = hashPassword(input.password);
+        const sec = authMode ? AUTH_PASSWORD_BUNDLE : hashPassword(input.password);
         const now = new Date().toISOString();
         const trial = Math.max(0, membershipCfg.defaultTrialDays);
         const draft: MemberDoc = {
@@ -334,6 +352,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           // firestore.rules `id == email` eşitliğini denetliyor.
           email: emailKey,
           emailNormalized: emailKey,
+          ...(authUid ? { authUid } : {}),
           displayName: input.displayName.trim(),
           password: sec,
           city: input.city?.trim() || '',
@@ -348,6 +367,8 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         };
         const created = await createMemberDoc(draft);
         if (!created.ok) {
+          // Belge yazılamadıysa Firebase hesabını da geri al (tekrarda EMAIL_EXISTS olmasın).
+          if (authMode) await auth.deleteAccount();
           noteCloud(created);
           if (created.reason === 'denied') {
             setError(
@@ -379,25 +400,75 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setError('Geçerli bir e-posta adresi gir.');
         return { ok: false, reason: 'email' };
       }
+      const authMode = auth.isAuthConfigured();
       setBusy(true);
       try {
+        let authUid = '';
+        if (authMode) {
+          const account = await auth.signIn(emailKey, password);
+          if (!account.ok) {
+            setError(account.error || 'Giriş başarısız.');
+            return { ok: false, reason: 'auth' };
+          }
+          authUid = account.session?.uid || '';
+        }
         const found = await fetchMemberByEmail(emailKey);
         if (!found.ok) {
           noteCloud(found);
           if (found.reason === 'offline') setError('Firestore’a ulaşılamadı, çevrimdışı giriş yapılamaz.');
           else if (found.reason === 'denied')
-            setError('Okuma kuralı bu sorguya izin vermiyor (bkz. firestore.rules).');
+            setError(
+              authMode
+                ? 'Firebase oturumu bu üyelik belgesini okuyamıyor. firestore.rules içindeki `memberships` iznini yayınla (npm run deploy:rules).'
+                : 'Okuma kuralı bu sorguya izin vermiyor (bkz. firestore.rules).'
+            );
           else setError(found.error);
           return { ok: false, reason: found.reason };
         }
         const doc = found.data;
         if (!doc) {
-          setError('Bu e-posta ile kayıtlı üye bulunamadı.');
-          return { ok: false, reason: 'notfound' };
+          if (!authMode) {
+            setError('Bu e-posta ile kayıtlı üye bulunamadı.');
+            return { ok: false, reason: 'notfound' };
+          }
+          // Firebase hesabı var, üyelik belgesi yok (ör. eski veri/new project) → ilk girişte oluştur.
+          const nowIso = new Date().toISOString();
+          const draft: MemberDoc = {
+            ...emptyMember(emailKey),
+            email: emailKey,
+            emailNormalized: emailKey,
+            displayName: emailKey.split('@')[0] || 'Üye',
+            password: AUTH_PASSWORD_BUNDLE,
+            ...(authUid ? { authUid } : {}),
+            status: membershipCfg.requireApproval ? 'pending' : 'active',
+            createdAt: nowIso,
+            lastLoginAt: nowIso,
+            note: 'Firebase Auth hesabıyla ilk girişte oluşturuldu.',
+          };
+          const created = await createMemberDoc(draft);
+          if (!created.ok) {
+            noteCloud(created);
+            setError(created.error);
+            return { ok: false, reason: created.reason };
+          }
+          applyMember(created.data);
+          await sessionStore.set(SESSION_KEY, created.data.id);
+          setCloudStatus('online');
+          setCloudMessage(null);
+          setMembersVersion(v => v + 1);
+          return { ok: true };
         }
-        if (!verifyPassword(password, doc.password)) {
-          setError('Parola hatalı.');
-          return { ok: false, reason: 'password' };
+        if (!authMode) {
+          if (isFirebaseAuthBundle(doc.password)) {
+            setError(
+              'Bu hesap Firebase Auth ile oluşturulmuş. `.env.local` içine EXPO_PUBLIC_FIREBASE_API_KEY ekleyip Metro’yu `--clear` ile yeniden başlat.'
+            );
+            return { ok: false, reason: 'authmode' };
+          }
+          if (!verifyPassword(password, doc.password)) {
+            setError('Parola hatalı.');
+            return { ok: false, reason: 'password' };
+          }
         }
         if (doc.status === 'banned' || doc.status === 'suspended') {
           setError(
@@ -411,7 +482,10 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setError('Üyeliğin henüz yönetim onayında.');
           return { ok: false, reason: 'pending' };
         }
-        const stamp: Partial<MemberDoc> = { lastLoginAt: new Date().toISOString() };
+        const stamp: Partial<MemberDoc> = {
+          lastLoginAt: new Date().toISOString(),
+          ...(authUid && doc.authUid !== authUid ? { authUid } : {}),
+        };
         const patched = await patchMemberDoc(doc.id, stamp);
         applyMember(patched.ok && patched.data ? patched.data : { ...doc, ...stamp });
         await sessionStore.set(SESSION_KEY, doc.id);
@@ -429,8 +503,24 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const signOut = useCallback(async () => {
     applyMember(null);
     await sessionStore.remove(SESSION_KEY);
+    if (auth.isAuthConfigured()) await auth.signOut();
     setError(null);
   }, [applyMember]);
+
+  const sendPasswordReset = useCallback<MembershipContextValue['sendPasswordReset']>(
+    async email => {
+      if (!auth.isAuthConfigured())
+        return { ok: false, error: 'Parola sıfırlama için Firebase Auth gerekiyor (EXPO_PUBLIC_FIREBASE_API_KEY).' };
+      const res = await auth.sendPasswordResetEmail(normalizeEmail(email));
+      if (!res.ok) {
+        setError(res.error || 'Sıfırlama e-postası gönderilemedi.');
+        return { ok: false, error: res.error };
+      }
+      setError(null);
+      return { ok: true };
+    },
+    []
+  );
 
   const refreshMember = useCallback(async () => {
     const id = memberRef.current?.id;
@@ -482,13 +572,27 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setError('Yeni parola en az 6 karakter olmalı.');
         return { ok: false, reason: 'short' };
       }
-      if (!verifyPassword(current0, current.password)) {
+      const authMode = auth.isAuthConfigured();
+      if (!authMode && !verifyPassword(current0, current.password)) {
         setError('Mevcut parola hatalı.');
         return { ok: false, reason: 'password' };
       }
       setBusy(true);
       try {
-        const sec = hashPassword(next0);
+        if (authMode) {
+          // Mevcut parolayı Firebase ile doğrula: taze oturum, REQUIRES_RECENT_LOGIN olmaz.
+          const check = await auth.signIn(current.email, current0);
+          if (!check.ok) {
+            setError(check.error || 'Mevcut parola hatalı.');
+            return { ok: false, reason: 'password' };
+          }
+          const res = await auth.updatePassword(next0);
+          if (!res.ok) {
+            setError(res.error || 'Parola Firebase Auth’ta güncellenemedi.');
+            return { ok: false, reason: 'auth' };
+          }
+        }
+        const sec = authMode ? AUTH_PASSWORD_BUNDLE : hashPassword(next0);
         const res = await patchMemberDoc(current.id, { password: sec } as Partial<MemberDoc> as MemberDoc);
         if (!res.ok) {
           noteCloud(res);
@@ -509,7 +613,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     async password => {
       const current = memberRef.current;
       if (!current) return { ok: false, reason: 'nosession' };
-      if (!verifyPassword(password, current.password)) {
+      if (!auth.isAuthConfigured() && !verifyPassword(password, current.password)) {
         setError('Parola hatalı, hesap silinemedi.');
         return { ok: false, reason: 'password' };
       }
@@ -521,6 +625,8 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setError(res.error);
           return { ok: false, reason: res.reason };
         }
+        // Firebase Auth açıksa hesabı oradan da sil (e-posta tekrar kayıtta kullanılabilir).
+        if (auth.isAuthConfigured()) await auth.deleteAccount();
         await signOut();
         setMembersVersion(v => v + 1);
         return { ok: true };
@@ -801,6 +907,8 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       error,
       cloudStatus,
       cloudMessage,
+      authMode: auth.isAuthConfigured(),
+      sendPasswordReset,
       quota,
       isVip,
       vipSource,
@@ -834,6 +942,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       error,
       cloudStatus,
       cloudMessage,
+      sendPasswordReset,
       quota,
       isVip,
       vipSource,

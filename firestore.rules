@@ -3,9 +3,19 @@ rules_version = '2';
 /**
  * KPSS Asistanı — Firestore kuralları (yeni kurulum ve eski kurulum birlikte)
  * ===========================================================================
- * Bu uygulama Firebase Auth KULLANMAZ. Üyelikler `memberships/{e-posta}`
- * belgelerinde tutulur; şifre cihazda PBKDF2-SHA256 ile hash'lenir, düz metin
- * asla Firestore'a yazılmaz (lib/crypto.ts, lib/membership.ts).
+ * İki kimlik modu vardır (lib/MembershipContext.tsx bunu otomatik seçer):
+ *   • Firebase Auth (önerilen): `.env.local` içinde EXPO_PUBLIC_FIREBASE_API_KEY
+ *     tanımlıysa her istek `Authorization: Bearer <idToken>` taşır (lib/authClient.ts
+ *     Identity Toolkit REST kullanır; ek paket yok). Parola Firestore'a HİÇ
+ *     yazılmaz; belgede `algo: 'firebase-auth'` + `authUid` işaretçisi durur.
+ *   • Yerel mod (anahtar yoksa): üyelikler `memberships/{e-posta}` belgesinde,
+ *     parola cihazda PBKDF2-SHA256 ile hash'lenir (lib/crypto.ts).
+ *
+ * Aşağıdaki `authRequired()` bayrağı FALSE iken kimliksiz istemciler de üyelik
+ * okuyup yazabilir (bugünkü davranış). Firebase Auth'u bağladığında bayrağı
+ * TRUE yap: o andan sonra kimliksiz istekler yalnızca içeriği okuyabilir,
+ * üyelik belgeleri sadece token sahibi tarafından ve yalnızca KENDİ e-postasıyla
+ * okunur/yazılır.
  *
  * İKİ YOL DÜZENİ DE DESTEKLENİR (lib/firebaseConfig.ts hangi kökü kullandığını
  * belirler):
@@ -35,6 +45,54 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     /* ------------------------------------------------------------ yardımcılar */
+
+    /* ------------------------------------------------------------- auth modu */
+
+    /** true → üyelik işlemleri için Firebase Auth token'ı zorunlu. */
+    function authRequired() {
+      return false;
+    }
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    /** Oturumdaki e-posta (normalize). Token yoksa boş string. */
+    function sessionEmail() {
+      return signedIn() && request.auth.token.email is string
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    /** Admin claim'i: Admin SDK ile `kpss_admin: true` verilen hesaplar. */
+    function isAdminSession() {
+      return signedIn() && request.auth.token.kpss_admin == true;
+    }
+
+    /** Kimliksiz panel/istemci modda admin işlemleri serbest; authRequired'ta değil. */
+    function adminOk() {
+      return isAdminSession() || !authRequired();
+    }
+
+    /** Yol segmenti oturum e-postası ve (varsa) belge e-postası ile eşleşmeli. */
+    function selfReadOk(memberId) {
+      return sessionEmail() != ''
+        && memberId == sessionEmail()
+        && resource.data.email.lower() == sessionEmail();
+    }
+
+    function selfCreateOk(memberId) {
+      return sessionEmail() != ''
+        && memberId == sessionEmail()
+        && request.resource.data.email.lower() == sessionEmail();
+    }
+
+    function selfUpdateOk(memberId) {
+      return sessionEmail() != ''
+        && memberId == sessionEmail()
+        && resource.data.email.lower() == sessionEmail()
+        && request.resource.data.email.lower() == sessionEmail();
+    }
 
     function isEmail(value) {
       return value is string
@@ -74,10 +132,14 @@ service cloud.firestore {
         && data.id == data.email.lower()
         && data.emailNormalized == data.email.lower()
         && data.displayName is string && data.displayName.size() <= 80
-        && isVerifier(data.verifier)
-        && isSalt(data.salt)
-        && data.iterations is int && data.iterations >= 100
-        && data.algo == 'pbkdf2-sha256'
+        && (
+             data.algo == 'firebase-auth'
+               ? (data.verifier == '' && data.salt == '' && data.iterations == 0)
+               : (isVerifier(data.verifier)
+                   && isSalt(data.salt)
+                   && data.iterations is int && data.iterations >= 100
+                   && data.algo == 'pbkdf2-sha256')
+           )
         && data.role in ['user', 'editor', 'admin', 'owner']
         && data.status in ['active', 'pending', 'suspended', 'banned']
         && data.vip is bool
@@ -104,7 +166,7 @@ service cloud.firestore {
         .hasOnly([
           'testsCompleted', 'questionsSolved', 'netSum', 'courseUsage',
           'lastLoginAt', 'displayName', 'city', 'exam', 'note',
-          'verifier', 'salt', 'iterations', 'algo'
+          'verifier', 'salt', 'iterations', 'algo', 'authUid'
         ]);
     }
 
@@ -120,10 +182,18 @@ service cloud.firestore {
         ]);
     }
 
+    /** `authUid` alanına herkes yazamaz: yalnızca kendi Firebase uid'si. */
+    function authUidOk(data) {
+      return !('authUid' in data)
+        || (signedIn() && data.authUid is string
+            && data.authUid == request.auth.uid && data.authUid.size() >= 8);
+    }
+
     function memberCreateOk(memberId) {
       return memberId == request.resource.data.id
         && request.resource.data.role in ['user', 'editor']
         && request.resource.data.status in ['active', 'pending']
+        && authUidOk(request.resource.data)
         && memberShapeOk(request.resource.data);
     }
 
@@ -131,7 +201,8 @@ service cloud.firestore {
       return memberId == request.resource.data.id
         && request.resource.data.role == resource.data.role
         && memberShapeOk(request.resource.data)
-        && (usageOnlyChange() || entitlementChange());
+        && (usageOnlyChange() || entitlementChange())
+        && (adminOk() || authUidOk(request.resource.data));
     }
 
     /** Uygulamanın okuyabildiği içerik koleksiyonları (kök düzen). */
@@ -192,10 +263,10 @@ service cloud.firestore {
     }
 
     match /memberships/{memberId} {
-      allow read: if true;
-      allow create: if memberCreateOk(memberId);
-      allow update: if memberUpdateOk(memberId);
-      allow delete: if true;
+      allow read: if adminOk() || selfReadOk(memberId);
+      allow create: if memberCreateOk(memberId) && (adminOk() || selfCreateOk(memberId));
+      allow update: if memberUpdateOk(memberId) && (adminOk() || selfUpdateOk(memberId));
+      allow delete: if adminOk() || selfReadOk(memberId);
     }
 
     /* ------------------------------------------- MEVCUT KURULUM (artifacts) */
@@ -215,10 +286,12 @@ service cloud.firestore {
     }
 
     match /artifacts/{artifact}/public/data/memberships/{memberId} {
-      allow read: if artifact == 'kpss-asistani';
-      allow create: if artifact == 'kpss-asistani' && memberCreateOk(memberId);
-      allow update: if artifact == 'kpss-asistani' && memberUpdateOk(memberId);
-      allow delete: if artifact == 'kpss-asistani';
+      allow read: if artifact == 'kpss-asistani' && (adminOk() || selfReadOk(memberId));
+      allow create: if artifact == 'kpss-asistani' && memberCreateOk(memberId)
+        && (adminOk() || selfCreateOk(memberId));
+      allow update: if artifact == 'kpss-asistani' && memberUpdateOk(memberId)
+        && (adminOk() || selfUpdateOk(memberId));
+      allow delete: if artifact == 'kpss-asistani' && (adminOk() || selfReadOk(memberId));
     }
 
     /* ------------------------------------------------------------ varsayılan */
@@ -243,11 +316,18 @@ service cloud.firestore {
  *    yapılmasını kapatmak için `memberUpdateOk` içindeki ifadeyi
  *    `usageOnlyChange()` olarak bırak.
  *
- * 4) Gerçek kimlik doğrulama istenirse (önerilen): Firebase Auth'u aç ve
- *    `match /memberships/{memberId}` bloğuna şu şartları ekle:
- *        allow read, write: if request.auth != null
- *          && request.auth.token.email == memberId;
- *    Böylece her üye yalnızca kendi belgesini okur/yazar.
+ * 4) Firebase Auth bağlantısı (kurulu, kademeli):
+ *    a) Console → Authentication → Sign-in method → Email/Password → Enable
+ *    b) `.env.local` → EXPO_PUBLIC_FIREBASE_API_KEY (tek gerekli değer)
+ *    c) `npm run setup:firestore -- <proje> --root . --api-key <ANAHTAR>` ve
+ *       `npm run deploy:rules`
+ *    d) Hazır olduğunda `authRequired()` → true: kimliksiz üyelik okuma/yazma kapanır.
+ *    E-posta doğrulama zorunluluğu istersen `selfReadOk/selfCreateOk/selfUpdateOk`
+ *    içindeki eşitliklere `&& request.auth.token.email_verified == true` ekle.
+ *
+ * 4b) Admin paneli Auth modunda tam yetki için Admin SDK ile bir hesaba
+ *    `kpss_admin: true` claim'i ver (yoksa `authRequired()` false kaldıkça
+ *    panel bugünkü gibi PIN ile çalışmaya devam eder).
  *
  * 5) İçerik tohumlaması (bootstrap): uygulamanın "İçeriği Firestore'a yaz" akışı
  *    courses/... ve daily_tips/... belgelerini yazar. Bu pencere, Console'da

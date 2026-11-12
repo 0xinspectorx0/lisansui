@@ -15,7 +15,8 @@
  *   --root <önec>   kök yolu; '.' = koleksiyonlar veritabanı kökünde (varsayılan '.')
  *   --dir <yol>     repo kökü (varsayılan: cwd)
  *   --dry-run       hiçbir şeye dokunma, sadece ne yapacağını göster
- *   --check         yapılandırmayı doğrula (ağ gerekir)
+ *   --api-key <K>   Firebase Auth API anahtarını da .env.local'a yaz (EXPO_PUBLIC_FIREBASE_API_KEY)
+ *   --check         yapılandırmayı doğrula (ağ gerekir; Auth anahtarı varsa onu da dener)
  *   --deploy        kuralları yayınla (firebase login gerekir)
  *   --keep-note     mevcut .env.local alanlarını üzerine yazma, sadece ekle/güncelle (varsayılan)
  *
@@ -38,7 +39,7 @@ const opt = name => {
 };
 const positional = argv.filter(a => !a.startsWith('--') && !isValueOfFlag(a));
 function isValueOfFlag(value) {
-  const names = ['root', 'dir'];
+  const names = ['root', 'dir', 'api-key'];
   for (const n of names) {
     const inline = `--${n}=`;
     if (value.startsWith(inline)) return true;
@@ -49,6 +50,7 @@ function isValueOfFlag(value) {
 }
 
 const DRY = flags.has('--dry-run');
+const apiKeyArg = opt('api-key');
 const dir = path.resolve(opt('dir') || process.cwd());
 const envPath = path.join(dir, '.env.local');
 const rcPath = path.join(dir, '.firebaserc');
@@ -93,6 +95,59 @@ function writeEnvFile(file, updates) {
     return;
   }
   fs.writeFileSync(file, body.endsWith('\n') ? body : body + '\n');
+}
+
+/** .env.local / .env dosyasından tek değer oku (yorum satırlarını saymaz). */
+function readEnvValue(file, name) {
+  for (const f of [file, path.join(path.dirname(file), '.env')]) {
+    if (!fs.existsSync(f)) continue;
+    for (const line of fs.readFileSync(f, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.*)$/);
+      if (m && m[1] === name) return m[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+  return '';
+}
+
+/**
+ * Identity Toolkit anahtarını doğrular: kasıtlı olarak geçersiz parola ile
+ * :signUp çağırır. Kullanıcı oluşmaz; yanıt kodu her şeyi anlatır.
+ */
+async function probeIdentity(apiKey) {
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(apiKey)}`;
+  try {
+    const r = await fetchJson(url, {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'baglanti-testi@example.invalid',
+        password: 'x',
+        returnSecureToken: true,
+      }),
+    });
+    const msg = String(r.body?.error?.message || '');
+    const code = msg.split(' : ')[0].trim().toUpperCase();
+    if (r.ok)
+      return { verdict: { ok: true, note: 'beklenmedik: test hesabı oluştu — Console’dan sil.', extra: msg } };
+    if (code === 'WEAK_PASSWORD' || code === 'INVALID_PASSWORD')
+      return { verdict: { ok: true, note: 'API anahtarı geçerli ve Email/Password sağlayıcısı açık.', extra: `(yanıt: ${code})` } };
+    if (code === 'OPERATION_NOT_ALLOWED')
+      return { verdict: { ok: false, note: 'Email/Password kapalı → Console → Authentication → Sign-in method → Enable.' } };
+    if (code === 'API_KEY_INVALID' || code === 'KEY_INVALID' || r.status === 403)
+      return { verdict: { ok: false, note: 'API anahtarı reddedildi (403).', extra: 'Console → Project settings → Web API key; restricted key ise “Firestore/Identity Toolkit” izni ver. ' + msg } };
+    if (code === 'EMAIL_EXISTS')
+      return { verdict: { ok: true, note: 'anahtar çalışıyor (test e-postası çakıştı, önemsiz).' } };
+    if (r.status === 403 && /IP BLOCKED/i.test(msg))
+      return { verdict: { ok: false, note: 'Bu IP’dan anahtar kullanılamıyor (API key kısıtı).', extra: msg } };
+    return { verdict: { ok: false, note: `HTTP ${r.status}`, extra: msg } };
+  } catch (e) {
+    return {
+      verdict: {
+        ok: false,
+        note: `identitytoolkit.googleapis.com erişilemedi (${e?.cause?.code || e?.message || 'ağ'})`,
+        extra: 'kendi makinende tekrar dene',
+      },
+    };
+  }
 }
 
 function readJsonSafe(file) {
@@ -270,11 +325,17 @@ async function main() {
 
   if (explicit) {
     // 1) .env.local
-    writeEnvFile(envPath, {
+    const updates = {
       EXPO_PUBLIC_FIRESTORE_PROJECT: projectId,
       // kök düzeni '.' işaretiyle yazılır (boş değer bazı araçlarda düşebiliyor)
       EXPO_PUBLIC_FIRESTORE_ROOT: root === '' ? '.' : root,
-    });
+    };
+    if (apiKeyArg) {
+      updates.EXPO_PUBLIC_FIREBASE_API_KEY = apiKeyArg.trim();
+      updates.EXPO_PUBLIC_FIREBASE_PROJECT_ID = projectId;
+      updates.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN = `${projectId}.firebaseapp.com`;
+    }
+    writeEnvFile(envPath, updates);
     if (!DRY) console.log(c.ok('  ✔') + ` .env.local güncellendi (${envPath})`);
 
     // 2) .firebaserc
@@ -313,10 +374,14 @@ async function main() {
       [
         '  1) Console → Firestore Database → Create database → Native mode → region (ör. europe-west1), ID=(default)',
         '  2) Kuralları yayımla (aşağıdaki --deploy komutu veya Console → Rules → Paste → Publish)',
-        '  3) npx expo start --clear  (env derleme zamanında gömülür)',
+        '  3) npx expo start --clear  (env derleme zamanında gömülür; export için: rm -rf "$TMPDIR/metro-cache")',
         '  4) Uygulama: kalkan → PIN → Uygulama Ayarları → “Firestore bağlantısı” → Test et',
         '  5) Uygulama: “Firestore klasörlerini oluştur (tohumlama)” → Planı çıkar → Firestore’a yaz',
         '  6) Console’da meta/content_lock (note=kilitli) oluştur → içerik yazma penceresi kapanır',
+        '  7) Firebase Auth (önerilen): Console → Authentication → Sign-in method → Email/Password → Enable,',
+        '     sonra `npm run setup:firestore -- <proje> --root . --api-key <ANAHTAR>` ve',
+        '     `deploy:rules`. Anahtar tanımlıysa uygulama kimlik doğrulamayı Firebase üzerinden yapar.',
+        '  8) Auth oturduysa firestore.rules içinde authRequired() → true (kimliksiz üyelik yazma/okuma kapanır)',
       ].join('\n')
     );
   }
@@ -346,6 +411,21 @@ async function main() {
             `${bad} kontrol takıldı. En sık sebep: (a) kurallar henüz yayınlanmadı, (b) veritabanı adı (default) değil, (c) bu makineden firestore.googleapis.com erişimi yok.`
           )
     );
+  }
+
+  if (flags.has('--check')) {
+    const key = (apiKeyArg || readEnvValue(envPath, 'EXPO_PUBLIC_FIREBASE_API_KEY') || '').trim();
+    console.log('');
+    console.log(c.b('  Firebase Auth testi'));
+    if (!key) {
+      console.log(
+        c.dim('  ○ EXPO_PUBLIC_FIREBASE_API_KEY tanımlı değil → uygulama yerel PBKDF2 modunda çalışıyor.')
+      );
+      console.log(c.dim('  İstersen: npm run setup:firestore -- ' + projectId + ' --root . --api-key <ANAHTAR>'));
+    } else {
+      const a = await probeIdentity(key);
+      console.log(`  ${a.verdict.ok ? c.ok('✔') : c.bad('✗')} ${a.verdict.note}${a.verdict.extra ? c.dim(' ' + a.verdict.extra) : ''}`);
+    }
   }
 
   if (flags.has('--deploy')) {

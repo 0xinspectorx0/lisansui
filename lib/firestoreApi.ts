@@ -24,6 +24,7 @@ import {
   documentsBase,
   firestoreTarget,
 } from './firebaseConfig';
+import { currentIdToken } from './authClient';
 
 /** Çözümlenmiş hedef (panelde gösterilir; lib/firebaseConfig.ts tek kaynak). */
 export const FIRESTORE_TARGET = firestoreTarget();
@@ -60,10 +61,29 @@ export const fbMap = (fields: Record<string, FbValue>): FbValue => ({ mapValue: 
 
 /* ------------------------------------------------------------------ fetch */
 
+/**
+ * Firebase Auth bağlıysa (EXPO_PUBLIC_FIREBASE_API_KEY) her isteğe idToken eklenir;
+ * böylece firestore.rules üyelik belgelerini `request.auth.uid` ile koruyabilir.
+ * Token alınamazsa istek kimliksiz gider (eski davranış) ve kurallar izin verirse çalışır.
+ */
+async function authHeaders(): Promise<Record<string, string>> {
+  try {
+    const token = await currentIdToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function request(url: string, init?: RequestInit): Promise<Response> {
+  const auth = await authHeaders();
   return fetch(url, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...((init?.headers as object) || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...((init?.headers as object) || {}),
+      ...auth,
+    },
   });
 }
 

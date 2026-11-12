@@ -33,11 +33,23 @@ export const AuthScreen: React.FC = () => {
 
   useEffect(() => {
     setLocalError(null);
+    setLocalNotice(null);
     membership.clearError();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   const canSignUp = settings.registrationOpen;
+  const [resetBusy, setResetBusy] = useState(false);
+  const [localNotice, setLocalNotice] = useState<string | null>(null);
+
+  const doReset = useCallback(async () => {
+    setResetBusy(true);
+    setLocalError(null);
+    setLocalNotice(null);
+    const res = await membership.sendPasswordReset(email);
+    setResetBusy(false);
+    if (res.ok) setLocalNotice(`Şifre sıfırlama bağı ${email.trim()} adresine gönderildi. Spam kutusuna da bak.`);
+  }, [email, membership]);
 
   const submit = useCallback(async () => {
     setLocalError(null);
@@ -143,6 +155,15 @@ export const AuthScreen: React.FC = () => {
               </>
             )}
 
+            {!!localNotice && !error && (
+              <View style={[styles.errorBox, { backgroundColor: colors.successSoft, borderColor: colors.border }]}>
+                <Ionicons name="mail-outline" size={15} color={colors.success} />
+                <Text style={{ flex: 1, fontSize: 12, fontWeight: '700', color: colors.success, lineHeight: 17 }}>
+                  {localNotice}
+                </Text>
+              </View>
+            )}
+
             {!!error && (
               <View style={[styles.errorBox, { backgroundColor: colors.dangerSoft, borderColor: colors.border }]}>
                 <Ionicons name="alert-circle" size={15} color={colors.danger} />
@@ -160,7 +181,24 @@ export const AuthScreen: React.FC = () => {
               style={{ alignSelf: 'stretch', marginTop: 4 }}
             />
 
+            {mode === 'signin' && membership.authMode ? (
+              <AdminButton
+                small
+                tone="ghost"
+                icon="help-circle-outline"
+                label={resetBusy ? 'Gönderiliyor…' : 'Şifremi unuttum'}
+                disabled={resetBusy || !email.includes('@')}
+                onPress={() => void doReset()}
+                style={{ alignSelf: 'flex-start', marginTop: 2 }}
+              />
+            ) : null}
+
             <Text style={[styles.quota, { color: colors.textMuted }]}>{quotaHint}</Text>
+            {mode === 'signin' && membership.authMode ? (
+              <Text style={[styles.quota, { color: colors.textMuted }]}>
+                Parolan Firebase Auth’ta saklanır; uygulamada yalnızca e-posta ve hakların tutulur.
+              </Text>
+            ) : null}
           </AdminCard>
 
           {mode === 'signup' && !canSignUp && (
