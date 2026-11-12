@@ -1,4 +1,5 @@
 import { CourseId, Question, TopicMeta } from './types';
+import { contentBase } from './firebaseConfig';
 import {
   FALLBACK_QUESTIONS,
   INITIAL_DAILY_TIPS,
@@ -11,8 +12,11 @@ import {
   getQuestionsOverride,
 } from './adminStore';
 
-const FIRESTORE_PUBLIC_BASE =
-  'https://firestore.googleapis.com/v1/projects/kpss-asistani/databases/(default)/documents/artifacts/kpss-asistani/public/data';
+/**
+ * Content root is resolved by lib/firebaseConfig (env → app.json → defaults) so the
+ * same bundle can point at a brand-new Firestore project without code edits.
+ */
+const FIRESTORE_PUBLIC_BASE = contentBase();
 
 // Fast in-memory session caches
 const topicQuestionsCache = new Map<string, Question[]>();

@@ -18,12 +18,20 @@ import {
   memberToFields,
 } from './membership';
 
-export const FIRESTORE_PROJECT = 'kpss-asistani';
-export const FIRESTORE_DATABASE = '(default)';
-export const MEMBERSHIPS_COLLECTION =
-  'artifacts/kpss-asistani/public/data/memberships';
+import {
+  MEMBERSHIPS_COLLECTION_NAME,
+  collectionPath,
+  documentsBase,
+  firestoreTarget,
+} from './firebaseConfig';
 
-const DOCUMENTS_BASE = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT}/databases/${FIRESTORE_DATABASE}/documents`;
+/** Çözümlenmiş hedef (panelde gösterilir; lib/firebaseConfig.ts tek kaynak). */
+export const FIRESTORE_TARGET = firestoreTarget();
+export const FIRESTORE_PROJECT = FIRESTORE_TARGET.projectId;
+export const FIRESTORE_DATABASE = FIRESTORE_TARGET.databaseId;
+export const MEMBERSHIPS_COLLECTION = collectionPath(MEMBERSHIPS_COLLECTION_NAME);
+
+const DOCUMENTS_BASE = documentsBase(FIRESTORE_TARGET);
 
 const docUrl = (docPath: string) => `${DOCUMENTS_BASE}/${docPath}`;
 const membersDocUrl = (memberId: string) =>

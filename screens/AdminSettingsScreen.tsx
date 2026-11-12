@@ -4,6 +4,12 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { useNavigation } from '@react-navigation/native';
 import { useAppTheme } from '../lib/theme';
+import {
+  collectionPath,
+  firestoreTarget,
+  probeUrls,
+  type FirestoreTarget,
+} from '../lib/firebaseConfig';
 import { useAdmin } from '../lib/AdminContext';
 import { useApp } from '../lib/AppContext';
 import { ThemePreference } from '../lib/theme';
@@ -39,6 +45,40 @@ export const AdminSettingsScreen: React.FC = () => {
   const [importDraft, setImportDraft] = useState('');
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<'content' | 'all' | null>(null);
+  const [probe, setProbe] = useState<{ busy: boolean; text: string; tone: 'info' | 'success' | 'danger' }>({
+    busy: false,
+    text: 'Henüz test edilmedi',
+    tone: 'info',
+  });
+
+  const fsTarget: FirestoreTarget = firestoreTarget();
+
+  /** İki anonim REST okuması: üyelik koleksiyonu + içerik. Yazma denemez. */
+  const runProbe = async () => {
+    setProbe({ busy: true, text: 'Deniyor…', tone: 'info' });
+    const urls = probeUrls(fsTarget);
+    const hit = async (label: string, url: string) => {
+      try {
+        const res = await fetch(url);
+        if (res.ok) return `${label}: OK`;
+        if (res.status === 404) return `${label}: 404 (koleksiyon/belge henüz yok — normal)`;
+        if (res.status === 403 || res.status === 401) return `${label}: REDDEDİLDİ (rules)`;
+        return `${label}: HTTP ${res.status}`;
+      } catch {
+        return `${label}: ağ hatası`;
+      }
+    };
+    const [members, tips] = await Promise.all([
+      hit('memberships', urls.memberships),
+      hit('daily_tips', urls.tips),
+    ]);
+    const bad = /REDDEDİLDİ|ağ hatası/.test(`${members} ${tips}`);
+    setProbe({
+      busy: false,
+      text: `${members} • ${tips}`,
+      tone: members.includes('REDDEDİLDİ') ? 'danger' : bad ? 'danger' : 'success',
+    });
+  };
 
   return (
     <AdminScaffold
@@ -223,6 +263,70 @@ export const AdminSettingsScreen: React.FC = () => {
             subtitle="Üye oluştur, düzenle, plan/rol değiştir, sil — doğrudan Firestore’a yazar"
             onPress={() => navigation.navigate('AdminMembership')}
             badge={membershipPolicy.cloudMembers ? 'bulut' : 'yerel'}
+          />
+        </AdminCard>
+
+        {/* Firestore hedefi */}
+        <AdminSectionTitle
+          label="Firestore bağlantısı"
+          hint="İçerik ve üyeliklerin okunduğu proje. Değerler derleme zamanında çözülür: EXPO_PUBLIC_* → app.json (expo.extra.firestore) → varsayılan."
+        />
+        <AdminCard>
+          <AdminRow
+            icon="cloud-outline"
+            title="Proje kimliği"
+            subtitle="EXPO_PUBLIC_FIRESTORE_PROJECT"
+            right={<Text style={{ fontSize: 12, fontWeight: '900', color: colors.text }}>{fsTarget.projectId}</Text>}
+          />
+          <AdminRow
+            icon="albums-outline"
+            title="Veritabanı"
+            subtitle="Yeni kurulumda (default) bırak"
+            right={<Text style={{ fontSize: 12, fontWeight: '900', color: colors.text }}>{fsTarget.databaseId}</Text>}
+          />
+          <AdminRow
+            icon="git-branch-outline"
+            title="Yol öneki (root)"
+            subtitle={fsTarget.root ? 'Legacy düzen: artifacts/{proje}/public/data' : 'Kök düzen: koleksiyonlar doğrudan /courses, /memberships altında'}
+            right={
+              <Text style={{ fontSize: 11, fontWeight: '800', color: colors.textMuted }} numberOfLines={1}>
+                {fsTarget.root || '(kök)'}
+              </Text>
+            }
+          />
+          <AdminRow
+            icon="person-badge-outline"
+            title="Üyelik koleksiyonu"
+            subtitle="Kayıtlar ve panel listesi bu yolu kullanır"
+            right={
+              <Text style={{ fontSize: 11, fontWeight: '800', color: colors.textMuted }} numberOfLines={1}>
+                {collectionPath('memberships')}
+              </Text>
+            }
+          />
+          <AdminRow
+            icon="code-slash-outline"
+            title="Ayar kaynağı"
+            subtitle={
+              fsTarget.source === 'default'
+                ? 'Repo varsayılanı — yeni proje için .env veya app.json kullan'
+                : `${fsTarget.source} üzerinden verildi`
+            }
+            right={<AdminChip label={fsTarget.source} tone="info" compact />}
+          />
+          <AdminRow
+            icon="pulse-outline"
+            title="Bağlantı testi"
+            subtitle={probe.text}
+            right={
+              <AdminButton
+                small
+                label={probe.busy ? 'Test ediliyor' : 'Test et'}
+                disabled={probe.busy}
+                tone={probe.tone === 'danger' ? 'danger' : probe.tone === 'success' ? 'success' : 'primary'}
+                onPress={() => void runProbe()}
+              />
+            }
           />
         </AdminCard>
 

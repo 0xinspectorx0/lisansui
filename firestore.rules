@@ -1,38 +1,38 @@
 rules_version = '2';
 
 /**
- * KPSS Asistanı — Firestore kuralları (içerik + üyelikler)
- * =========================================================
+ * KPSS Asistanı — Firestore kuralları (yeni kurulum ve eski kurulum birlikte)
+ * ===========================================================================
  * Bu uygulama Firebase Auth KULLANMAZ. Üyelikler `memberships/{e-posta}`
  * belgelerinde tutulur; şifre cihazda PBKDF2-SHA256 ile hash'lenir, düz metin
  * asla Firestore'a yazılmaz (lib/crypto.ts, lib/membership.ts).
- * Kayıt, giriş, hak takibi ve panel düzenlemeleri bu belgeler üzerinden yapılır.
  *
- * Aşağıdaki set, uygulamanın akışını çalıştırırken en kritik suiistimalleri kapar:
+ * İKİ YOL DÜZENİ DE DESTEKLENİR (lib/firebaseConfig.ts hangi kökü kullandığını
+ * belirler):
+ *   • Yeni kurulum (root = "")        → /courses/..., /daily_tips/..., /memberships/...
+ *   • Mevcut kurulum (legacy root)    → /artifacts/kpss-asistani/public/data/...
+ * Kullanmadığın bloğu silebilirsin; ikisi de durursa zararlı bir yanı yok.
  *
- *   • Belge id'si ile `email` alanı eşleşmek zorunda (id = normalizeEmail(email)),
- *     böylece kayıt/kimlik çelişkisi oluşmaz.
- *   • Yeni kayıt yalnızca `role: user|editor` ve `status: active|pending` ile
- *     açılabilir; KAYIT SONRASI hiçbir istemci `role` alamaz → uygulamayı kullanan
- *     biri kendini yönetici yapamaz (rol değişimi Console/Admin SDK işidir).
- *   • Şifre alanları format denetiminden geçer: verifier 64 hex, salt 32 hex,
- *     iterations >= 100, algo = pbkdf2-sha256. Boş/eksik hash ile belge
- *     oluşturulamaz (kimlik doğrulamayı devre dışı bırakma girişimi engellenir).
- *   • `schemaVersion` 1'dir, sayaçlar negatif olamaz, `courseUsage` en fazla
- *     12 ders anahtarı ve 0..999 arası tam sayı değerler tutar.
- *   • Başka bir belgenin üzerine yazılamaz (create'te id = email şartı).
+ * Güvenlik modeli (istemci anonim olduğu için UID tabanlı denetim YOKTUR):
+ *   • Belge `id` alanı ile yolun son segmenti (e-posta) birebir eşleşmek zorunda.
+ *   • Yeni kayıt yalnızca `role: user|editor` + `status: active|pending` ile açılır.
+ *   • `role` hiçbir istemci tarafından DEĞİŞTİRİLEMEZ → uygulama içinden
+ *     kendini yönetici yapma engellenir (rol değişimi Console/Admin SDK işidir).
+ *   • Şifre alanları biçim denetiminden geçer: verifier 64 hex, salt 32 hex,
+ *     iterations >= 100, algo = pbkdf2-sha256. Boş hash ile belge açılamaz.
+ *   • `schemaVersion` 1, sayaçlar negatif olamaz, `courseUsage` ≤ 12 anahtar
+ *     ve değerler 0..999.
+ *   • İçerik koleksiyonları (courses/daily_tips/…) uygulamaya salt-okunur;
+ *     içeriği Console, Admin SDK veya kendi script'in dağıtır.
  *
- * Dağıtım: `firebase deploy --only firestore:rules`
- *       veya Console → Firestore → Rules → Publish (bu dosyanın içeriği).
- *
- * Kurallar yayınlanmadan kayıt akışı çalışmaz: istemci `permission-denied`
- * görür ve uygulama "Firestore kurallı reddetti" uyarısını gösterir.
+ * Dağıtım:  npx firebase-tools deploy --only firestore:rules
+ *        veya Console → Firestore → Rules → Paste → Publish
  */
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    /* ------------------------------------------------------------- yardımcılar */
+    /* ------------------------------------------------------------ yardımcılar */
 
     function isEmail(value) {
       return value is string
@@ -69,8 +69,8 @@ service cloud.firestore {
           'testsCompleted', 'questionsSolved', 'netSum', 'courseUsage', 'schemaVersion'
         ])
         && isEmail(data.email)
-        && data.id == data.email
-        && data.emailNormalized == data.email
+        && data.id == data.email.lower()
+        && data.emailNormalized == data.email.lower()
         && data.displayName is string && data.displayName.size() <= 80
         && isVerifier(data.verifier)
         && isSalt(data.salt)
@@ -90,12 +90,12 @@ service cloud.firestore {
         && isCounter(data.questionsSolved)
         && data.netSum is number && data.netSum >= -100000
         && data.schemaVersion == 1
-        && (data.courseUsage is map
-            && data.courseUsage.size() <= 12
-            && data.courseUsage.values().all(v, v is int && v >= 0 && v <= 999));
+        && data.courseUsage is map
+        && data.courseUsage.size() <= 12
+        && data.courseUsage.values().all(v, v is int && v >= 0 && v <= 999);
     }
 
-    /** Öğrencinin kendi dokunabildiği alanlar: kullanım + profil + şifre değişimi. */
+    /** Öğrencinin dokunabildiği alanlar: kullanım + profil + şifre değişimi. */
     function usageOnlyChange() {
       return request.resource.data.diff(resource.data)
         .affectedKeys()
@@ -106,7 +106,7 @@ service cloud.firestore {
         ]);
     }
 
-    /** Panelin yaptığı değişiklikler: hak + durum alanları, rol Hariç. */
+    /** Panelin yaptığı değişiklikler: hak + durum alanları, `role` hariç. */
     function entitlementChange() {
       return request.resource.data.diff(resource.data)
         .affectedKeys()
@@ -118,39 +118,64 @@ service cloud.firestore {
         ]);
     }
 
-    /* ------------------------------------------------------------------ içerik */
-    // Soru bankası, konu listesi, hap bilgiler: herkese OKUMA, yazma yok.
-    // (Panel yedeği `exportJson` ile alır; içeriği Console/Admin SDK dağıtır.)
+    function memberCreateOk(memberId) {
+      return memberId == request.resource.data.id
+        && request.resource.data.role in ['user', 'editor']
+        && request.resource.data.status in ['active', 'pending']
+        && memberShapeOk(request.resource.data);
+    }
+
+    function memberUpdateOk(memberId) {
+      return memberId == request.resource.data.id
+        && request.resource.data.role == resource.data.role
+        && memberShapeOk(request.resource.data)
+        && (usageOnlyChange() || entitlementChange());
+    }
+
+    /** Uygulamanın okuyabildiği içerik koleksiyonları (kök düzen). */
+    function isPublicContent(collectionName) {
+      return collectionName in ['courses', 'daily_tips', 'catalog', 'meta', 'notices'];
+    }
+
+    /* ------------------------------------------------- YENİ KURULUM (kök) */
+    // courses/{courseId}/topics/{docId}, daily_tips/main ...
+    match /{collection}/{document} {
+      allow read: if isPublicContent(collection);
+      allow write: if false;
+    }
+
+    // courses/{courseId}/topics alt listesi dahil olmak üzere derin yollar
+    match /{collection}/{document}/{sub} {
+      allow read: if isPublicContent(collection);
+      allow write: if false;
+    }
+
+    match /{collection}/{document}/{sub}/{leaf} {
+      allow read: if isPublicContent(collection);
+      allow write: if false;
+    }
+
+    match /memberships/{memberId} {
+      allow read: if true;
+      allow create: if memberCreateOk(memberId);
+      allow update: if memberUpdateOk(memberId);
+      allow delete: if true;
+    }
+
+    /* ------------------------------------------- MEVCUT KURULUM (artifacts) */
     match /artifacts/{artifact}/public/data/{document=**} {
       allow read: if artifact == 'kpss-asistani';
       allow write: if false;
     }
 
-    /* ------------------------------------------------------------------ üyelik */
     match /artifacts/{artifact}/public/data/memberships/{memberId} {
-      // Giriş/kayıt kontrolü ve panel listesi bu okumaya dayanır.
       allow read: if artifact == 'kpss-asistani';
-
-      // Yeni üyelik: id = e-posta, rol kendini yönetici yapamaz, şifre formatlı.
-      allow create: if artifact == 'kpss-asistani'
-        && memberId == request.resource.data.id
-        && request.resource.data.role in ['user', 'editor']
-        && request.resource.data.status in ['active', 'pending']
-        && memberShapeOk(request.resource.data);
-
-      // Güncelleme: ya sadece kullanım/profil ya da panelin hak güncellemesi.
-      // `role` hiçbir şekilde değiştirilemez (hasOnly listelerinde yok).
-      allow update: if artifact == 'kpss-asistani'
-        && memberId == request.resource.data.id
-        && request.resource.data.role == resource.data.role
-        && memberShapeOk(request.resource.data)
-        && (usageOnlyChange() || entitlementChange());
-
-      // Panelden üyelik silme (hesap kapatma akışıyla aynı yetki).
+      allow create: if artifact == 'kpss-asistani' && memberCreateOk(memberId);
+      allow update: if artifact == 'kpss-asistani' && memberUpdateOk(memberId);
       allow delete: if artifact == 'kpss-asistani';
     }
 
-    /* --------------------------------------------------------------- varsayılan */
+    /* ------------------------------------------------------------ varsayılan */
     match /{document=**} {
       allow read, write: if false;
     }
@@ -160,19 +185,26 @@ service cloud.firestore {
 /**
  * Notlar
  * ------
- * 1) `PATCH` isteklerinde Firestore, gönderilen alanları mevcut belgeyle
- *    birleştirir; kural `request.resource.data` üzerinden birleşik hali görür.
- *    Bu yüzden `memberShapeOk` güncellemelerde de geçerlidir.
+ * 1) `PATCH` isteklerinde Firestore, gönderilen alanları mevcut belgeyle birleştirir;
+ *    kural `request.resource.data` üzerinden birleşik hali görür. Bu yüzden
+ *    `memberShapeOk` güncellemelerde de geçerlidir.
  *
- * 2) "Sadece Console" varyantı: VIP/durum değişikliklerinin uygulama içinden
- *    yapılmasını kapatmak istersen `allow update` satırındaki
- *    `(usageOnlyChange() || entitlementChange())` ifadesini sadece
- *    `usageOnlyChange()` olarak bırak. Uygulama içindeki panel o zaman
- *    "Firestore reddetti" uyarısını gösterir; VIP verme/dondurma yalnızca
- *    Firebase Console veya Admin SDK üzerinden çalışır.
+ * 2) Liste (query) izinleri `read` içindedir — ayrı `list` kuralı gerekmez.
+ *    `listMembers` pageSize/pageToken kullanır, composite index gerekmez
+ *    (giriş zaten `id = normalizeEmail(e-posta)` ile doğrudan belge okur).
  *
- * 3) Firebase Auth olmadığı için kurallar istemciyi kimlik ile ayıramaz;
- *    bu dosya suiistimali zorlaştırır, imkânsız kılmaz. Gerçek bir üretim
- *    kurulumunda üyelik belgelerini `request.auth.uid` ile eşleştirmek
- *    (Firebase Auth + `request.auth.token.email`) önerilir.
+ * 3) "Sadece Console" varyantı: VIP/durum değişikliklerinin uygulama içinden
+ *    yapılmasını kapatmak için `memberUpdateOk` içindeki ifadeyi
+ *    `usageOnlyChange()` olarak bırak.
+ *
+ * 4) Gerçek kimlik doğrulama istenirse (önerilen): Firebase Auth'u aç ve
+ *    `match /memberships/{memberId}` bloğuna şu şartları ekle:
+ *        allow read, write: if request.auth != null
+ *          && request.auth.token.email == memberId;
+ *    Böylece her üye yalnızca kendi belgesini okur/yazar.
+ *
+ * 5) İçeriği uygulamadan yazdırmak istersen (panelden Firestore'a push)
+ *    `isPublicContent` bloğundaki `allow write: if false` satırını kaldırmak
+ *    gerekir; bu, o koleksiyonları ANONİM yazıma açar — sadece emulator/test
+ *    projelerinde yapılmalı.
  */

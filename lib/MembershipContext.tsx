@@ -330,7 +330,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const trial = Math.max(0, membershipCfg.defaultTrialDays);
         const draft: MemberDoc = {
           ...emptyMember(emailKey),
-          email,
+          // Belge id'si normalize e-posta olduğu için alanı da normalize tutuyoruz;
+          // firestore.rules `id == email` eşitliğini denetliyor.
+          email: emailKey,
           emailNormalized: emailKey,
           displayName: input.displayName.trim(),
           password: sec,
