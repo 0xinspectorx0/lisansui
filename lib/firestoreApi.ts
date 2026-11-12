@@ -107,6 +107,14 @@ export async function fetchMemberDoc(memberId: string): Promise<CloudOutcome<Mem
 
 export async function fetchMemberByEmail(email: string): Promise<CloudOutcome<MemberDoc | null>> {
   const key = email.trim().toLocaleLowerCase('en-US');
+
+  // Fast path: the document id *is* the normalized email, so a plain read works
+  // and no index/scan is needed. The query below only covers documents created
+  // outside the app (e.g. copied in from the old store with a random id).
+  const direct = await fetchMemberDoc(key);
+  if (direct.ok && direct.data) return direct;
+  if (!direct.ok && direct.reason !== 'notfound') return direct;
+
   const q = [
     `orderBy=fields.emailNormalized`,
     `where=fields.emailNormalized,${encodeURIComponent('==')},${encodeURIComponent(`"${key}"`)}`,
