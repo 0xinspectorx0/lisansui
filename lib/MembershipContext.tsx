@@ -206,6 +206,10 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     let cancelled = false;
     (async () => {
       try {
+        // Panelde girilen Firebase Auth anahtarı (cihaza özel) ve kalıcı oturum:
+        // ilk Firestore isteğinin Authorization başlığıyla gitmesi için önce yükle.
+        await auth.ensureAuthConfigLoaded();
+        await auth.currentIdToken().catch(() => null);
         const cached = await AsyncStorage.getItem(MEMBER_CACHE_KEY);
         const id = await sessionStore.get(SESSION_KEY);
         if (cached && !id) {
@@ -313,6 +317,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setError('Yeni kayıtlar yönetim tarafından kapatıldı.');
         return { ok: false, reason: 'closed' };
       }
+      await auth.ensureAuthConfigLoaded();
       const authMode = auth.isAuthConfigured();
       setBusy(true);
       try {
@@ -400,6 +405,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setError('Geçerli bir e-posta adresi gir.');
         return { ok: false, reason: 'email' };
       }
+      await auth.ensureAuthConfigLoaded();
       const authMode = auth.isAuthConfigured();
       setBusy(true);
       try {
@@ -572,6 +578,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setError('Yeni parola en az 6 karakter olmalı.');
         return { ok: false, reason: 'short' };
       }
+      await auth.ensureAuthConfigLoaded();
       const authMode = auth.isAuthConfigured();
       if (!authMode && !verifyPassword(current0, current.password)) {
         setError('Mevcut parola hatalı.');

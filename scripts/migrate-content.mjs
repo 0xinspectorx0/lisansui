@@ -72,10 +72,24 @@ function docBase(project, root, database) {
   return r ? `${db}/${r}` : db;
 }
 
+/** Uygulama ile aynı çözümleme sırası: CLI → .env.local/.env → app.json (expo.extra.firestore). */
+function appJsonFirestore() {
+  try {
+    const j = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+    return j?.expo?.extra?.firestore || j?.expo?.extra?.eas?.firestore || null;
+  } catch {
+    return null;
+  }
+}
+const EXTRA = appJsonFirestore();
 const FROM_PROJECT = opt('from', 'kpss-asistani');
-const TO_PROJECT = opt('to', readEnvValue('EXPO_PUBLIC_FIRESTORE_PROJECT') || '');
+const TO_PROJECT =
+  opt('to', '') || readEnvValue('EXPO_PUBLIC_FIRESTORE_PROJECT') || String(EXTRA?.projectId || '');
 const FROM_ROOT = normalizeRoot(opt('from-root', `artifacts/${FROM_PROJECT}/public/data`));
-const TO_ROOT = opt('to-root') !== undefined ? normalizeRoot(opt('to-root')) : normalizeRoot(readEnvValue('EXPO_PUBLIC_FIRESTORE_ROOT'));
+const TO_ROOT =
+  opt('to-root') !== undefined
+    ? normalizeRoot(opt('to-root'))
+    : normalizeRoot(readEnvValue('EXPO_PUBLIC_FIRESTORE_ROOT') || (EXTRA && typeof EXTRA.root === 'string' ? EXTRA.root : ''));
 const DATABASE = opt('database', '(default)');
 
 /* ---------------------------------------------------------------- state */
@@ -419,8 +433,8 @@ if (SELFTEST) {
   await selfTest();
 } else {
   if (!TO_PROJECT) {
-    console.log('\x1b[33mHedef proje bulunamadı. `.env.local` içinde EXPO_PUBLIC_FIRESTORE_PROJECT tanımla');
-    console.log('ya da --to <proje> ver. Örnek:\x1b[0m');
+    console.log('\x1b[33mHedef proje bulunamadı: ne .env.local (EXPO_PUBLIC_FIRESTORE_PROJECT) ne app.json (expo.extra.firestore.projectId) dolu.\x1b[0m');
+    console.log('  Örnek:\x1b[0m');
     console.log('  npm run setup:firestore -- kpssasistani-01 --root .');
     console.log('  npm run migrate:content -- --limit 2 --dry-run');
     process.exit(2);

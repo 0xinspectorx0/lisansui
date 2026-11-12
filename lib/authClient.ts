@@ -56,29 +56,117 @@ export interface AuthConfig {
   projectId: string;
   authDomain: string;
   appId: string;
+  /** 'env' = pakete gömülü, 'device' = panelde bu cihaza girildi */
+  source: 'env' | 'device';
 }
 
-let cachedConfig: AuthConfig | null | undefined;
+/**
+ * Panelde girilen anahtar bu anahtarla saklanır (cihaza özel, `--clear` gerekmez).
+ * Public web anahtarı olduğu için depolama güvenlik açısından sorun değil; yine de
+ * üretim derlemelerinde `.env.local`/EAS değişkeni tercih edilir.
+ */
+const CONFIG_KEY = 'kpss.firebaseAuth.config.v1';
 
-/** `.env.local` değişebildiği için panel `resetAuthConfigCache()` çağırır. */
+let cachedConfig: AuthConfig | null | undefined;
+let deviceOverride: AuthConfig | null = null;
+let deviceConfigLoaded = false;
+
+function fromEnv(): AuthConfig | null {
+  const apiKey = envValue('EXPO_PUBLIC_FIREBASE_API_KEY').trim();
+  if (!apiKey) return null;
+  const projectId = envValue('EXPO_PUBLIC_FIREBASE_PROJECT_ID').trim() || firestoreTarget().projectId;
+  return {
+    apiKey,
+    projectId,
+    authDomain:
+      envValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN').trim() || `${projectId}.firebaseapp.com`,
+    appId: envValue('EXPO_PUBLIC_FIREBASE_APP_ID').trim(),
+    source: 'env',
+  };
+}
+
+/** Modül yüklendiğinde bir kez oku; `ensureAuthConfigLoaded()` ile beklenebilir. */
+export async function ensureAuthConfigLoaded(): Promise<void> {
+  if (deviceConfigLoaded) return;
+  const raw = await storeGet(CONFIG_KEY);
+  deviceConfigLoaded = true;
+  cachedConfig = undefined; // cihaz değeri geldiyse çözümü tazele
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { apiKey?: string };
+      const key = String(parsed?.apiKey || '').trim();
+      if (key) {
+        const projectId = firestoreTarget().projectId;
+        deviceOverride = {
+          apiKey: key,
+          projectId,
+          authDomain: `${projectId}.firebaseapp.com`,
+          appId: '',
+          source: 'device',
+        };
+      }
+    } catch {
+      deviceOverride = null;
+    }
+  }
+}
+
+/**
+ * Çözümleme sırası: panelde girilen anahtar → pakete gömülü `EXPO_PUBLIC_*`.
+ * (Cihazda elle girilen değer, eski/gömülü değerüzerine yazmak için önceliklidir;
+ * “Kaldır” ile env değerine dönülür.)
+ */
 export function resolveAuthConfig(): AuthConfig | null {
   if (cachedConfig !== undefined) return cachedConfig;
-  const apiKey = envValue('EXPO_PUBLIC_FIREBASE_API_KEY').trim();
-  const projectId =
-    envValue('EXPO_PUBLIC_FIREBASE_PROJECT_ID').trim() || firestoreTarget().projectId;
-  cachedConfig = apiKey
-    ? {
-        apiKey,
-        projectId,
-        authDomain: envValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN').trim() || `${projectId}.firebaseapp.com`,
-        appId: envValue('EXPO_PUBLIC_FIREBASE_APP_ID').trim(),
-      }
-    : null;
+  cachedConfig = deviceOverride ?? fromEnv() ?? null;
   return cachedConfig;
 }
 
 export function resetAuthConfigCache(): void {
   cachedConfig = undefined;
+}
+
+/** Panel → “Kaydet”. Boş/geçersiz değer reddedilir. */
+export async function setDeviceApiKey(
+  apiKey: string
+): Promise<{ ok: boolean; error?: string }> {
+  const key = String(apiKey || '').trim();
+  if (!key) return { ok: false, error: 'Boş bırakma; Console’daki apiKey değerini yapıştır.' };
+  if (/\s/.test(key)) return { ok: false, error: 'Anahtar boşluk içeremez — tamamını kopyala.' };
+  if (key.length < 20) return { ok: false, error: 'Anahtar kısa görünüyor (genelde 39 karakter).' };
+  if (!/^[A-Za-z0-9_-]+$/.test(key))
+    return { ok: false, error: 'Anahtar beklenmeyen karakter içeriyor (yalnız harf/rakam/-/_).' };
+  const projectId = firestoreTarget().projectId;
+  deviceOverride = {
+    apiKey: key,
+    projectId,
+    authDomain: `${projectId}.firebaseapp.com`,
+    appId: '',
+    source: 'device',
+  };
+  cachedConfig = undefined;
+  deviceConfigLoaded = true;
+  await storeSet(CONFIG_KEY, JSON.stringify({ apiKey: key, projectId, savedAt: new Date().toISOString() }));
+  return { ok: true };
+}
+
+/** Panel → “Kaldır”: cihaz kaydı silinir, varsa env değeri devreye girer. */
+export async function clearDeviceApiKey(): Promise<void> {
+  deviceOverride = null;
+  cachedConfig = undefined;
+  deviceConfigLoaded = true;
+  await storeSet(CONFIG_KEY, null);
+}
+
+/** Panel kartı için: cihazda kayıtlı anahtar var mı? */
+export async function readDeviceApiKey(): Promise<string | null> {
+  await ensureAuthConfigLoaded();
+  return deviceOverride?.apiKey ?? null;
+}
+
+export function authConfigSource(): AuthConfig['source'] | null {
+  const cfg = resolveAuthConfig();
+  return cfg ? cfg.source : null;
 }
 
 export function isAuthConfigured(): boolean {
@@ -187,6 +275,7 @@ async function refresh(session: AuthSession): Promise<AuthSession | null> {
 
 /** Firestore isteklerine eklenecek bearer token; oturum yoksa null. */
 export async function currentIdToken(opts?: { forceRefresh?: boolean }): Promise<string | null> {
+  await ensureAuthConfigLoaded();
   const session = await restoreSession();
   if (!session) return null;
   if (!opts?.forceRefresh && session.expiresAt - Date.now() > REFRESH_MARGIN_MS) {
@@ -293,6 +382,7 @@ export interface AuthResult {
 }
 
 export async function signUp(email: string, password: string): Promise<AuthResult> {
+  await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
   if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış.' };
   const data = await postJson(`${IK_API}:signUp?key=${encodeURIComponent(cfg.apiKey)}`, {
@@ -307,6 +397,7 @@ export async function signUp(email: string, password: string): Promise<AuthResul
 }
 
 export async function signIn(email: string, password: string): Promise<AuthResult> {
+  await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
   if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış.' };
   const data = await postJson(`${IK_API}:signInWithPassword?key=${encodeURIComponent(cfg.apiKey)}`, {
@@ -322,6 +413,7 @@ export async function signIn(email: string, password: string): Promise<AuthResul
 
 /** Parola değişimi: önce Firebase'de güncelle, sonra belgeyi senkron tut. */
 export async function updatePassword(newPassword: string): Promise<AuthResult> {
+  await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
   const session = await restoreSession();
   if (!cfg || !session) return { ok: false, code: 'NO_SESSION', error: 'Oturum bulunamadı.' };
@@ -342,6 +434,7 @@ export async function updatePassword(newPassword: string): Promise<AuthResult> {
 
 /** Console → Authentication → Email link template'i üzerinden sıfırlama maili. */
 export async function sendPasswordResetEmail(email: string): Promise<AuthResult> {
+  await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
   if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış.' };
   const data = await postJson(`${IK_API}:sendOobCode?key=${encodeURIComponent(cfg.apiKey)}`, {
@@ -353,6 +446,7 @@ export async function sendPasswordResetEmail(email: string): Promise<AuthResult>
 }
 
 export async function deleteAccount(): Promise<AuthResult> {
+  await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
   const session = await restoreSession();
   if (!cfg || !session) return { ok: false, code: 'NO_SESSION', error: 'Oturum bulunamadı.' };
@@ -366,6 +460,7 @@ export async function deleteAccount(): Promise<AuthResult> {
 
 /** Panel “test et” düğmesi: anahtar geçerli mi, Email/Password açık mı? */
 export async function probeAuth(): Promise<{ ok: boolean; note: string }> {
+  await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
   if (!cfg) return { ok: false, note: 'API anahtarı tanımlı değil (EXPO_PUBLIC_FIREBASE_API_KEY).' };
   // E-posta biçimi geçerli, parola kasıtlı zayıf → kullanıcı OLUŞMAZ; ama yanıt

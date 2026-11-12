@@ -22,8 +22,14 @@ Kimlik doğrulama iki moddan birinde çalışır (otomatik seçilir, kod değiş
 | `firebase.json` + `.firebaserc` | `npx firebase-tools deploy --only firestore:rules` için |
 
 ## 0) Mevcut durum
-`kpss-asistani` projesi ve `artifacts/kpss-asistani/public/data` düzeni **varsayılan**
-olarak duruyor. Hiçbir şey değiştirmezsen uygulama bugünkü gibi çalışmaya devam eder.
+- `app.json → expo.extra.firestore` artık **`kpssasistani-01`** veritabanı **kökünü**
+  gösteriyor (`{ projectId: 'kpssasistani-01', databaseId: '(default)', root: '' }`),
+  yani taze bir klon hiçbir env dosyası olmadan yeni projeyi kullanır.
+- Kod tarafındaki `DEFAULT_TARGET` (repo varsayılanı) **eski** `kpss-asistani` +
+  `artifacts/.../public/data` düzeninde duruyor; `app.json` bloğunu silersen
+  uygulama eskisine döner (geri alma yolu bu).
+- **Önemli:** yeni projede henüz veri yok → içeriği boş görürsün. Doldurmak için tek
+  komut: `npm run migrate:content` (aşağıda **7**). Sıra: 1c → 2b → `migrate:content`.
 
 > **Senin projen (bu oturumda verildi):** ad `kpssasistani`,
 > Project ID **`kpssasistani-01`**, proje numarası `674719983447`.
@@ -59,6 +65,23 @@ npm run deploy:rules                             # npx firebase-tools ile yayın
 okuma, `memberships` listeleme, **kurallara uygun geçici bir üye belgesi yazma ve
 silme**, (legacy düzen seçiliyse) yol öneki. Ağın engelli olduğu bir makinede
 “erişilemedi” der ve seni uyarır — gerçek sonucu kendi makinende verir.
+
+## 1c) “Your apps — There are no apps” durumu
+`apiKey`, **Project settings → General → Your apps** altındaki web kaydından gelir;
+proje yeni kurulduysa o liste boştur ve anahtar da yoktur. Tek seferlik kayıt:
+1. **Add app → Web** (ikon: `</>`), bir ad ver (ör. `kpss-web`) → **Register app**.
+2. Çıkan ekranda `const firebaseConfig = { ... }` bloğu görünür → **`apiKey`** değerini
+   kopyala. `npm install firebase` / `firebase init` adımlarını **atla** (bu depo SDK
+   kullanmıyor), `google-services.json` da **gerekmiyor** (biz REST + web anahtarı
+   kullanıyoruz; native anahtarı sadece Firebase SDK kuran derlemeler ister).
+3. “Close” ile çık. Artık **Project settings → General → Your apps** altında
+   `Web app / kpss-web` ve onun `API key` satırı durur.
+
+Anahtarı iki yerden birine verebilirsin:
+- **Panel (cihaza özel, yeniden başlatma yok):** Uygulama Ayarları → Firebase Auth →
+  “Web API anahtarı” alanına yapıştır → **Kaydet**. Değer `AsyncStorage`
+  (`kpss.firebaseAuth.config.v1`) içinde durur; “Kaldır” ile env değerine dönülür.
+- **`.env.local` (kalıcı, tüm cihazlar/üretim):** aşağıdaki **2** adımı.
 
 ## 2) Uygulamayı yeni projeye bağla (adım adım)
 Öncelik sırası: **env → app.json → repo varsayılanı**. Üç yoldan birini seç.
@@ -250,7 +273,20 @@ Uçtan uca: önizlemede **kişi ikonu → Kayıt ol**, sonra Console'da belgeyi 
 **Üyelik Paneli**'nde listele/plan değiştir, uygulamada **her ders 1 test** kuralının
 işlediğini doğrula.
 
-## 6) Boş içerikte uygulama ne yapar?
+## 5b) Sıralama (kısayol)
+```bash
+# 1) Console: Add app → Web → Register app → apiKey kopyala (1c)
+# 2) Console: Authentication → Sign-in method → Email/Password → Enable
+# 3) Terminal (repo kökünde, bir kez):
+npm run setup:firestore -- kpssasistani-01 --root . --api-key <ANAHTAR>
+npm run deploy:rules
+npm run migrate:content            # eski projeden soru bankası + hap bilgiler
+npm run check:firestore            # hepsi yeşil mi
+npx expo start --clear
+```
+Anahtarı terminale yazmak istemiyorsan 3. adımdaki `--api-key` yerine paneldeki
+“Web API anahtarı” alanını kullan (bkz. 1c). `deploy:rules` yerine Console →
+Firestore → Rules → yapıştır → Publish da olur.
 Soru bankası boşsa uygulama repodaki seed verisine düşer (`lib/seedData.ts`:
 `INITIAL_TOPIC_CATALOG`, `FALLBACK_QUESTIONS`, `INITIAL_DAILY_TIPS`) — uygulama açılır,
 konu listesi ve örnek sorularla çalışır. Yani içerik taşımayı sonraya bırakabilirsin.

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -49,12 +49,17 @@ import {
   MEMBERSHIP_LOCKDOWN_DOC_PATH,
 } from '../lib/firestoreApi';
 import {
+  authConfigSource,
+  clearDeviceApiKey,
   currentSession,
+  ensureAuthConfigLoaded,
   isAuthConfigured,
   maskKey,
   probeAuth,
+  readDeviceApiKey,
   resolveAuthConfig,
   resetAuthConfigCache,
+  setDeviceApiKey,
   signOut as authSignOut,
 } from '../lib/authClient';
 
@@ -95,6 +100,46 @@ export const AdminSettingsScreen: React.FC = () => {
       'Root kök (“.”) ama proje hâlâ kpss-asistani — eski projede /courses beklenen veri yok, panelde tohumlama yapman gerekir.'
     );
   }
+
+  /* cihazdan girilen Firebase web API anahtarı (`.env.local` şart değil) */
+  const [keyDraft, setKeyDraft] = useState('');
+  const [keyNote, setKeyNote] = useState<string | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      await ensureAuthConfigLoaded();
+      const k = await readDeviceApiKey();
+      if (alive && k) setKeyDraft(k);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const saveDeviceKey = async () => {
+    setKeyBusy(true);
+    const res = await setDeviceApiKey(keyDraft);
+    if (!res.ok) {
+      setKeyBusy(false);
+      setKeyNote(res.error || 'Kaydedilemedi.');
+      return;
+    }
+    await ensureAuthConfigLoaded();
+    resetAuthConfigCache();
+    setKeyBusy(false);
+    setKeyNote('Kaydedildi — Firebase Auth bu cihazda aktif. Üye ol / giriş yap diyebilirsin.');
+  };
+
+  const removeDeviceKey = async () => {
+    setKeyBusy(true);
+    await clearDeviceApiKey();
+    resetAuthConfigCache();
+    setKeyDraft('');
+    setKeyBusy(false);
+    setKeyNote('Cihaz kaydı silindi. `.env.local` içinde anahtar varsa o kullanılır, yoksa yerel PBKDF2 moduna dönülür.');
+  };
 
   /* yönetim anahtarları (meta/admins + meta/membership_lockdown) */
   const [gov, setGov] = useState<{
@@ -524,7 +569,9 @@ export const AdminSettingsScreen: React.FC = () => {
             title="Kimlik modu"
             subtitle={
               isAuthConfigured()
-                ? 'Firebase Auth açık — üyelik belgelerinde parola hash’i tutulmuyor.'
+                ? `Firebase Auth açık — üyelik belgelerinde parola hash’i tutulmuyor. Kaynak: ${
+                    authConfigSource() === 'device' ? 'bu cihazda girilen anahtar' : '.env.local (pakete gömülü)'
+                  }`
                 : 'Yerel mod — parola cihazda hash’lenip belgeye yazılıyor.'
             }
             right={
@@ -534,6 +581,30 @@ export const AdminSettingsScreen: React.FC = () => {
               />
             }
           />
+          <AdminField
+            label="Web API anahtarı (apiKey)"
+            value={keyDraft}
+            onChangeText={setKeyDraft}
+            autoCapitalize="none"
+            maxLength={64}
+            placeholder="AIza…  ← Console → Project settings → General → Your apps → Web app → SDK config"
+            hint="Buraya yazarsan `.env.local` ve Metro’yu yeniden başlatmak gerekmez: anahtar yalnız bu cihazda saklanır ve hemen kullanılır. Üretim derlemesi için .env.local/EAS değişkeni önerilir."
+          />
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 6 }}>
+            <AdminButton
+              small
+              flex
+              label={keyBusy ? 'Uğraşıyor…' : 'Kaydet'}
+              disabled={keyBusy || !keyDraft.trim()}
+              onPress={() => void saveDeviceKey()}
+            />
+            <AdminButton small flex tone="neutral" label="Kaldır" disabled={keyBusy} onPress={() => void removeDeviceKey()} />
+          </View>
+          {keyNote ? (
+            <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16, marginBottom: 6 }}>
+              {keyNote}
+            </Text>
+          ) : null}
           {authCfg ? (
             <AdminRow
               icon="pulse-outline"
@@ -635,9 +706,12 @@ export const AdminSettingsScreen: React.FC = () => {
               AUTH’U BAĞLAMA SIRASI
             </Text>
             <Text style={{ fontSize: 10.5, color: colors.textSecondary, lineHeight: 16 }}>
-              1) Console → Authentication → Sign-in method → Email/Password → Enable{'\n'}
-              2) Console → Project settings → Your apps → Web app → SDK config → API anahtarı{'\n'}
-              3) Terminalde:
+              1) Console → Project settings → General → Your apps → **Add app → Web** → bir ad ver →
+              “Register app” (npm/Next.js adımlarını atla) → çıkan SDK config içindeki `apiKey`{'\n'}
+              (Your apps boşsa anahtar da yoktur; tek yapman gereken bu kayıt.){'\n'}
+              2) Console → Authentication → Sign-in method → **Email/Password → Enable**{'\n'}
+              3) Anahtarı yukarıdaki alana yapıştır → “Kaydet” (terminal gerekmez){'\n'}
+              3b) İstersen kalıcı yap (tüm cihazlar + üretim):
             </Text>
             <Text
               selectable
@@ -649,7 +723,8 @@ export const AdminSettingsScreen: React.FC = () => {
               npm run deploy:rules
             </Text>
             <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
-              4) Metro’yu `--clear` ile yeniden başlat, sonra buradan “Test et”.{'\n'}
+              4) “Test et” yeşil olmalı (4) — anahtarı panele yazdıysan Metro’yu yeniden
+              başlatmana gerek yok; `.env.local` kullandıysan `npx expo start --clear`.{'\n'}
               5) Katı mod (kod değişikliği yok): Console'da `meta/membership_lockdown`
               belgesi oluştur → kimliksiz üyelik okuma/yazma anında kapanır.
               Geri almak = belgeyi silmek. Yukarıdaki “Üyelik kilidi” satırı durumu gösterir.
