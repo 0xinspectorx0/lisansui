@@ -419,19 +419,21 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           authUid = account.session?.uid || '';
         }
         const found = await fetchMemberByEmail(emailKey);
-        if (!found.ok) {
+        // Katı modda (meta/membership_lockdown) henüz OLMAYAN belge 404 değil 403
+        // döner: kurallar eksik belgede `resource.data.email` okuyamaz. Auth modunda
+        // bunu “belge yok” sayıp ilk girişte oluşturmayı deniyoruz; selfCreateOk bunu
+        // zaten izin veriyor (yol == oturum e-postası).
+        const missingDoc =
+          !found.ok && authMode && (found.reason === 'notfound' || found.reason === 'denied');
+        if (!found.ok && !missingDoc) {
           noteCloud(found);
           if (found.reason === 'offline') setError('Firestore’a ulaşılamadı, çevrimdışı giriş yapılamaz.');
           else if (found.reason === 'denied')
-            setError(
-              authMode
-                ? 'Firebase oturumu bu üyelik belgesini okuyamıyor. firestore.rules içindeki `memberships` iznini yayınla (npm run deploy:rules).'
-                : 'Okuma kuralı bu sorguya izin vermiyor (bkz. firestore.rules).'
-            );
+            setError('Okuma kuralı bu sorguya izin vermiyor (bkz. firestore.rules).');
           else setError(found.error);
           return { ok: false, reason: found.reason };
         }
-        const doc = found.data;
+        const doc = found.ok ? found.data : null;
         if (!doc) {
           if (!authMode) {
             setError('Bu e-posta ile kayıtlı üye bulunamadı.');
@@ -454,7 +456,11 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           const created = await createMemberDoc(draft);
           if (!created.ok) {
             noteCloud(created);
-            setError(created.error);
+            setError(
+              missingDoc && created.reason === 'denied'
+                ? 'Üyelik belgen yok ve yazma kuralı da izin vermedi: firestore.rules yayınlanmamış olabilir (npm run deploy:rules → Console → Rules → Publish).'
+                : created.error
+            );
             return { ok: false, reason: created.reason };
           }
           applyMember(created.data);
