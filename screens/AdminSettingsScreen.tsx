@@ -22,6 +22,16 @@ import {
   type SeedProgress,
   type SeedResult,
 } from '../lib/contentSeed';
+import {
+  describeCopyPlan,
+  LEGACY_SOURCE,
+  planCopy,
+  runCopy,
+  sourceBase,
+  type CopyPlan,
+  type CopyProgress,
+  type CopyResult,
+} from '../lib/contentCopy';
 import { useAdmin } from '../lib/AdminContext';
 import { useMembership } from '../lib/MembershipContext';
 import { useApp } from '../lib/AppContext';
@@ -139,6 +149,39 @@ export const AdminSettingsScreen: React.FC = () => {
     setKeyDraft('');
     setKeyBusy(false);
     setKeyNote('Cihaz kaydı silindi. `.env.local` içinde anahtar varsa o kullanılır, yoksa yerel PBKDF2 moduna dönülür.');
+  };
+
+  /* eski projeden içerik kopyalama (terminal gerekmez) */
+  const [copySrc, setCopySrc] = useState(LEGACY_SOURCE.projectId);
+  const [copyPlan, setCopyPlan] = useState<CopyPlan | null>(null);
+  const [copyBusy, setCopyBusy] = useState<'plan' | 'run' | null>(null);
+  const [copyProgress, setCopyProgress] = useState<CopyProgress | null>(null);
+  const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
+  const [copySkip, setCopySkip] = useState(true);
+
+  const doCopyPlan = async () => {
+    setCopyBusy('plan');
+    setCopyPlan(null);
+    setCopyResult(null);
+    setCopyProgress(null);
+    const p = await planCopy(copySrc.trim() || LEGACY_SOURCE.projectId);
+    setCopyPlan(p);
+    setCopyBusy(null);
+  };
+
+  const doCopyRun = async () => {
+    if (!copyPlan) return;
+    setCopyBusy('run');
+    setCopyResult(null);
+    const r = await runCopy(copyPlan, {
+      concurrency: 4,
+      skipExisting: copySkip,
+      onProgress: pr => setCopyProgress(pr),
+    });
+    setCopyResult(r);
+    setCopyBusy(null);
+    // içerik yazıldıysa kilit rozeti bayatlamış olabilir — doğrudan tekrar oku
+    setLockState(await readLockState());
   };
 
   /* yönetim anahtarları (meta/admins + meta/membership_lockdown) */
@@ -730,6 +773,112 @@ export const AdminSettingsScreen: React.FC = () => {
               Geri almak = belgeyi silmek. Yukarıdaki “Üyelik kilidi” satırı durumu gösterir.
             </Text>
           </View>
+        </AdminCard>
+
+        {/* Eski projeden kopyala */}
+        <AdminSectionTitle
+          label="Eski projeden içeriği kopyala"
+          hint="Canlı Firestore’daki courses/{ders}/topics/{konu} ve daily_tips/main belgelerini fields bloğu dönüştürülmeden bu projeye kopyalar. Kaynak anonim okunur, hedef yazımı içerik penceresi açıkken çalışır — terminal/script gerekmez."
+        />
+        <AdminCard>
+          <AdminField
+            label="Kaynak proje kimliği"
+            value={copySrc}
+            onChangeText={setCopySrc}
+            autoCapitalize="none"
+            maxLength={64}
+            placeholder="kpss-asistani"
+            hint={`Kök öneki otomatik denenir: artifacts/<proje>/public/data → veritabanı kökü. ${
+              copyPlan ? `kaynak: ${sourceBase(copyPlan.source)}` : ''
+            }`}
+          />
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 6 }}>
+            <AdminButton
+              small
+              flex
+              tone="ghost"
+              icon="refresh"
+              label={copyBusy === 'plan' ? 'Taranıyor…' : 'Kaynağı tara'}
+              disabled={copyBusy !== null}
+              onPress={() => void doCopyPlan()}
+            />
+            <AdminButton
+              small
+              flex
+              icon="copy-outline"
+              label={copyBusy === 'run' ? 'Kopyalanıyor…' : 'Bu projeye kopyala'}
+              disabled={copyBusy !== null || !copyPlan || !!copyPlan?.error}
+              onPress={() => void doCopyRun()}
+            />
+          </View>
+          <AdminToggle
+            icon="download-outline"
+            label="Var olanları atla"
+            description="Açıkken hedefte belgesi bulunan konu/ders yeniden yazılmaz (yarıda kesilen işi devam ettirmek için ideal). Kapatırsan kaynak neyse o yazılır."
+            value={copySkip}
+            onValueChange={setCopySkip}
+          />
+          {copyPlan?.error ? (
+            <Text style={{ fontSize: 11.5, color: colors.danger, lineHeight: 17 }}>
+              {copyPlan.error}
+            </Text>
+          ) : null}
+          {copyPlan && !copyPlan.error ? (
+            <Text style={{ fontSize: 11.5, color: colors.textSecondary, lineHeight: 17 }}>
+              {describeCopyPlan(copyPlan)}
+              {copyPlan.notes.length ? ` • ${copyPlan.notes.join(' • ')}` : ''}
+            </Text>
+          ) : null}
+          {copyProgress && copyBusy === 'run' ? (
+            <Text style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 4 }}>
+              {copyProgress.done}/{copyProgress.total} • {copyProgress.questions} soru •{' '}
+              {copyProgress.current}
+            </Text>
+          ) : null}
+          {copyResult ? (
+            <Text
+              style={{
+                fontSize: 11.5,
+                color: copyResult.failed.length ? colors.danger : colors.success,
+                lineHeight: 17,
+                marginTop: 4,
+              }}
+            >
+              {copyResult.copied} belge kopyalandı • {copyResult.questions} soru
+              {copyResult.skipped ? ` • ${copyResult.skipped} atlandı` : ''}
+              {copyResult.failed.length ? ` • ${copyResult.failed.length} hata` : ''}
+            </Text>
+          ) : null}
+          {copyResult?.failed.length ? (
+            <View
+              style={{
+                padding: 8,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: colors.border,
+                backgroundColor: colors.surfaceSecondary,
+                marginBottom: 4,
+              }}
+            >
+              {copyResult.failed.slice(0, 6).map(f => (
+                <Text key={f} style={{ fontSize: 10.5, color: colors.danger, lineHeight: 15 }}>
+                  – {f}
+                </Text>
+              ))}
+              {copyResult.failed.length > 6 ? (
+                <Text style={{ fontSize: 10.5, color: colors.textMuted }}>
+                  … ve {copyResult.failed.length - 6} satır daha. “Var olanları atla” açıkken
+                  düğmeye tekrar basarsan yalnız eksikler yazılır.
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+          {lockState === 'locked' ? (
+            <Text style={{ fontSize: 11, color: colors.warning, lineHeight: 16 }}>
+              meta/content_lock var → içerik yazma kapalı; kopyalama reddedilir. Kilidi
+              Console’dan kaldır (belgeyi sil), kopyala, sonra tekrar oluştur.
+            </Text>
+          ) : null}
         </AdminCard>
 
         {/* Content bootstrap */}

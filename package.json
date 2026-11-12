@@ -40,7 +40,8 @@
     "deploy:rules": "node scripts/setup-firestore.mjs --deploy",
     "test:auth": "bash scripts/auth-contract.sh",
     "migrate:content": "node scripts/migrate-content.mjs",
-    "migrate:content:selftest": "node scripts/migrate-content.mjs --self-test"
+    "migrate:content:selftest": "node scripts/migrate-content.mjs --self-test",
+    "test:copy": "bash scripts/copy-contract.sh"
   },
   "private": true
 }

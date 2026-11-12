@@ -297,13 +297,21 @@ bitince Console'da şu belgeyi oluştur: koleksiyon `meta`, belge `content_lock`
 alan `note` = `kilitli`. Bu andan itibaren uygulama içeriğe yazamaz (rules), kilit
 belgesini de uygulama yazamaz/silemez — açmak yine Console işidir.
 
-## 7) Eski projeden veri taşımak — `npm run migrate:content`
+## 7) Eski projeden veri taşımak
+**Kolay yol (terminal yok):** panel → **Uygulama Ayarları → “Eski projeden içeriği
+kopyala”** → kaynak proje kimliği (`kpss-asistani`) → **Kaynağı tara** → **Bu projeye
+kopyala**. Aynı işi uygulamanın içinden yapar: kaynağı anonim okur, hedefe panel
+tohumlamasıyla **aynı kurallarla** yazar, ilerlemeyi ve hataları kartta gösterir.
+“Var olanları atla” açıkken yarıda kesersen tekrar basmak eksikleri tamamlar.
+
+**Terminal yolu (aynı mantık, büyük bankada daha rahat):** `npm run migrate:content`
 `scripts/migrate-content.mjs` eski projedeki belgeyi **olduğu gibi** (fields bloğu
 dönüştürülmeden) yeni projeye kopyalar; yani soru formatı, alan adları ve konu
 içeriği birebir aynı kalır. Admin SDK, servis hesabı anahtarı veya Console veri
 ekranı gerekmez — panelin tohumlama akışıyla **aynı** kuralları kullanır.
 
 ```bash
+npm run test:copy                                 # 0) kopyalama mantığının testi (27 kontrol)
 npm run migrate:content -- --limit 2 --dry-run   # 1) pilot: ne olacak, görsel onay
 npm run migrate:content                            # 2) tamamını taşı (yarıda kesilirse devam eder)
 npm run migrate:content -- --force                 #    hepsini yeniden yaz
