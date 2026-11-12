@@ -14,6 +14,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 
 import { useAppTheme } from '../lib/theme';
+import { VipLockedScreen, useVipLocked } from '../components/admin/VipGate';
 import { useApp } from '../lib/AppContext';
 
 type ViewMode = 'card' | 'list';
@@ -88,6 +89,11 @@ export const TipsScreen: React.FC = () => {
       setCardIndex(prev => prev + 1);
     }
   };
+
+  const vipLock = useVipLocked('tips');
+  if (vipLock) {
+    return <VipLockedScreen title="Hap Bilgiler" />;
+  }
 
   return (
     <SafeAreaView

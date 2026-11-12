@@ -14,7 +14,7 @@ import { Question, TestResult, TopicMeta } from '../lib/types';
 import { useAppTheme } from '../lib/theme';
 import { formatNet } from '../lib/textUtils';
 
-const QUESTIONS_PER_TEST = 20;
+const DEFAULT_QUESTIONS_PER_TEST = 20;
 
 interface TopicTestSheetProps {
   visible: boolean;
@@ -32,6 +32,25 @@ interface TopicTestSheetProps {
     timedMinutes: number | null;
   }) => void;
   onResetTopic: (topicDocId: string) => void;
+  /** Admin-tunable test size (defaults to 20 questions per test). */
+  questionsPerTest?: number;
+  /** Pre-arm the built-in exam timer with this many minutes per test. */
+  timedMinutesPerTest?: number | null;
+  /**
+   * Remaining free tests for this course (Infinity = unlimited). When it reaches
+   * 0 the sheet locks the not-yet-solved batches and offers the membership screen.
+   */
+  remainingTests?: number;
+  /** Called when the student taps a locked batch. */
+  onRequestMembership?: () => void;
+  /** Friendly name shown in the quota banner. */
+  quotaCourseLabel?: string;
+  /**
+   * Current member profile id. A batch counts as "already solved" only for the
+   * member who solved it, so a second account on the same device gets its own
+   * free test instead of inheriting (or being blocked by) someone else's history.
+   */
+  memberId?: string | null;
 }
 
 export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
@@ -43,27 +62,37 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
   onClose,
   onSelectTest,
   onResetTopic,
+  questionsPerTest = DEFAULT_QUESTIONS_PER_TEST,
+  timedMinutesPerTest = null,
+  remainingTests = Infinity,
+  onRequestMembership,
+  quotaCourseLabel,
+  memberId,
 }) => {
   const { colors } = useAppTheme();
-  const [timedEnabled, setTimedEnabled] = useState(false);
+  const [timedEnabled, setTimedEnabled] = useState(timedMinutesPerTest !== null);
 
   const batches = useMemo(() => {
     if (!questions.length) return [];
-    const total = Math.ceil(questions.length / QUESTIONS_PER_TEST);
+    const size = Math.max(5, questionsPerTest);
+    const total = Math.ceil(questions.length / size);
     return Array.from({ length: total }, (_, index) => {
-      const slice = questions.slice(
-        index * QUESTIONS_PER_TEST,
-        (index + 1) * QUESTIONS_PER_TEST
-      );
+      const slice = questions.slice(index * size, (index + 1) * size);
       const resultKey = topic ? `${topic.docId}_test_${index}` : `test_${index}`;
+      const stored = results[resultKey];
+      const owner = memberId ?? 'device:guest';
+      const savedResult =
+        stored && (stored.memberId ?? 'device:guest') === owner ? stored : undefined;
       return {
         index,
         slice,
         resultKey,
-        savedResult: results[resultKey],
+        savedResult,
+        // A test already solved never consumes quota again; only fresh batches do.
+        locked: !savedResult && index >= remainingTests,
       };
     });
-  }, [questions, results, topic]);
+  }, [questions, results, topic, questionsPerTest, remainingTests, memberId]);
 
   const hasAnySavedResult = useMemo(
     () => batches.some(b => !!b.savedResult),
@@ -140,6 +169,40 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
             />
           </View>
 
+          {Number.isFinite(remainingTests) && (
+            <View
+              style={[
+                styles.quotaBanner,
+                {
+                  backgroundColor:
+                    remainingTests > 0 ? colors.primarySoft : colors.warningSoft,
+                  borderColor: colors.border,
+                },
+              ]}
+            >
+              <Ionicons
+                name={remainingTests > 0 ? 'gift-outline' : 'lock-closed'}
+                size={15}
+                color={remainingTests > 0 ? colors.primary : colors.warning}
+              />
+              <Text
+                style={[
+                  styles.quotaText,
+                  { color: remainingTests > 0 ? colors.primary : colors.warning },
+                ]}
+              >
+                {remainingTests > 0
+                  ? `${quotaCourseLabel ? quotaCourseLabel + ' dersinde ' : ''}ücretsiz hakkın: ${remainingTests} test`
+                  : `${quotaCourseLabel ? quotaCourseLabel + ' dersinde ' : ''}ücretsiz test hakkın bitti — çözdüğün testleri tekrar edebilirsin`}
+              </Text>
+              {remainingTests <= 0 && !!onRequestMembership && (
+                <Pressable onPress={onRequestMembership} hitSlop={8}>
+                  <Text style={[styles.quotaCta, { color: colors.primary }]}>VIP</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+
           {loading ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="large" color={colors.primary} />
@@ -166,14 +229,20 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
               <View style={styles.quickActionWrap}>
                 <Pressable
                   onPress={() => {
+                    if (batches.every(b => b.locked)) {
+                      onRequestMembership?.();
+                      return;
+                    }
                     const mixedSlice = [...questions]
                       .sort(() => Math.random() - 0.5)
-                      .slice(0, QUESTIONS_PER_TEST);
+                      .slice(0, Math.max(5, questionsPerTest));
                     onSelectTest({
                       questions: mixedSlice,
                       totalTests: batches.length,
                       title: `${topic.name} • Karışık`,
-                      timedMinutes: timedEnabled ? mixedSlice.length : null,
+                      timedMinutes: timedEnabled
+                        ? timedMinutesPerTest ?? mixedSlice.length
+                        : null,
                     });
                   }}
                   style={({ pressed }) => [
@@ -187,7 +256,7 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
                 >
                   <Ionicons name="shuffle" size={18} color={colors.primary} />
                   <Text style={[styles.randomBtnText, { color: colors.primary }]}>
-                    Bu Konudan Karışık {Math.min(QUESTIONS_PER_TEST, questions.length)} Soru Çöz
+                    Bu Konudan Karışık {Math.min(Math.max(5, questionsPerTest), questions.length)} Soru Çöz
                   </Text>
                 </Pressable>
 
@@ -225,16 +294,22 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
 
                   return (
                     <Pressable
-                      onPress={() =>
+                      onPress={() => {
+                        if (item.locked) {
+                          onRequestMembership?.();
+                          return;
+                        }
                         onSelectTest({
                           questions: item.slice,
                           testIndex: item.index,
                           totalTests: batches.length,
                           resultKey: item.resultKey,
                           title: `${topic.name} • Test ${item.index + 1}`,
-                          timedMinutes: timedEnabled ? item.slice.length : null,
-                        })
-                      }
+                          timedMinutes: timedEnabled
+                            ? timedMinutesPerTest ?? item.slice.length
+                            : null,
+                        });
+                      }}
                       style={({ pressed }) => [
                         styles.testCard,
                         {
@@ -251,8 +326,10 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
                               : solvedMid
                               ? colors.warning
                               : colors.danger
+                            : item.locked
+                            ? colors.warning
                             : colors.border,
-                          opacity: pressed ? 0.86 : 1,
+                          opacity: item.locked ? 0.75 : pressed ? 0.86 : 1,
                         },
                       ]}
                     >
@@ -272,6 +349,8 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
                                 : colors.danger
                             }
                           />
+                        ) : item.locked ? (
+                          <Ionicons name="lock-closed" size={15} color={colors.warning} />
                         ) : (
                           <Ionicons
                             name="play-circle-outline"
@@ -298,9 +377,12 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
                         </Text>
                       ) : (
                         <Text
-                          style={[styles.testMeta, { color: colors.textSecondary }]}
+                          style={[
+                            styles.testMeta,
+                            { color: item.locked ? colors.warning : colors.textSecondary },
+                          ]}
                         >
-                          {item.slice.length} Soru
+                          {item.locked ? 'Hak bitti' : `${item.slice.length} Soru`}
                         </Text>
                       )}
                     </Pressable>
@@ -384,6 +466,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
   },
+  quotaBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  quotaText: { flex: 1, fontSize: 11.5, fontWeight: '800', lineHeight: 16 },
+  quotaCta: { fontSize: 11.5, fontWeight: '900', textDecorationLine: 'underline' },
   timerRow: {
     flexDirection: 'row',
     alignItems: 'center',

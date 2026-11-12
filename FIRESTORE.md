@@ -1,0 +1,357 @@
+# Firestore kurulumu — sıfırdan yeni proje
+
+Bu depo Firebase SDK **kullanmaz**: hem içerik (soru bankası, hap bilgiler) hem de
+üyelikler Firestore **REST API** üzerinden okunur/yazılır. Yeni bir Firestore
+hesabı/projesi kurduğunda yapman gereken iki şey var: **projeyi uygulamaya
+tanıtmak** ve **güvenlik kurallarını yayımlamak**.
+
+Kimlik doğrulama iki moddan birinde çalışır (otomatik seçilir, kod değişikliği yok):
+
+| Mod | Ne zaman | Parola nerede | Firestore isteği |
+| --- | --- | --- | --- |
+| **Firebase Auth** | `.env.local` içinde `EXPO_PUBLIC_FIREBASE_API_KEY` varsa | Firebase'de (belgede yalnızca `algo: 'firebase-auth'` + `authUid` işaretçisi) | `Authorization: Bearer <idToken>` |
+| **Yerel** (bugünkü) | anahtar tanımlı değilse | cihazda PBKDF2-SHA256 hash, belgede `verifier/salt/iterations` | anonim |
+
+İstersen anahtarı vermeden başlayabilirsin; sonra tek satırla Auth'a geçersin
+(aşağıda **2b**). İki modda da çalışma anında Firestore belgesindeki veri aynıdır.
+
+| Dosya | Ne yapar |
+| --- | --- |
+| `lib/firebaseConfig.ts` | Proje/veritabanı/yol öneki tek karar noktası (env → app.json → varsayılan) |
+| `firestore.rules` | Hem kök düzeni (`/courses`, `/memberships`) hem legacy düzen (`/artifacts/{proje}/public/data/...`) destekler |
+| `firebase.json` + `.firebaserc` | `npx firebase-tools deploy --only firestore:rules` için |
+
+## 0) Mevcut durum
+- `app.json → expo.extra.firestore` artık **`kpssasistani-01`** veritabanı **kökünü**
+  gösteriyor (`{ projectId: 'kpssasistani-01', databaseId: '(default)', root: '' }`),
+  yani taze bir klon hiçbir env dosyası olmadan yeni projeyi kullanır.
+- Kod tarafındaki `DEFAULT_TARGET` (repo varsayılanı) **eski** `kpss-asistani` +
+  `artifacts/.../public/data` düzeninde duruyor; `app.json` bloğunu silersen
+  uygulama eskisine döner (geri alma yolu bu).
+- **Önemli:** yeni projede henüz veri yok → içeriği boş görürsün. Doldurmak için tek
+  komut: `npm run migrate:content` (aşağıda **7**). Sıra: 1c → 2b → `migrate:content`.
+
+> **Senin projen (bu oturumda verildi):** ad `kpssasistani`,
+> Project ID **`kpssasistani-01`**, proje numarası `674719983447`.
+> Bu depodaki `.env.example` ve aşağıdaki komutlar bu kimliği kullanıyor.
+
+## 1) Firebase projesi + Firestore veritabanı
+1. https://console.firebase.google.com/ → **Add project** (ör. `kpssasistani-01`), Analytics kapalı olabilir.
+2. Sol menü → **Build → Firestore Database → Create database** (bu proje için tamamlandıysa atla)
+   - **Native mode** seç (Datastore mode REST `/v1/projects/.../documents` akışıyla uyumsuz olabilir).
+   - Region: `europe-west1` (Belçika) Türkiye için iyi bir seçim.
+   - Database ID: **`(default)`** olmalı — kod `databases/(default)` kullanıyor.
+3. Mod: başlangıçta **Test mode** bırakabilirsin; 30 gün sonra kural yayımlaman istenir.
+   Kalıcı çözüm aşağıdaki 3. adım.
+
+> **Klasör/koleksiyon isimlerini senin açman gerekmiyor:**
+> - `memberships/{e-posta}` → ilk kayıtta uygulama tarafından oluşturulur.
+> - `courses/{courseId}/topics/{docId}` ve `daily_tips/main` → **Yönetim Paneli →
+>   Uygulama Ayarları → “Firestore klasörlerini oluştur (tohumlama)”** akışı oluşturur
+>   (planı çıkar → Firestore’a yaz). Panelde düzenlediğin konu/soru/tip listeleri
+>   olduğu gibi kopyalanır; repodaki örnek soruları da dahil edebilirsin.
+> - Kalıcı içerik (tam soru bankası) için 4. adımdaki şemayı kullan.
+
+## 1b) Tek komut: `npm run setup:firestore`
+Kod tarafında gereken her şeyi tek satır yapar (`.env.local` + `.firebaserc`),
+sonra sana kalan Console işlerini sırayla sayar:
+```bash
+npm run setup:firestore -- kpssasistani-01 --root .   # dosyaları yaz
+npm run check:firestore                          # kuralları/okumayı dene
+npm run deploy:rules                             # npx firebase-tools ile yayınla
+```
+`scripts/setup-firestore.mjs` seçenekleri: `--root <önec>` (kök düzen için `.`),
+`--dir <yol>`, `--dry-run`, `--check`, `--deploy`. `--check` şunları dener: içerik
+okuma, `memberships` listeleme, **kurallara uygun geçici bir üye belgesi yazma ve
+silme**, (legacy düzen seçiliyse) yol öneki. Ağın engelli olduğu bir makinede
+“erişilemedi” der ve seni uyarır — gerçek sonucu kendi makinende verir.
+
+## 1c) “Your apps — There are no apps” durumu
+`apiKey`, **Project settings → General → Your apps** altındaki web kaydından gelir;
+proje yeni kurulduysa o liste boştur ve anahtar da yoktur. Tek seferlik kayıt:
+1. **Add app → Web** (ikon: `</>`), bir ad ver (ör. `kpss-web`) → **Register app**.
+2. Çıkan ekranda `const firebaseConfig = { ... }` bloğu görünür → **`apiKey`** değerini
+   kopyala. `npm install firebase` / `firebase init` adımlarını **atla** (bu depo SDK
+   kullanmıyor), `google-services.json` da **gerekmiyor** (biz REST + web anahtarı
+   kullanıyoruz; native anahtarı sadece Firebase SDK kuran derlemeler ister).
+3. “Close” ile çık. Artık **Project settings → General → Your apps** altında
+   `Web app / kpss-web` ve onun `API key` satırı durur.
+
+Anahtarı iki yerden birine verebilirsin:
+- **Panel (cihaza özel, yeniden başlatma yok):** Uygulama Ayarları → Firebase Auth →
+  “Web API anahtarı” alanına yapıştır → **Kaydet**. Değer `AsyncStorage`
+  (`kpss.firebaseAuth.config.v1`) içinde durur; “Kaldır” ile env değerine dönülür.
+- **`.env.local` (kalıcı, tüm cihazlar/üretim):** aşağıdaki **2** adımı.
+
+## 2) Uygulamayı yeni projeye bağla (adım adım)
+Öncelik sırası: **env → app.json → repo varsayılanı**. Üç yoldan birini seç.
+
+### A) `.env.local` — tavsiye edilen, kod değişikliği yok
+1. **Repo köküne** dosya aç (yani `package.json` ile aynı klasöre):
+   ```bash
+   cd <repo>            # package.json'un olduğu klasör
+   cp .env.example .env.local
+   open -e .env.local   # macOS · Linux: xdg-open/ nano, Windows: notepad
+   ```
+2. İçini doldur — **iki satarı birlikte ver**, tek başına proje kimliği yetmez:
+   ```bash
+   EXPO_PUBLIC_FIRESTORE_PROJECT=kpssasistani-01
+   EXPO_PUBLIC_FIRESTORE_ROOT=.
+   # opsiyonel: EXPO_PUBLIC_FIRESTORE_DATABASE=(default)
+   # emulator:   EXPO_PUBLIC_FIRESTORE_HOST=http://localhost:8080/v1
+   ```
+   - `EXPO_PUBLIC_` ön eki zorunlu: bu önek olmayan değişkenler derlenen pakete
+     gömülmez (Expo kuralı).
+   - `EXPO_PUBLIC_FIRESTORE_ROOT=.` → koleksiyonlar veritabanının **kökünde**
+     (`/courses`, `/daily_tips`, `/memberships`). Boş bırakmak da aynı işi görür;
+     `.` yazman tavsiye edilir (bazı araçlar boş değeri düşürür).
+     Kök yerine eski düzeni kullanmak istersen: `artifacts/kpssasistani-01/public/data`.
+3. **Metro'yu temiz önbellekle yeniden başlat** (env, derleme zamanında pakete
+   gömülür; canlı yeniden yükleme ile değişmez):
+   ```bash
+   npx expo start --clear
+   # web export alacaksan: CI=1 npx expo export --platform web
+   ```
+   > **Tuzak:** `expo export`/`expo start --port` aynı Metro önbelleğini paylaşır.
+   > Yalnızca `.env.local` değiştiyse eski transform kullanılabilir ve pakete **eski**
+   > proje kimliği gömülür. `expo export`'un `--clear` bayrağı yoktur; önbelleği sil:
+   > `rm -rf "$TMPDIR/metro-cache" /tmp/metro-cache`. Kontrol:
+   > `grep -c "kpssasistani-01" <export>/_expo/static/js/web/*.js` > 0 olmalı.
+4. Doğrula (iki yerden):
+   - Uygulama: kalkan ikonu → PIN `2468` → **Uygulama Ayarları → “Firestore bağlantısı”**
+     kartında `Proje kimliği: kpssasistani-01`, `Yol öneki: (kök)`, `Ayar kaynağı: env`
+     yazmalı. Kart, proje ile root birbirine uymuyorsa **uyarı satırı** gösterir.
+   - **Test et** düğmesi → `memberships: OK | 404 (koleksiyon henüz yok — normal)` ve
+     `daily_tips: …` satırlarını döndürür.
+5. `.env.local` repoya girmesin: depoda `.gitignore` var (`.env`, `.env.*`,
+   `!.env.example`). `.env.example` şablonu commit'lenebilir, içinde kendi değerlerin
+   olmamalı.
+
+### B) `app.json` → `expo.extra.firestore`
+```json
+"extra": {
+  "firestore": {
+    "projectId": "kpssasistani-01",
+    "databaseId": "(default)",
+    "root": "."
+  }
+}
+```
+Repoda görüneceği için yalnızca proje kimliği gibi sır olmayan değerler için
+kullan; `root` için `.` ya da tam önek yazılabilir (boş string de kabul).
+
+### C) `lib/firebaseConfig.ts` → `DEFAULT_TARGET`
+Tek projeyle uzun vadeli çalışacaksan en basiti: varsayılanı kendi projen yap,
+`.env` ile uğraşma.
+
+### D) Firebase Auth’a geçiş için hazırlık
+Ayrıntılı sıra yukarıda **2b)** bölümünde; özetle `.env.local`'a şu dört satır eklenir
+(değerler Console → Project settings → Your apps → SDK config):
+```bash
+EXPO_PUBLIC_FIREBASE_API_KEY=...
+EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=kpssasistani-01.firebaseapp.com
+EXPO_PUBLIC_FIREBASE_PROJECT_ID=kpssasistani-01
+EXPO_PUBLIC_FIREBASE_APP_ID=1:...:web:...
+```
+Bunlar public web yapılandırmasıdır (pakete gömülür, gizli değil).
+**Servis hesabı JSON’ı / OAuth token’ı `.env`e yazılmaz ve panele/repo'ya
+konulmaz** — o yalnızca Admin SDK script'leri içindir.
+
+### EAS/üretim derlemeleri
+`.env.local` EAS'a otomatik yüklenmez. İkiden biri:
+```bash
+eas build --platform all --env-file .env.local
+```
+veya EAS dashboard → Variables → **`EXPO_PUBLIC_FIRESTORE_PROJECT`,
+`EXPO_PUBLIC_FIRESTORE_ROOT`** (+ Auth kullanıyorsan `EXPO_PUBLIC_FIREBASE_API_KEY`)
+değerlerini Production/Preview değişkeni olarak ekle
+(EAS, build sırasında bunları da paketin içine gömer).
+
+## 2b) Firebase Auth'a geç (önerilen, ~2 dakika)
+1. **Console → Authentication → Sign-in method → Email/Password → Enable.**
+2. **Project settings → General → Your apps → Add app → Web** → `SDK config` içindeki
+   `apiKey` değerini kopyala (public web anahtarı; servis hesabı JSON'u **değil**).
+3. Tek komutla yazdır:
+```bash
+npm run setup:firestore -- kpssasistani-01 --root . --api-key AIza...
+npm run deploy:rules
+npx expo start --clear
+npm run check:firestore     # "Firebase Auth testi: API anahtarı geçerli ve sağlayıcı açık"
+```
+4. Panelde **Uygulama Ayarları → Firebase Auth (kimlik doğrulama) → Test et**:
+   mod rozeti `firebase-auth` olmalı; kart, bu cihazdaki oturumu da gösterir.
+
+Ne değişir:
+- Üyelik belgesine parola hash'i **yazılmaz**; `lib/crypto.ts` yalnızca yerel modda kullanılır.
+- Kayıt/giriş `identitytoolkit.googleapis.com` üzerinden yapılır (`lib/authClient.ts`);
+  hata mesajları Türkçeye çevrilir (`EMAIL_EXISTS`, `INVALID_LOGIN_CREDENTIALS`,
+  `OPERATION_NOT_ALLOWED` → "Email/Password açık değil" gibi).
+- Oturum native'de `expo-secure-store`, web'de `AsyncStorage` içinde durur; idToken
+  süresi dolunca `refresh_token` ile sessizce yenilenir. Uygulama açılışında
+  `SESSION_KEY` akışı aynen çalışmaya devam eder.
+- Panel → “Şifremi unuttum” (giriş ekranında) `PASSWORD_RESET` e-postası gönderir.
+- Yönetici listesi ve kilit **veride** durur, kod bayrağı yok:
+  - `meta/admins { emails: [küçük harf e-posta], updatedAt, schemaVersion }` → panelin
+    “Kendimi ekle” düğmesi bu belgeyi oluşturur/günceller (Admin SDK, custom claim
+    gerekmez). Kilit açılana kadar uygulama yazabilir; sonrası yalnız Console.
+  - `meta/membership_lockdown` **varsa** kimliksiz istekler üyelik belgesi
+    okuyamaz/yazamaz (yalnızca kendi e-postasıyla eşleşen token). Console'da oluştur,
+    silince anında geri alınır — kuralı yeniden yayımlamana gerek yok.
+  Sıra: önce giriş akışını Auth ile bir kez dene (senin e-postan `meta/admins` içinde
+  olsun), sonra kilidi aç. Kilit açıkken panelden anonim üye düzenleyemezsin.
+- Panelde **Uygulama Ayarları → Firebase Auth** kartında “Yönetici listesi” ve
+  “Üyelik kilidi” satırları canlı durumu gösterir (Yenile ile tekrar okur).
+
+## 3) Kuralları yayımla
+```bash
+# .firebaserc içindeki projectId'i kendi projenle değiştir:
+#   { "projects": { "default": "kpssasistani-01" } }
+npx firebase-tools login
+npx firebase-tools deploy --only firestore:rules
+```
+veya Console → **Firestore → Rules** → `firestore.rules` içeriğini yapıştır → **Publish**.
+
+Kural dosyası her iki yol düzenini de içerir; kullanmadığın bloğu silebilirsin:
+- yeni kurulum → `match /{collection}/...` + `match /memberships/{memberId}`
+- legacy kurulum → `match /artifacts/{artifact}/public/data/...`
+
+## 4) İçerik şeması (tohumlama da bu yapıyı yazar)
+Kurs kimlikleri: `tarih`, `cografya`, `turkce`, `vatandaslik`, `guncel`.
+
+**4.1 Konular** — `courses/{courseId}/topics` koleksiyonuna belge ekle,
+belge kimliği serbest (ör. `ilk_cag`):
+
+| Alan | Tip | Not |
+| --- | --- | --- |
+| `id` | string | opsiyonel; yoksa belge kimliği kullanılır |
+| `name` | string | Konu başlığı (listede görünür) |
+| `questions` | **array** | her eleman bir **map** |
+
+`questions[]` haritasının alanları:
+
+| Alan | Tip | Not |
+| --- | --- | --- |
+| `question` | string | zorunlu — boşsa soru atlanır |
+| `options` | array&lt;string&gt; | en az 2 şık |
+| `answer` | integer | 0 tabanlı şık indeksi (string de kabul edilir) |
+| `explanation` | string | çözüm metni |
+| `id` | string/number | ops.; yoksa `{topicDocId}_{index}` üretilir |
+
+Aynı belgeyi tek seferde okumak için URL: `…/documents/courses/tarih/topics/ilk_cag`.
+
+**4.2 Hap bilgiler** — `daily_tips` koleksiyonunda `main` kimliğiyle tek belge:
+
+| Alan | Tip |
+| --- | --- |
+| `list` | array&lt;string&gt; |
+
+**4.3 Üyelikler** — `memberships/{e-posta}` belgelerini uygulama oluşturur; elle
+oluşturacaksan şu alanlar **zorunlu** (firestore.rules biçimi denetliyor):
+`id` (=küçük harf e-posta), `email`, `emailNormalized`, `displayName`, `verifier`
+(64 hex), `salt` (32 hex), `iterations` (≥100), `algo` (`pbkdf2-sha256`), `role`,
+`status`, `vip` (bool), `vipPlan`, `vipExpiresAt`, `createdAt`, `lastLoginAt`,
+`city`, `exam`, `note`, `testsCompleted`, `questionsSolved`, `netSum`,
+`courseUsage` (map), `schemaVersion` (=1).
+Şifre hash'ini elle üretmek yerine **panelde Üyelik Paneli → Yeni üye** akışını kullan
+(PBKDF2 cihazda hesaplanır).
+
+## 5) Doğrulama
+```bash
+npm run test:auth      # sahte Identity Toolkit ile 59 kontrol (ağ gerekmez)
+```
+`{P}` = proje kimliğin, `{R}` = kök öneki (kök düzen için boş, `{R}/` kısmını atla):
+
+```
+https://firestore.googleapis.com/v1/projects/{P}/databases/(default)/documents/{R}memberships?pageSize=10
+https://firestore.googleapis.com/v1/projects/{P}/databases/(default)/documents/{R}daily_tips/main
+https://firestore.googleapis.com/v1/projects/{P}/databases/(default)/documents/{R}courses/tarih/topics?pageSize=100
+```
+- `{"documents":[]}` veya 404 → koleksiyon yok (normal, uygulama ilk yazımda oluşturur).
+- `PERMISSION_DENIED` → kurallar yayında değil / yol düzeni uyuşmuyor (`root` ayarını kontrol et).
+
+Uçtan uca: önizlemede **kişi ikonu → Kayıt ol**, sonra Console'da belgeyi gör,
+**Üyelik Paneli**'nde listele/plan değiştir, uygulamada **her ders 1 test** kuralının
+işlediğini doğrula.
+
+## 5b) Sıralama (kısayol)
+```bash
+# 1) Console: Add app → Web → Register app → apiKey kopyala (1c)
+# 2) Console: Authentication → Sign-in method → Email/Password → Enable
+# 3) Terminal (repo kökünde, bir kez):
+npm run setup:firestore -- kpssasistani-01 --root . --api-key <ANAHTAR>
+npm run deploy:rules
+npm run migrate:content            # eski projeden soru bankası + hap bilgiler
+npm run check:firestore            # hepsi yeşil mi
+npx expo start --clear
+```
+Anahtarı terminale yazmak istemiyorsan 3. adımdaki `--api-key` yerine paneldeki
+“Web API anahtarı” alanını kullan (bkz. 1c). `deploy:rules` yerine Console →
+Firestore → Rules → yapıştır → Publish da olur.
+Soru bankası boşsa uygulama repodaki seed verisine düşer (`lib/seedData.ts`:
+`INITIAL_TOPIC_CATALOG`, `FALLBACK_QUESTIONS`, `INITIAL_DAILY_TIPS`) — uygulama açılır,
+konu listesi ve örnek sorularla çalışır. Yani içerik taşımayı sonraya bırakabilirsin.
+
+## 6b) Tohumlama sonrası: yazma penceresini kapat
+Panel “yazılabilir” durumunu `meta/content_lock` belgesine bakarak anlıyor. Kurulum
+bitince Console'da şu belgeyi oluştur: koleksiyon `meta`, belge `content_lock`,
+alan `note` = `kilitli`. Bu andan itibaren uygulama içeriğe yazamaz (rules), kilit
+belgesini de uygulama yazamaz/silemez — açmak yine Console işidir.
+
+## 7) Eski projeden veri taşımak
+**Kolay yol (terminal yok):** panel → **Uygulama Ayarları → “Eski projeden içeriği
+kopyala”** → kaynak proje kimliği (`kpss-asistani`) → **Kaynağı tara** → **Bu projeye
+kopyala**. Aynı işi uygulamanın içinden yapar: kaynağı anonim okur, hedefe panel
+tohumlamasıyla **aynı kurallarla** yazar, ilerlemeyi ve hataları kartta gösterir.
+“Var olanları atla” açıkken yarıda kesersen tekrar basmak eksikleri tamamlar.
+
+**Terminal yolu (aynı mantık, büyük bankada daha rahat):** `npm run migrate:content`
+`scripts/migrate-content.mjs` eski projedeki belgeyi **olduğu gibi** (fields bloğu
+dönüştürülmeden) yeni projeye kopyalar; yani soru formatı, alan adları ve konu
+içeriği birebir aynı kalır. Admin SDK, servis hesabı anahtarı veya Console veri
+ekranı gerekmez — panelin tohumlama akışıyla **aynı** kuralları kullanır.
+
+```bash
+npm run test:copy                                 # 0) kopyalama mantığının testi (27 kontrol)
+npm run migrate:content -- --limit 2 --dry-run   # 1) pilot: ne olacak, görsel onay
+npm run migrate:content                            # 2) tamamını taşı (yarıda kesilirse devam eder)
+npm run migrate:content -- --force                 #    hepsini yeniden yaz
+npm run migrate:content:selftest                   #    script'in kendi testi (16 kontrol, ağ gerekmez)
+```
+
+Seçenekler: `--from <proje>` (varsayılan `kpss-asistani`), `--from-root <yol>`
+(varsayılan `artifacts/kpss-asistani/public/data`), `--to <proje>` ve `--to-root`
+(varsayılanlar `.env.local`'dan), `--only courses,tips`, `--limit N`,
+`--concurrency 6`, `--state .migrate-state.json`, `--dry-run`, `--force`.
+
+Nasıl çalışır:
+1. `courses` listesini sayfa sayfa okur, her ders için `topics` listesini çeker
+   (REST liste yanıtı belge gövdesini de taşıdığı için konu başına istek atmaz).
+2. Her belgeyi hedefe `POST ?documentId=…` ile yazar; 409 alırsa `PATCH` ile
+   üzerine yazar. `daily_tips/main` doğrudan `PATCH` ile taşınır.
+3. Yazma yanıtındaki `questions` uzunluğunu kaynakla karşılaştırır; uyuşmazlık
+   sonunda listelenir ve komut **hata koduyla** çıkar (yani “bitti” sanmazsın).
+4. `.migrate-state.json` yazılan belgeleri tutar → kesinti/`Ctrl+C` sonrası
+   tekrar çalıştırınca atlar. `--force` hepsini yeniden yazar.
+
+Sonrası: Console → `meta/content_lock` oluştur (içerik yazma penceresi kapanır) ve
+isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
+
+## 8) Sık karşılaşılan hatalar
+| Belirti | Sebep / çözüm |
+| --- | --- |
+| “Firestore kurallı yazmayı reddetti” | Kurallar yayında değil → 3. adım. |
+| `NOT_FOUND: Database (default) does not exist` | Veritabanını farklı isimle açtın → `EXPO_PUBLIC_FIRESTORE_DATABASE` ile doğru ismi ver veya `(default)` DB oluştur. |
+| Kayıt var ama panel listesi boş | `root` ayarı belge yoluyla uyuşmuyor (kök ↔ artifacts). Kartta görünen “Üyelik koleksiyonu” yolunu Console yoluyla kıyasla. |
+| Env değişikliği etkili olmadı | `.env.local` repo kökünde mi, ad `EXPO_PUBLIC_` ile mi başlıyor, ve Metro'yu `npx expo start --clear` ile yeniden başlattın mı? |
+| Panel “root hâlâ legacy” uyarısı veriyor | Sadece proje kimliğini verdin; `EXPO_PUBLIC_FIRESTORE_ROOT=.` satırını ekle (B seçeneğinde `root: "."`). |
+| İçerik Console'da var, app boş gösteriyor | Koleksiyon/yol birebir `courses/{courseId}/topics/{docId}` olmalı; `questions` bir **array of map**. |
+
+## 9) Güvenlik notu
+Auth anahtarı tanımlıysa kurallar `request.auth.uid`/`request.auth.token.email` ile
+istemciyi tanır ve `authRequired()` bayrağıyla yalnızca kendi belgesine erişim
+verilebilir. Anahtarsız (yerel) modda kurallar istemciyi UID ile ayıramaz; yalnızca
+veri şeklini denetler. Bu set `role` değiştirmeyi kapatır (kendi kendine yöneticilik
+engeli), şifre alanlarının biçimini zorunlu kılar ve içeriği anonim yazıma kapatır.
+Sertleştirme seçenekleri `firestore.rules` dosyasının altındaki notlarda:
+“sadece Console” varyantı ve Firebase Auth ile `request.auth.token.email == memberId`
+eşleştirmesi.

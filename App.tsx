@@ -14,6 +14,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import { ThemeProvider, useAppTheme } from './lib/theme';
 import { AppProvider, useApp } from './lib/AppContext';
+import { AdminProvider } from './lib/AdminContext';
+import { MembershipProvider } from './lib/MembershipContext';
 import { MainTabParamList, RootStackParamList } from './lib/types';
 
 import { HomeScreen } from './screens/HomeScreen';
@@ -23,6 +25,19 @@ import { FocusStatsScreen } from './screens/FocusStatsScreen';
 import { CourseTopicsScreen } from './screens/CourseTopicsScreen';
 import { QuizScreen } from './screens/QuizScreen';
 import { QuizResultScreen } from './screens/QuizResultScreen';
+import { AdminLoginScreen } from './screens/AdminLoginScreen';
+import { AdminPanelScreen } from './screens/AdminPanelScreen';
+import { AdminTopicsScreen } from './screens/AdminTopicsScreen';
+import { AdminQuestionsScreen } from './screens/AdminQuestionsScreen';
+import { AdminUsersScreen } from './screens/AdminUsersScreen';
+import { AdminTipsScreen } from './screens/AdminTipsScreen';
+import { AdminCoursesScreen } from './screens/AdminCoursesScreen';
+import { AdminSettingsScreen } from './screens/AdminSettingsScreen';
+import { AdminMembershipScreen } from './screens/AdminMembershipScreen';
+import { AuthScreen } from './screens/AuthScreen';
+import { ProfileScreen } from './screens/ProfileScreen';
+import { MembershipPaywallScreen } from './screens/MembershipPaywallScreen';
+import { AdminMaintenanceGate } from './components/admin/MaintenanceGate';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -121,6 +136,14 @@ function MainTabsNavigator() {
   );
 }
 
+function MainTabsScreen() {
+  return (
+    <AdminMaintenanceGate>
+      <MainTabsNavigator />
+    </AdminMaintenanceGate>
+  );
+}
+
 function RootNavigator() {
   const { colors } = useAppTheme();
   const { width } = useWindowDimensions();
@@ -183,7 +206,7 @@ function RootNavigator() {
               animation: 'slide_from_right',
             }}
           >
-            <Stack.Screen name="MainTabs" component={MainTabsNavigator} />
+            <Stack.Screen name="MainTabs" component={MainTabsScreen} />
             <Stack.Screen name="CourseTopics" component={CourseTopicsScreen} />
             <Stack.Screen
               name="Quiz"
@@ -194,6 +217,21 @@ function RootNavigator() {
               name="QuizResult"
               component={QuizResultScreen}
               options={{ gestureEnabled: false }}
+            />
+            <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
+            <Stack.Screen name="AdminPanel" component={AdminPanelScreen} />
+            <Stack.Screen name="AdminTopics" component={AdminTopicsScreen} />
+            <Stack.Screen name="AdminQuestions" component={AdminQuestionsScreen} />
+            <Stack.Screen name="AdminUsers" component={AdminUsersScreen} />
+            <Stack.Screen name="AdminTips" component={AdminTipsScreen} />
+            <Stack.Screen name="AdminCourses" component={AdminCoursesScreen} />
+            <Stack.Screen name="AdminSettings" component={AdminSettingsScreen} />
+            <Stack.Screen name="AdminMembership" component={AdminMembershipScreen} />
+            <Stack.Screen name="Auth" component={AuthScreen} />
+            <Stack.Screen name="Profile" component={ProfileScreen} />
+            <Stack.Screen
+              name="MembershipPaywall"
+              component={MembershipPaywallScreen}
             />
           </Stack.Navigator>
         </NavigationContainer>
@@ -225,7 +263,11 @@ export default function App() {
     <SafeAreaProvider>
       <ThemeProvider>
         <AppProvider>
-          <RootNavigator />
+          <AdminProvider>
+            <MembershipProvider>
+              <RootNavigator />
+            </MembershipProvider>
+          </AdminProvider>
         </AppProvider>
       </ThemeProvider>
     </SafeAreaProvider>

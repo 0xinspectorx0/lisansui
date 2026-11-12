@@ -1,13 +1,22 @@
 import { CourseId, Question, TopicMeta } from './types';
+import { contentBase } from './firebaseConfig';
 import {
   FALLBACK_QUESTIONS,
   INITIAL_DAILY_TIPS,
   INITIAL_TOPIC_CATALOG,
 } from './seedData';
 import { cleanKpssText, cleanOptionText } from './textUtils';
+import {
+  applyAdminQuestions,
+  applyAdminTopics,
+  getQuestionsOverride,
+} from './adminStore';
 
-const FIRESTORE_PUBLIC_BASE =
-  'https://firestore.googleapis.com/v1/projects/kpss-asistani/databases/(default)/documents/artifacts/kpss-asistani/public/data';
+/**
+ * Content root is resolved by lib/firebaseConfig (env → app.json → defaults) so the
+ * same bundle can point at a brand-new Firestore project without code edits.
+ */
+const FIRESTORE_PUBLIC_BASE = contentBase();
 
 // Fast in-memory session caches
 const topicQuestionsCache = new Map<string, Question[]>();
@@ -60,13 +69,22 @@ function parseFirestoreQuestions(
 }
 
 export function getInitialCatalog(): Record<CourseId, TopicMeta[]> {
+  const seed = INITIAL_TOPIC_CATALOG;
+  const resolve = (courseId: CourseId): TopicMeta[] =>
+    applyAdminTopics(courseId, catalogCache.get(courseId) || seed[courseId] || []);
   return {
-    tarih: catalogCache.get('tarih') || INITIAL_TOPIC_CATALOG.tarih || [],
-    cografya: catalogCache.get('cografya') || INITIAL_TOPIC_CATALOG.cografya || [],
-    turkce: catalogCache.get('turkce') || INITIAL_TOPIC_CATALOG.turkce || [],
-    vatandaslik: catalogCache.get('vatandaslik') || INITIAL_TOPIC_CATALOG.vatandaslik || [],
-    guncel: catalogCache.get('guncel') || INITIAL_TOPIC_CATALOG.guncel || [],
+    tarih: resolve('tarih'),
+    cografya: resolve('cografya'),
+    turkce: resolve('turkce'),
+    vatandaslik: resolve('vatandaslik'),
+    guncel: resolve('guncel'),
   };
+}
+
+/** Drops in-memory content caches so the next read re-resolves through admin overrides. */
+export function clearKpssCaches(): void {
+  topicQuestionsCache.clear();
+  catalogCache.clear();
 }
 
 /**
@@ -78,10 +96,16 @@ export async function fetchTopicQuestions(
   topicDocId: string,
   topicName?: string
 ): Promise<Question[]> {
+  // The admin panel is authoritative once it has touched this topic.
+  const override = getQuestionsOverride(courseId, topicDocId);
+  if (override) {
+    return override;
+  }
+
   const cacheKey = `${courseId}:${topicDocId}`;
   const cached = topicQuestionsCache.get(cacheKey);
   if (cached && cached.length > 0) {
-    return cached;
+    return applyAdminQuestions(courseId, topicDocId, cached);
   }
 
   try {
@@ -102,7 +126,7 @@ export async function fetchTopicQuestions(
     );
     if (questions.length > 0) {
       topicQuestionsCache.set(cacheKey, questions);
-      return questions;
+      return applyAdminQuestions(courseId, topicDocId, questions);
     }
   } catch {
     // Offline fallback
@@ -115,7 +139,7 @@ export async function fetchTopicQuestions(
     explanation: cleanKpssText(q.explanation),
     options: q.options.map(cleanOptionText),
   }));
-  return fallback;
+  return applyAdminQuestions(courseId, topicDocId, fallback);
 }
 
 /**
@@ -154,12 +178,15 @@ export async function refreshCourseTopics(courseId: CourseId): Promise<TopicMeta
 
     if (topics.length > 0) {
       catalogCache.set(courseId, topics);
-      return topics;
+      return applyAdminTopics(courseId, topics);
     }
   } catch {
     // Keep cached/seed catalog
   }
-  return catalogCache.get(courseId) || INITIAL_TOPIC_CATALOG[courseId] || [];
+  return applyAdminTopics(
+    courseId,
+    catalogCache.get(courseId) || INITIAL_TOPIC_CATALOG[courseId] || []
+  );
 }
 
 /**
@@ -235,6 +262,10 @@ export async function buildGeneralMixedExam(
 
 /**
  * Syncs daily Hap Bilgiler from kpssasistani.com live Firestore
+ */
+/**
+ * Returns the RAW (cloud/seed) tip list. Admin overrides are applied by the
+ * consumer (AppContext) so the untouched source stays addressable for resets.
  */
 export async function fetchLiveDailyTips(): Promise<string[]> {
   try {

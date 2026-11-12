@@ -1,0 +1,15 @@
+node_modules/
+.expo/
+# yerel ortam değişkenleri (proje kimliği/servis anahtarı yolu) — commit'lenmez
+.env
+.env.*
+!.env.example
+web-build/
+dist/
+*.log
+.DS_Store
+serviceAccount*.json
+keyfile*.json
+
+# içerik taşıma ilerleme durumu (yeniden çalıştırmada kullanılır)
+.migrate-state.json

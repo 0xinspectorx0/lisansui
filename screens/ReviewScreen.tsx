@@ -15,6 +15,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { COURSE_LIST, COURSES, useAppTheme } from '../lib/theme';
 import { useApp } from '../lib/AppContext';
+import { VipLockedScreen, useVipLocked } from '../components/admin/VipGate';
 import { CourseId, RootStackParamList, SavedQuestion } from '../lib/types';
 import { prepareQuizQuestions } from '../lib/textUtils';
 
@@ -182,6 +183,11 @@ export const ReviewScreen: React.FC = () => {
       </Pressable>
     );
   };
+
+  const vipLock = useVipLocked('review');
+  if (vipLock) {
+    return <VipLockedScreen title="Tekrar Kutusu" />;
+  }
 
   return (
     <SafeAreaView

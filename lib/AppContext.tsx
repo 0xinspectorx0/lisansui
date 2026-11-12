@@ -4,6 +4,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -23,6 +24,7 @@ import {
   getInitialCatalog,
   refreshCourseTopics,
 } from './kpssApi';
+import { applyAdminTips, ALL_COURSE_IDS, getAdminState, subscribeAdmin } from './adminStore';
 import { INITIAL_DAILY_TIPS } from './seedData';
 import { calcKpssNet } from './textUtils';
 
@@ -64,6 +66,27 @@ const DEFAULT_SETTINGS: UserSettings = {
   autoClearMistakes: true,
 };
 
+/**
+ * Results are scoped to the device profile so switching accounts cannot inherit
+ * another member's used quota. MembershipContext keeps this value current.
+ */
+let localMemberId: string | null = null;
+/** Membership layer registers itself here so every finished test is mirrored to Firestore. */
+let testCompletionListener:
+  | ((courseId: CourseId | 'genel', summary: { total: number; correct: number; wrong: number }) => void)
+  | null = null;
+export function setTestCompletionListener(
+  fn: ((courseId: CourseId | 'genel', summary: { total: number; correct: number; wrong: number }) => void) | null
+): void {
+  testCompletionListener = fn;
+}
+export function setLocalMemberId(id: string | null): void {
+  localMemberId = id;
+}
+function getLocalMemberId(): string | undefined {
+  return localMemberId ?? undefined;
+}
+
 function getTodayKey(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
@@ -94,6 +117,7 @@ interface AppContextValue {
   settings: UserSettings;
 
   refreshCourse: (courseId: CourseId) => Promise<void>;
+  refreshAllCourses: () => Promise<void>;
   refreshTips: () => Promise<void>;
   toggleFavorite: (q: Question) => void;
   isFavorite: (questionId: string) => boolean;
@@ -105,6 +129,8 @@ interface AppContextValue {
   toggleTipSaved: (tip: string) => void;
   updateSettings: (patch: Partial<UserSettings>) => void;
   recordFocusMinutes: (minutes: number) => void;
+  /** Merges cloud-mirrored test entries so a fresh device cannot dodge the free quota. */
+  updateResultsWithMember: (incoming: Record<string, TestResult>) => void;
   finalizeQuizSession: (
     session: QuizSessionPayload,
     answers: Record<number, number>,
@@ -118,7 +144,9 @@ const AppContext = createContext<AppContextValue | null>(null);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isHydrated, setIsHydrated] = useState(false);
   const [catalog, setCatalog] = useState<Record<CourseId, TopicMeta[]>>(getInitialCatalog);
-  const [dailyTips, setDailyTips] = useState<string[]>(INITIAL_DAILY_TIPS);
+  const [dailyTips, setDailyTips] = useState<string[]>(() =>
+    applyAdminTips(INITIAL_DAILY_TIPS)
+  );
   const [results, setResults] = useState<Record<string, TestResult>>({});
   const [mistakes, setMistakes] = useState<SavedQuestion[]>([]);
   const [favorites, setFavorites] = useState<SavedQuestion[]>([]);
@@ -139,6 +167,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [totalFocusMinutes, setTotalFocusMinutes] = useState<number>(0);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
+  const [adminRevision, setAdminRevision] = useState(0);
+  const tipsBaseRef = useRef<string[]>(INITIAL_DAILY_TIPS);
 
   useEffect(() => {
     (async () => {
@@ -203,6 +233,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         if (map[STORAGE_KEYS.SETTINGS]) {
           setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(map[STORAGE_KEYS.SETTINGS]!) });
+        } else {
+          // No personal choice yet — respect the admin-defined defaults.
+          const adminSettings = getAdminState().settings;
+          setSettings(prev => ({ ...prev, dailyGoal: adminSettings.dailyGoalDefault }));
         }
       } catch {
         // Ignore storage read errors
@@ -215,21 +249,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     fetchLiveDailyTips()
       .then(liveTips => {
         if (liveTips && liveTips.length > 0) {
-          setDailyTips(liveTips);
+          tipsBaseRef.current = liveTips;
+          setDailyTips(applyAdminTips(liveTips));
         }
       })
       .catch(() => {});
   }, []);
+
+  // The admin panel is a second source of truth for content. Whenever it
+  // mutates (or finishes hydrating) we re-resolve the catalog and tips.
+  useEffect(() => subscribeAdmin(() => setAdminRevision(getAdminState().revision)), []);
+
+  useEffect(() => {
+    if (adminRevision === 0) return;
+    setCatalog(getInitialCatalog());
+    setDailyTips(applyAdminTips(tipsBaseRef.current));
+  }, [adminRevision]);
 
   const refreshCourse = useCallback(async (courseId: CourseId) => {
     const updated = await refreshCourseTopics(courseId);
     setCatalog(prev => ({ ...prev, [courseId]: updated }));
   }, []);
 
+  /**
+   * Re-reads every course (used right after an admin override is cleared so the
+   * live cloud content shows up immediately instead of the stale in-memory copy).
+   */
+  const refreshAllCourses = useCallback(async () => {
+    try {
+      const entries = await Promise.all(
+        ALL_COURSE_IDS.map(async id => [id, await refreshCourseTopics(id)] as const)
+      );
+      setCatalog(prev => {
+        const next = { ...prev };
+        entries.forEach(([id, topics]) => {
+          next[id] = topics;
+        });
+        return next;
+      });
+      const tips = await fetchLiveDailyTips();
+      if (tips.length > 0) {
+        tipsBaseRef.current = tips;
+        setDailyTips(applyAdminTips(tips));
+      }
+    } catch {
+      // keep whatever is cached
+    }
+  }, []);
+
   const refreshTips = useCallback(async () => {
     const updated = await fetchLiveDailyTips();
     if (updated.length > 0) {
-      setDailyTips(updated);
+      tipsBaseRef.current = updated;
+      setDailyTips(applyAdminTips(updated));
     }
   }, []);
 
@@ -304,6 +376,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, []);
 
+  const updateResultsWithMember = useCallback((incoming: Record<string, TestResult>) => {
+    setResults(prev => {
+      const next = { ...prev };
+      Object.entries(incoming).forEach(([key, value]) => {
+        if (!next[key]) next[key] = value;
+      });
+      AsyncStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
+
   const updateSettings = useCallback((patch: Partial<UserSettings>) => {
     setSettings(prev => {
       const next = { ...prev, ...patch };
@@ -313,6 +396,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const bumpStreakIfNeeded = useCallback(() => {
+    if (getAdminState().settings.featureFlags.streak === false) return;
     const today = getTodayKey();
     const yesterday = getYesterdayKey();
     setStreak(prev => {
@@ -411,6 +495,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           key: saveKey,
           courseId: session.courseId,
           topicDocId: session.topicDocId,
+          // Quota follows the account, so every result carries its owner (guest included).
+          memberId: getLocalMemberId() ?? undefined,
           title: session.title,
           correct,
           wrong,
@@ -425,6 +511,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           AsyncStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(next)).catch(() => {});
           return next;
         });
+        testCompletionListener?.(session.courseId, {
+          total: session.questions.length,
+          correct,
+          wrong,
+        });
       }
 
       // Update mistakes: add newly wrong questions; optionally clear mastered mistakes
@@ -433,8 +524,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         session.mode === 'mistake' &&
         (session.autoClearMistakes ?? settings.autoClearMistakes);
 
+      const mistakesEnabled = getAdminState().settings.featureFlags.mistakes !== false;
+
       setMistakes(prev => {
         let nextList = [...prev];
+
+        if (!mistakesEnabled) {
+          AsyncStorage.setItem(STORAGE_KEYS.MISTAKES, JSON.stringify(nextList)).catch(() => {});
+          return nextList;
+        }
 
         if (shouldAutoClear && answeredRightIds.size > 0) {
           const beforeLen = nextList.length;
@@ -525,6 +623,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalFocusMinutes,
       settings,
       refreshCourse,
+      refreshAllCourses,
       refreshTips,
       toggleFavorite,
       isFavorite,
@@ -536,6 +635,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       toggleTipSaved,
       updateSettings,
       recordFocusMinutes,
+      updateResultsWithMember,
       finalizeQuizSession,
       resetAllProgress,
     }),
@@ -554,6 +654,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalFocusMinutes,
       settings,
       refreshCourse,
+      refreshAllCourses,
       refreshTips,
       toggleFavorite,
       isFavorite,
@@ -565,6 +666,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       toggleTipSaved,
       updateSettings,
       recordFocusMinutes,
+      updateResultsWithMember,
       finalizeQuizSession,
       resetAllProgress,
     ]

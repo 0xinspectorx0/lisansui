@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useMemo } from '
 import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CourseConfig, CourseId } from './types';
+import { getAdminState, subscribeAdmin } from './adminStore';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
@@ -150,16 +151,30 @@ const ThemeContext = createContext<ThemeContextValue>({
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const systemScheme = useColorScheme();
   const [preference, setPrefState] = useState<ThemePreference>('light');
+  const [userChoseTheme, setUserChoseTheme] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem(THEME_STORAGE_KEY)
       .then(saved => {
         if (saved === 'light' || saved === 'dark' || saved === 'system') {
           setPrefState(saved);
+          setUserChoseTheme(true);
+        } else {
+          // No personal choice yet — fall back to the admin default.
+          const adminDefault = getAdminState().settings.defaultTheme;
+          if (adminDefault) setPrefState(adminDefault);
         }
       })
       .catch(() => {});
   }, []);
+
+  // Admin can push a default theme; it only applies to users who never picked one.
+  useEffect(() => {
+    if (userChoseTheme) return undefined;
+    return subscribeAdmin(() => {
+      setPrefState(getAdminState().settings.defaultTheme);
+    });
+  }, [userChoseTheme]);
 
   const setPreference = (pref: ThemePreference) => {
     setPrefState(pref);
