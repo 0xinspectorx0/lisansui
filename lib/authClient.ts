@@ -368,16 +368,21 @@ export async function deleteAccount(): Promise<AuthResult> {
 export async function probeAuth(): Promise<{ ok: boolean; note: string }> {
   const cfg = resolveAuthConfig();
   if (!cfg) return { ok: false, note: 'API anahtarı tanımlı değil (EXPO_PUBLIC_FIREBASE_API_KEY).' };
+  // E-posta biçimi geçerli, parola kasıtlı zayıf → kullanıcı OLUŞMAZ; ama yanıt
+  // kodu hem anahtarı hem Email/Password sağlayıcısını ayırt ettirir.
   const data = await postJson(`${IK_API}:signUp?key=${encodeURIComponent(cfg.apiKey)}`, {
-    email: 'baglanti-testi@localhost',
+    email: 'baglanti-testi@example.com',
     password: 'x',
     returnSecureToken: true,
   });
   const message = String(data?.error?.message || '');
   if (!data.error) return { ok: true, note: 'Beklenmedik: test kullanıcısı oluştu, hemen sil.' };
   const code = message.split(' : ')[0].trim().toUpperCase();
-  if (code === 'WEAK_PASSWORD' || code === 'INVALID_PASSWORD' || code === 'INVALID_EMAIL') {
-    return { ok: true, note: `API anahtarı ve Email/Password sağlayıcısı çalışıyor (yanıt: ${code}).` };
+  if (code === 'WEAK_PASSWORD' || code === 'INVALID_PASSWORD') {
+    return { ok: true, note: `API anahtarı geçerli, Email/Password sağlayıcısı açık (yanıt: ${code}).` };
+  }
+  if (code === 'INVALID_EMAIL') {
+    return { ok: true, note: 'API anahtarı geçerli; sağlayıcı durumu bu yanıttan anlaşılmıyor.' };
   }
   return { ok: false, note: authErrorMessage(message) };
 }

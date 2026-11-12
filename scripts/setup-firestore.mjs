@@ -118,8 +118,10 @@ async function probeIdentity(apiKey) {
   try {
     const r = await fetchJson(url, {
       method: 'POST',
+      // geçerli biçimde e-posta + kasıtlı zayıf parola: hesap oluşmaz, yanıt kodu
+      // anahtarı ve Email/Password sağlayıcısını ayırt eder.
       body: JSON.stringify({
-        email: 'baglanti-testi@example.invalid',
+        email: 'baglanti-testi@example.com',
         password: 'x',
         returnSecureToken: true,
       }),
@@ -130,6 +132,8 @@ async function probeIdentity(apiKey) {
       return { verdict: { ok: true, note: 'beklenmedik: test hesabı oluştu — Console’dan sil.', extra: msg } };
     if (code === 'WEAK_PASSWORD' || code === 'INVALID_PASSWORD')
       return { verdict: { ok: true, note: 'API anahtarı geçerli ve Email/Password sağlayıcısı açık.', extra: `(yanıt: ${code})` } };
+    if (code === 'INVALID_EMAIL')
+      return { verdict: { ok: true, note: 'API anahtarı geçerli (sağlayıcı durumu bu yanıttan anlaşılmıyor).' } };
     if (code === 'OPERATION_NOT_ALLOWED')
       return { verdict: { ok: false, note: 'Email/Password kapalı → Console → Authentication → Sign-in method → Enable.' } };
     if (code === 'API_KEY_INVALID' || code === 'KEY_INVALID' || r.status === 403)
