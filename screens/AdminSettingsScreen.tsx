@@ -10,6 +10,17 @@ import {
   probeUrls,
   type FirestoreTarget,
 } from '../lib/firebaseConfig';
+import {
+  buildSeedPlan,
+  CONTENT_LOCK_PATH,
+  describePlan,
+  planWarnings,
+  readLockState,
+  runSeed,
+  type SeedPlan,
+  type SeedProgress,
+  type SeedResult,
+} from '../lib/contentSeed';
 import { useAdmin } from '../lib/AdminContext';
 import { useApp } from '../lib/AppContext';
 import { ThemePreference } from '../lib/theme';
@@ -52,6 +63,47 @@ export const AdminSettingsScreen: React.FC = () => {
   });
 
   const fsTarget: FirestoreTarget = firestoreTarget();
+
+  /* içerik tohumlama (bootstrap) */
+  const [seedPlan, setSeedPlan] = useState<SeedPlan | null>(null);
+  const [seedBusy, setSeedBusy] = useState<'plan' | 'write' | null>(null);
+  const [seedProgress, setSeedProgress] = useState<SeedProgress | null>(null);
+  const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
+  const [seedNote, setSeedNote] = useState<string | null>(null);
+  const [includeFallback, setIncludeFallback] = useState(false);
+  const [lockState, setLockState] = useState<'open' | 'locked' | 'unknown'>('unknown');
+
+  const checkLock = async () => setLockState(await readLockState());
+
+  const makePlan = async () => {
+    setSeedBusy('plan');
+    setSeedNote(null);
+    setSeedResult(null);
+    try {
+      const plan = await buildSeedPlan({ includeFallbackQuestions: includeFallback });
+      setSeedPlan(plan);
+      setLockState(plan.unlocked === null ? 'unknown' : plan.unlocked ? 'open' : 'locked');
+    } catch (e) {
+      setSeedNote(e instanceof Error ? e.message : 'Plan çıkarılamadı');
+    } finally {
+      setSeedBusy(null);
+    }
+  };
+
+  const writePlan = async () => {
+    if (!seedPlan) return;
+    setSeedBusy('write');
+    setSeedNote(null);
+    setSeedResult(null);
+    const res = await runSeed(seedPlan.docs, p => setSeedProgress(p));
+    setSeedResult(res);
+    setSeedBusy(null);
+    if (res.failed.length) {
+      const first = res.failed[0];
+      setSeedNote(`${res.failed.length} belge yazılamadı — ilk hata: ${first.error}`);
+      void checkLock();
+    }
+  };
 
   /** İki anonim REST okuması: üyelik koleksiyonu + içerik. Yazma denemez. */
   const runProbe = async () => {
@@ -328,6 +380,112 @@ export const AdminSettingsScreen: React.FC = () => {
               />
             }
           />
+        </AdminCard>
+
+        {/* Content bootstrap */}
+        <AdminSectionTitle
+          label="Firestore klasörlerini oluştur (tohumlama)"
+          hint="courses/{ders}/topics/{konu} ve daily_tips/main yapılarını panel oluşturur; memberships ilk kayıtta kendiliğinden açılır. “Planı çıkar” her konu için içeriği okur (birkaç saniye sürebilir), yazım 6 eşzamanlı istekle yapılır."
+        />
+        <AdminCard>
+          <AdminRow
+            icon="folder-open-outline"
+            title="Yazılacak kök"
+            subtitle={fsTarget.root ? `${fsTarget.projectId} → ${fsTarget.root}` : `${fsTarget.projectId} → veritabanı kökü`}
+            right={
+              <AdminChip
+                label={lockState === 'open' ? 'yazılabilir' : lockState === 'locked' ? 'kilitli' : 'bilinmiyor'}
+                tone={lockState === 'open' ? 'success' : lockState === 'locked' ? 'danger' : 'warning'}
+                icon={lockState === 'locked' ? 'lock-closed' : 'lock-open-outline'}
+                compact
+                onPress={() => void checkLock()}
+              />
+            }
+          />
+          <AdminToggle
+            icon="help-outline"
+            label="Örnek soruları da yaz"
+            description="Panelde düzenlenmemiş konulara repodaki yedek sorular kopyalanır. Kapalıysa yalnızca konu başlıkları oluşur, soruları sonra Console/panel ile eklersin."
+            value={includeFallback}
+            onValueChange={setIncludeFallback}
+          />
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+            <AdminButton
+              small
+              flex
+              tone="ghost"
+              icon="calculator-outline"
+              label={seedBusy === 'plan' ? 'Çıkarılıyor…' : 'Planı çıkar'}
+              disabled={seedBusy !== null}
+              onPress={() => void makePlan()}
+            />
+            <AdminButton
+              small
+              flex
+              icon="cloud-upload-outline"
+              label={
+                seedBusy === 'write'
+                  ? seedProgress
+                    ? `${seedProgress.done}/${seedProgress.total}`
+                    : 'Yazılıyor…'
+                  : 'Firestore’a yaz'
+              }
+              disabled={seedBusy !== null || !seedPlan}
+              onPress={() => void writePlan()}
+            />
+          </View>
+
+          {seedPlan ? (
+            <Text style={{ fontSize: 12, fontWeight: '800', color: colors.textSecondary, marginTop: 8 }}>
+              {describePlan(seedPlan)} • {seedPlan.docs.length} belge • hedef: {seedPlan.target}
+            </Text>
+          ) : null}
+          {seedProgress && seedBusy === 'write' ? (
+            <Text style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 4 }}>
+              yazılıyor: {seedProgress.current}
+            </Text>
+          ) : null}
+          {seedResult ? (
+            <Text style={{ fontSize: 11.5, color: seedResult.failed.length ? colors.danger : colors.success, marginTop: 4 }}>
+              {seedResult.written} belge yazıldı
+              {seedResult.failed.length ? ` • ${seedResult.failed.length} hata` : ' • Collections Firestore’ta hazır'}
+            </Text>
+          ) : null}
+          {seedPlan && seedPlan.notes.length ? (
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>
+              {seedPlan.notes.join(' • ')}
+            </Text>
+          ) : null}
+          {seedPlan && planWarnings(seedPlan).length ? (
+            <Text style={{ fontSize: 11, color: colors.warning, marginTop: 4 }}>
+              {planWarnings(seedPlan).join(' • ')}
+            </Text>
+          ) : null}
+          {seedNote ? (
+            <Text style={{ fontSize: 11.5, color: colors.danger, marginTop: 4 }}>{seedNote}</Text>
+          ) : null}
+
+          <View
+            style={{
+              marginTop: 8,
+              padding: 10,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.surfaceSecondary,
+            }}
+          >
+            <Text style={{ fontSize: 11.5, fontWeight: '800', color: colors.text }}>
+              Yazma penceresini kapat
+            </Text>
+            <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 4, lineHeight: 16 }}>
+              Console → Firestore Data → “Start collection” → koleksiyon kimliği{' '}
+              <Text style={{ fontFamily: 'monospace' }}>meta</Text>, belge kimliği{' '}
+              <Text style={{ fontFamily: 'monospace' }}>content_lock</Text>, alan{' '}
+              <Text style={{ fontFamily: 'monospace' }}>note</Text> = “kilitli”. Bu belge varken
+              uygulama içeriğe yazamaz. (Yol: {CONTENT_LOCK_PATH})
+            </Text>
+          </View>
         </AdminCard>
 
         {/* Feature flags */}

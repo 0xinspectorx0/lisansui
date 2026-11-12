@@ -55,6 +55,8 @@ export const nullVal = (): FbValue => ({ nullValue: null });
 export const strMap = (obj: Record<string, string>): FbValue => ({
   mapValue: { fields: Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, str(String(v))])) },
 });
+export const arr = (values: FbValue[]): FbValue => ({ arrayValue: { values } });
+export const fbMap = (fields: Record<string, FbValue>): FbValue => ({ mapValue: { fields } });
 
 /* ------------------------------------------------------------------ fetch */
 
@@ -209,22 +211,68 @@ export async function createMemberDoc(member: MemberDoc): Promise<CloudOutcome<M
   }
 }
 
+/**
+ * MemberDoc alanı → Firestore belge alanı eşlemesi. Türetilen alanlar birlikte
+ * yazılır (ör. `email` → `id` + `emailNormalized`), yoksa rules'un `id == email`
+ * denetimi yarım kalan güncellemelerde kırılır.
+ */
+const DERIVED_FIELDS: Record<string, string[]> = {
+  email: ['id', 'emailNormalized'],
+  password: ['verifier', 'salt', 'iterations', 'algo'],
+};
+
+/** Gerçek kısmi güncelleme: yalnızca istenen alanlar PATCH'lenir. */
+export function memberPatchToFields(
+  patch: Partial<MemberDoc>,
+  memberId: string
+): Record<string, FbValue> {
+  const all = memberToFields({ ...emptyMember(memberId), ...patch, id: memberId } as MemberDoc);
+  const out: Record<string, FbValue> = {};
+  for (const key of Object.keys(patch)) {
+    if (key === 'id') continue;
+    if (patch[key as keyof MemberDoc] === undefined) continue;
+    for (const field of [key, ...(DERIVED_FIELDS[key] || [])]) {
+      if (field in all) out[field] = all[field];
+    }
+  }
+  // `email` geldiyse belge kimliğiyle tutarlılığı garanti et.
+  if (out.email) {
+    out.id = str(memberId);
+    out.emailNormalized = str(memberId);
+  }
+  return out;
+}
+
+/** Firestore boş belge dönerse (REST bazı sürümlerde) kullanılan güvenli varsayılan. */
+function emptyFieldsFor(memberId: string): Record<string, FbValue> {
+  return { id: str(memberId), email: str(memberId), emailNormalized: str(memberId) };
+}
+
 /** Merge-update of a membership document; only the given fields are touched. */
 export async function patchMemberDoc(
   memberId: string,
   member: Partial<MemberDoc>
 ): Promise<CloudOutcome<MemberDoc>> {
-  const full = { ...emptyMember(memberId), ...member, id: memberId };
-  const fields = memberToFields(full);
-  const mask = Object.keys(fields).map(p => `fields.${p}`).join(',');
+  const fields = memberPatchToFields(member, memberId);
+  if (Object.keys(fields).length === 0) {
+    return { ok: false, error: 'Güncellenecek alan yok', code: 400, reason: 'error' };
+  }
   try {
-    const res = await request(`${membersDocUrl(memberId)}?updateMask.fieldPaths=${mask.replace(/,/g, '&updateMask.fieldPaths=')}`, {
+    // updateMask göndermiyoruz: Firestore PATCH = verilen alanları birleştirir.
+    const res = await request(membersDocUrl(memberId), {
       method: 'PATCH',
       body: JSON.stringify({ fields }),
     });
     if (!res.ok) return classify(undefined, res);
     const json = await res.json();
-    return { ok: true, data: memberFromFields(json?.fields || fields, memberId) };
+    const merged = json?.fields || {};
+    return {
+      ok: true,
+      data: memberFromFields(
+        Object.keys(merged).length ? merged : { ...emptyFieldsFor(memberId), ...fields },
+        memberId
+      ),
+    };
   } catch (e) {
     return classify(e);
   }
@@ -258,6 +306,63 @@ export async function deleteMemberDoc(memberId: string): Promise<CloudOutcome<tr
 }
 
 /** Lightweight reachability probe used to banner "offline" state in the panel. */
+/* --------------------------------------------------- generic documents */
+
+/** Create-or-overwrite any document inside the configured content root. */
+export async function putDocument(
+  path: string,
+  fields: Record<string, FbValue>
+): Promise<CloudOutcome<true>> {
+  try {
+    const res = await request(docUrl(path), {
+      method: 'PUT',
+      body: JSON.stringify({ fields }),
+    });
+    if (!res.ok) return classify(undefined, res);
+    return { ok: true, data: true };
+  } catch (e) {
+    return classify(e);
+  }
+}
+
+export async function deleteDocument(path: string): Promise<CloudOutcome<true>> {
+  try {
+    const res = await request(docUrl(path), { method: 'DELETE' });
+    if (res.status === 404) return { ok: true, data: true };
+    if (!res.ok) return classify(undefined, res);
+    return { ok: true, data: true };
+  } catch (e) {
+    return classify(e);
+  }
+}
+
+/** true = belge var, false = yok, null = okunamadı (rules/ağ). */
+export async function documentExists(path: string): Promise<boolean | null> {
+  try {
+    const res = await request(docUrl(path));
+    if (res.ok) return true;
+    if (res.status === 404) return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read a raw document's `fields` object (null when missing). */
+export async function readDocument(
+  path: string
+): Promise<CloudOutcome<Record<string, FbValue> | null>> {
+  try {
+    const res = await request(docUrl(path));
+    if (res.status === 404) return { ok: true, data: null };
+    if (!res.ok) return classify(undefined, res);
+    const json = await res.json();
+    return { ok: true, data: json?.fields || null };
+  } catch (e) {
+    return classify(e);
+  }
+}
+
 export async function probeCloud(): Promise<{ online: boolean; error?: string }> {
   try {
     const res = await request(`${docUrl(MEMBERSHIPS_COLLECTION)}?pageSize=1`);

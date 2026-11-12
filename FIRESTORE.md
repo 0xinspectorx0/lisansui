@@ -24,8 +24,13 @@ olarak duruyor. Hiçbir şey değiştirmezsen uygulama bugünkü gibi çalışma
 3. Mod: başlangıçta **Test mode** bırakabilirsin; 30 gün sonra kural yayımlaman istenir.
    Kalıcı çözüm aşağıdaki 3. adım.
 
-> koleksiyon oluşturmana gerek yok — uygulama ilk kayıtta `memberships` koleksiyonunu
-> kendisi açar. İçerik koleksiyonlarını (`courses`, `daily_tips`) sen ekleyeceksin (aşağıda).
+> **Klasör/koleksiyon isimlerini senin açman gerekmiyor:**
+> - `memberships/{e-posta}` → ilk kayıtta uygulama tarafından oluşturulur.
+> - `courses/{courseId}/topics/{docId}` ve `daily_tips/main` → **Yönetim Paneli →
+>   Uygulama Ayarları → “Firestore klasörlerini oluştur (tohumlama)”** akışı oluşturur
+>   (planı çıkar → Firestore’a yaz). Panelde düzenlediğin konu/soru/tip listeleri
+>   olduğu gibi kopyalanır; repodaki örnek soruları da dahil edebilirsin.
+> - Kalıcı içerik (tam soru bankası) için 4. adımdaki şemayı kullan.
 
 ## 2) Uygulamayı yeni projeye bağla
 Üç yoldan biri (öncelik: env > app.json > varsayılan). Yeni projede koleksiyonları
@@ -72,7 +77,7 @@ Kural dosyası her iki yol düzenini de içerir; kullanmadığın bloğu silebil
 - yeni kurulum → `match /{collection}/...` + `match /memberships/{memberId}`
 - legacy kurulum → `match /artifacts/{artifact}/public/data/...`
 
-## 4) İçerik şeması (Console'dan elle gireceklerin)
+## 4) İçerik şeması (tohumlama da bu yapıyı yazar)
 Kurs kimlikleri: `tarih`, `cografya`, `turkce`, `vatandaslik`, `guncel`.
 
 **4.1 Konular** — `courses/{courseId}/topics` koleksiyonuna belge ekle,
@@ -132,9 +137,15 @@ Soru bankası boşsa uygulama repodaki seed verisine düşer (`lib/seedData.ts`:
 `INITIAL_TOPIC_CATALOG`, `FALLBACK_QUESTIONS`, `INITIAL_DAILY_TIPS`) — uygulama açılır,
 konu listesi ve örnek sorularla çalışır. Yani içerik taşımayı sonraya bırakabilirsin.
 
+## 6b) Tohumlama sonrası: yazma penceresini kapat
+Panel “yazılabilir” durumunu `meta/content_lock` belgesine bakarak anlıyor. Kurulum
+bitince Console'da şu belgeyi oluştur: koleksiyon `meta`, belge `content_lock`,
+alan `note` = `kilitli`. Bu andan itibaren uygulama içeriğe yazamaz (rules), kilit
+belgesini de uygulama yazamaz/silemez — açmak yine Console işidir.
+
 ## 7) Eski projeden veri taşımak (istersek)
-`firestore.rules` içerik koleksiyonlarını uygulamaya **salt okunur** verdiği için
-içeriği panelden Firestore'a yazamayız. İki pratik yol:
+Tohumlama akışı yalnızca **kilit yokken** ve izinli koleksiyonlara yazar; canlı
+projede eski soru bankasının tamamını (9.5k+ soru) kopyalamak için iki pratik yol:
 - **Admin SDK script'i** (kendi makinende): `npm i @google-cloud/firestore`,
   servis hesabı anahtarıyla eski projeden REST oku → yeni projeye `set()`.
 - **Emulator + JSON**: `firebase emulators:start --only firestore --project demo-kpss`

@@ -22,8 +22,10 @@ rules_version = '2';
  *     iterations >= 100, algo = pbkdf2-sha256. Boş hash ile belge açılamaz.
  *   • `schemaVersion` 1, sayaçlar negatif olamaz, `courseUsage` ≤ 12 anahtar
  *     ve değerler 0..999.
- *   • İçerik koleksiyonları (courses/daily_tips/…) uygulamaya salt-okunur;
- *     içeriği Console, Admin SDK veya kendi script'in dağıtır.
+ *   • İçerik koleksiyonları (courses/daily_tips/…) uygulamaya salt-okunurdur;
+ *     ancak paneldeki "İçeriği Firestore'a yaz" tohumlama akışı için kilit
+ *     açılana kadar yazma serbesttir (contentWriteOk). Kalıcı yayın hâlâ
+ *     Console/Admin SDK ile yapılır.
  *
  * Dağıtım:  npx firebase-tools deploy --only firestore:rules
  *        veya Console → Firestore → Rules → Paste → Publish
@@ -137,22 +139,56 @@ service cloud.firestore {
       return collectionName in ['courses', 'daily_tips', 'catalog', 'meta', 'notices'];
     }
 
-    /* ------------------------------------------------- YENİ KURULUM (kök) */
-    // courses/{courseId}/topics/{docId}, daily_tips/main ...
-    match /{collection}/{document} {
-      allow read: if isPublicContent(collection);
-      allow write: if false;
+    /** Tohumlama (bootstrap) ile yazılabilen koleksiyonlar. */
+    function isSeedableContent(collectionName) {
+      return collectionName in ['courses', 'daily_tips'];
     }
 
-    // courses/{courseId}/topics alt listesi dahil olmak üzere derin yollar
+    /**
+     * İçerik kilidi. Admin `meta/content_lock` belgesini Console'dan oluşturduğunda
+     * uygulama içi içerik yazmaları kapanır. Kilit belgesini uygulama yazamaz/silemez
+     * (`meta` tohumlama listesinde değil) — açmak da Console işidir.
+     */
+    function contentLocked() {
+      return exists(/databases/$(database)/documents/meta/content_lock)
+        || exists(/databases/$(database)/documents/artifacts/kpss-asistani/public/data/meta/content_lock);
+    }
+
+    /** Tohumlama yazımı: izinli koleksiyon + kilit yok + bilinen alan seti. */
+    function contentWriteOk(collectionName) {
+      return isSeedableContent(collectionName)
+        && !contentLocked()
+        && request.resource.data.keys().hasOnly([
+            'id', 'name', 'title', 'icon', 'order', 'hidden', 'courseId',
+            'questionCount', 'questions', 'list', 'updatedAt', 'schemaVersion'
+          ])
+        && (!('questions' in request.resource.data)
+            || request.resource.data.questions is list)
+        && (!('list' in request.resource.data)
+            || request.resource.data.list is list)
+        && (!('questionCount' in request.resource.data)
+            || (request.resource.data.questionCount is int
+                && request.resource.data.questionCount >= 0))
+        && (!('schemaVersion' in request.resource.data)
+            || request.resource.data.schemaVersion == 1);
+    }
+
+    /* ------------------------------------------------- YENİ KURULUM (kök) */
+    // courses/{courseId}, daily_tips/main, meta/content_lock ...
+    match /{collection}/{document} {
+      allow read: if isPublicContent(collection);
+      allow write: if contentWriteOk(collection);
+    }
+
+    // courses/{courseId}/topics ve courses/{courseId}/topics/{docId}
     match /{collection}/{document}/{sub} {
       allow read: if isPublicContent(collection);
-      allow write: if false;
+      allow write: if contentWriteOk(collection);
     }
 
     match /{collection}/{document}/{sub}/{leaf} {
       allow read: if isPublicContent(collection);
-      allow write: if false;
+      allow write: if contentWriteOk(collection);
     }
 
     match /memberships/{memberId} {
@@ -163,9 +199,19 @@ service cloud.firestore {
     }
 
     /* ------------------------------------------- MEVCUT KURULUM (artifacts) */
-    match /artifacts/{artifact}/public/data/{document=**} {
+    match /artifacts/{artifact}/public/data/{collection}/{document} {
       allow read: if artifact == 'kpss-asistani';
-      allow write: if false;
+      allow write: if artifact == 'kpss-asistani' && contentWriteOk(collection);
+    }
+
+    match /artifacts/{artifact}/public/data/{collection}/{document}/{sub} {
+      allow read: if artifact == 'kpss-asistani';
+      allow write: if artifact == 'kpss-asistani' && contentWriteOk(collection);
+    }
+
+    match /artifacts/{artifact}/public/data/{collection}/{document}/{sub}/{leaf} {
+      allow read: if artifact == 'kpss-asistani';
+      allow write: if artifact == 'kpss-asistani' && contentWriteOk(collection);
     }
 
     match /artifacts/{artifact}/public/data/memberships/{memberId} {
@@ -203,8 +249,12 @@ service cloud.firestore {
  *          && request.auth.token.email == memberId;
  *    Böylece her üye yalnızca kendi belgesini okur/yazar.
  *
- * 5) İçeriği uygulamadan yazdırmak istersen (panelden Firestore'a push)
- *    `isPublicContent` bloğundaki `allow write: if false` satırını kaldırmak
- *    gerekir; bu, o koleksiyonları ANONİM yazıma açar — sadece emulator/test
- *    projelerinde yapılmalı.
+ * 5) İçerik tohumlaması (bootstrap): uygulamanın "İçeriği Firestore'a yaz" akışı
+ *    courses/... ve daily_tips/... belgelerini yazar. Bu pencere, Console'da
+ *    `meta/content_lock` belgesini oluşturana kadar açıktır; kilit belgesini
+ *    uygulama yazamaz/silemez, yani kilidi kurmak/yıkmak yalnızca Console işidir.
+ *
+ * 5b) İçeriği kalıcı olarak uygulama yazımına açmak istersen `contentWriteOk(...)`
+ *    şartını `true` yapmak yeterli; bu, o koleksiyonları ANONİM yazıma açar —
+ *    sadece emulator/test projelerinde yapılmalı.
  */
