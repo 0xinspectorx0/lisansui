@@ -380,6 +380,30 @@ export const AdminSettingsScreen: React.FC = () => {
             }
             right={<AdminChip label={fsTarget.source} tone="info" compact />}
           />
+          <View
+            style={{
+              padding: 10,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.surfaceSecondary,
+              marginBottom: 4,
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: '900', color: colors.textMuted, marginBottom: 4 }}>
+              TEK KOMUTLU KURULUM (terminalde)
+            </Text>
+            <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace' }} selectable>
+              npm run setup:firestore -- {fsTarget.projectId} --root .
+            </Text>
+            <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace', marginTop: 2 }} selectable>
+              npm run check:firestore
+            </Text>
+            <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
+              Birincisi .env.local + .firebaserc yazar, ikincisi kuralları/okuma-yazmayı
+              dener. Kurallar için: npm run deploy:rules
+            </Text>
+          </View>
           {rootConfigWarnings.length ? (
             <Text style={{ fontSize: 11.5, color: colors.warning, lineHeight: 17, marginTop: 2 }}>
               {rootConfigWarnings.join(' • ')}

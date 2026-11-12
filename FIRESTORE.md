@@ -32,6 +32,20 @@ olarak duruyor. Hiçbir şey değiştirmezsen uygulama bugünkü gibi çalışma
 >   olduğu gibi kopyalanır; repodaki örnek soruları da dahil edebilirsin.
 > - Kalıcı içerik (tam soru bankası) için 4. adımdaki şemayı kullan.
 
+## 1b) Tek komut: `npm run setup:firestore`
+Kod tarafında gereken her şeyi tek satır yapar (`.env.local` + `.firebaserc`),
+sonra sana kalan Console işlerini sırayla sayar:
+```bash
+npm run setup:firestore -- kpss-prod --root .   # dosyaları yaz
+npm run check:firestore                          # kuralları/okumayı dene
+npm run deploy:rules                             # npx firebase-tools ile yayınla
+```
+`scripts/setup-firestore.mjs` seçenekleri: `--root <önec>` (kök düzen için `.`),
+`--dir <yol>`, `--dry-run`, `--check`, `--deploy`. `--check` şunları dener: içerik
+okuma, `memberships` listeleme, **kurallara uygun geçici bir üye belgesi yazma ve
+silme**, (legacy düzen seçiliyse) yol öneki. Ağın engelli olduğu bir makinede
+“erişilemedi” der ve seni uyarır — gerçek sonucu kendi makinende verir.
+
 ## 2) Uygulamayı yeni projeye bağla (adım adım)
 Öncelik sırası: **env → app.json → repo varsayılanı**. Üç yoldan birini seç.
 
@@ -87,6 +101,21 @@ kullan; `root` için `.` ya da tam önek yazılabilir (boş string de kabul).
 ### C) `lib/firebaseConfig.ts` → `DEFAULT_TARGET`
 Tek projeyle uzun vadeli çalışacaksan en basiti: varsayılanı kendi projen yap,
 `.env` ile uğraşma.
+
+### D) Firebase Auth’a geçiş için hazırlık (sırada bu var)
+Üyelik doğrulaması Firebase Auth’a (Email/Password) taşınırsa `memberships`
+belgeleri `request.auth.uid` ile korunur ve anonim okuma riski biter. O zaman
+`.env.local`'a dört satır daha eklenecek (Console → Project settings → Your apps →
+SDK config). `.env.example` bunları hazır içeriyor:
+```bash
+EXPO_PUBLIC_FIREBASE_API_KEY=...
+EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=<proje>.firebaseapp.com
+EXPO_PUBLIC_FIREBASE_PROJECT_ID=<proje>
+EXPO_PUBLIC_FIREBASE_APP_ID=1:...:web:...
+```
+Bunlar public web yapılandırmasıdır (pakete gömülür, gizli değil).
+**Servis hesabı JSON’ı / OAuth token’ı `.env`e yazılmaz ve panele/repo'ya
+konulmaz** — o yalnızca Admin SDK script'leri içindir.
 
 ### EAS/üretim derlemeleri
 `.env.local` EAS'a otomatik yüklenmez. İkiden biri:
