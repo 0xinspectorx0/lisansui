@@ -167,11 +167,17 @@ Ne değişir:
   süresi dolunca `refresh_token` ile sessizce yenilenir. Uygulama açılışında
   `SESSION_KEY` akışı aynen çalışmaya devam eder.
 - Panel → “Şifremi unuttum” (giriş ekranında) `PASSWORD_RESET` e-postası gönderir.
-- Katı mod: `firestore.rules` içinde `authRequired()` → `true` yaparsan kimliksiz
-  istekler üyelik belgesi **okuyamaz/yazamaz** olur (yalnızca kendi e-postasıyla
-  eşleşen token). Panelin tam yetkili kalması için Admin SDK ile şu komut yeterli:
-  `firebase auth:setCustomClaim <uid> kpss_admin true` (claim adı `kpss_admin`).
-  Bunu yapmadan `authRequired()` = true, paneli de kilitler — sırayı bozma.
+- Yönetici listesi ve kilit **veride** durur, kod bayrağı yok:
+  - `meta/admins { emails: [küçük harf e-posta], updatedAt, schemaVersion }` → panelin
+    “Kendimi ekle” düğmesi bu belgeyi oluşturur/günceller (Admin SDK, custom claim
+    gerekmez). Kilit açılana kadar uygulama yazabilir; sonrası yalnız Console.
+  - `meta/membership_lockdown` **varsa** kimliksiz istekler üyelik belgesi
+    okuyamaz/yazamaz (yalnızca kendi e-postasıyla eşleşen token). Console'da oluştur,
+    silince anında geri alınır — kuralı yeniden yayımlamana gerek yok.
+  Sıra: önce giriş akışını Auth ile bir kez dene (senin e-postan `meta/admins` içinde
+  olsun), sonra kilidi aç. Kilit açıkken panelden anonim üye düzenleyemezsin.
+- Panelde **Uygulama Ayarları → Firebase Auth** kartında “Yönetici listesi” ve
+  “Üyelik kilidi” satırları canlı durumu gösterir (Yenile ile tekrar okur).
 
 ## 3) Kuralları yayımla
 ```bash
@@ -255,13 +261,36 @@ bitince Console'da şu belgeyi oluştur: koleksiyon `meta`, belge `content_lock`
 alan `note` = `kilitli`. Bu andan itibaren uygulama içeriğe yazamaz (rules), kilit
 belgesini de uygulama yazamaz/silemez — açmak yine Console işidir.
 
-## 7) Eski projeden veri taşımak (istersek)
-Tohumlama akışı yalnızca **kilit yokken** ve izinli koleksiyonlara yazar; canlı
-projede eski soru bankasının tamamını (9.5k+ soru) kopyalamak için iki pratik yol:
-- **Admin SDK script'i** (kendi makinende): `npm i @google-cloud/firestore`,
-  servis hesabı anahtarıyla eski projeden REST oku → yeni projeye `set()`.
-- **Emulator + JSON**: `firebase emulators:start --only firestore --project demo-kpss`
-  ve `EXPO_PUBLIC_FIRESTORE_HOST=http://localhost:8080/v1` ile önce yerel doğrula.
+## 7) Eski projeden veri taşımak — `npm run migrate:content`
+`scripts/migrate-content.mjs` eski projedeki belgeyi **olduğu gibi** (fields bloğu
+dönüştürülmeden) yeni projeye kopyalar; yani soru formatı, alan adları ve konu
+içeriği birebir aynı kalır. Admin SDK, servis hesabı anahtarı veya Console veri
+ekranı gerekmez — panelin tohumlama akışıyla **aynı** kuralları kullanır.
+
+```bash
+npm run migrate:content -- --limit 2 --dry-run   # 1) pilot: ne olacak, görsel onay
+npm run migrate:content                            # 2) tamamını taşı (yarıda kesilirse devam eder)
+npm run migrate:content -- --force                 #    hepsini yeniden yaz
+npm run migrate:content:selftest                   #    script'in kendi testi (16 kontrol, ağ gerekmez)
+```
+
+Seçenekler: `--from <proje>` (varsayılan `kpss-asistani`), `--from-root <yol>`
+(varsayılan `artifacts/kpss-asistani/public/data`), `--to <proje>` ve `--to-root`
+(varsayılanlar `.env.local`'dan), `--only courses,tips`, `--limit N`,
+`--concurrency 6`, `--state .migrate-state.json`, `--dry-run`, `--force`.
+
+Nasıl çalışır:
+1. `courses` listesini sayfa sayfa okur, her ders için `topics` listesini çeker
+   (REST liste yanıtı belge gövdesini de taşıdığı için konu başına istek atmaz).
+2. Her belgeyi hedefe `POST ?documentId=…` ile yazar; 409 alırsa `PATCH` ile
+   üzerine yazar. `daily_tips/main` doğrudan `PATCH` ile taşınır.
+3. Yazma yanıtındaki `questions` uzunluğunu kaynakla karşılaştırır; uyuşmazlık
+   sonunda listelenir ve komut **hata koduyla** çıkar (yani “bitti” sanmazsın).
+4. `.migrate-state.json` yazılan belgeleri tutar → kesinti/`Ctrl+C` sonrası
+   tekrar çalıştırınca atlar. `--force` hepsini yeniden yazar.
+
+Sonrası: Console → `meta/content_lock` oluştur (içerik yazma penceresi kapanır) ve
+isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
 
 ## 8) Sık karşılaşılan hatalar
 | Belirti | Sebep / çözüm |

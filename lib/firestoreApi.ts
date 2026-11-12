@@ -16,6 +16,7 @@ import {
   emptyMember,
   memberFromFields,
   memberToFields,
+  normalizeEmail,
 } from './membership';
 
 import {
@@ -175,8 +176,11 @@ export async function listMembers(): Promise<MemberListResult> {
   const out: MemberDoc[] = [];
   let pageToken: string | undefined;
   try {
-    for (let page = 0; page < 10; page++) {
-      const q = new URLSearchParams({ pageSize: '300' });
+    // pageSize küçük: `memberships` kurallı her aday belge için meta/admins ve
+    // meta/membership_lockdown okuma bütçesi harcıyor (query başına ~100 get/exists
+    // limiti var). 30'luk sayfa = en kötü ~60 lookup; panel zaten sayfalıyor.
+    for (let page = 0; page < 34; page++) {
+      const q = new URLSearchParams({ pageSize: '30' });
       if (pageToken) q.set('pageToken', pageToken);
       const res = await request(`${docUrl(MEMBERSHIPS_COLLECTION)}?${q.toString()}`);
       if (res.status === 404) {
@@ -396,3 +400,64 @@ export async function probeCloud(): Promise<{ online: boolean; error?: string }>
 }
 
 export type { MembershipStatus, VipPlanId };
+
+/* -------------------------------------------------- yönetici listesi (meta) */
+
+/** `meta/admins` belgesinin yolu (kök veya legacy düzen, target'a bağlı). */
+export const ADMINS_DOC_PATH = collectionPath('meta/admins');
+/** `meta/membership_lockdown` varlığı = üyelik işlemlerinde token zorunlu. */
+export const MEMBERSHIP_LOCKDOWN_DOC_PATH = collectionPath('meta/membership_lockdown');
+
+function emailsOf(fields: Record<string, FbValue> | null): string[] {
+  const values = (fields?.emails as any)?.arrayValue?.values;
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((v: any) => String(v?.stringValue ?? ''))
+    .filter(e => !!e)
+    .map(e => e.toLowerCase());
+}
+
+/** Panel/yönetici listesi: boş dizi = belge yok. */
+export async function readAdminList(): Promise<CloudOutcome<{ emails: string[]; exists: boolean }>> {
+  const res = await readDocument(ADMINS_DOC_PATH);
+  if (!res.ok) return res;
+  return { ok: true, data: { emails: emailsOf(res.data), exists: !!res.data } };
+}
+
+/**
+ * E-postayı yönetici listesine ekler (idempotent).
+ * Kurallar bu yazmaya yalnızca içerik/kilit penceresi açıkken izin verir;
+ * `meta/membership_lockdown` oluşturulduktan sonra liste Console'dan yönetilir.
+ */
+export async function addAdminEmail(
+  email: string,
+  opts?: { replace?: boolean }
+): Promise<CloudOutcome<string[]>> {
+  const wanted = normalizeEmail(email);
+  if (!wanted.includes('@')) return { ok: false, error: 'Geçerli bir e-posta gir.', reason: 'error' };
+  const current = await readAdminList();
+  if (!current.ok) return current;
+  const emails = opts?.replace ? [] : [...current.data.emails];
+  if (!emails.includes(wanted)) emails.push(wanted);
+  if (emails.length > 10)
+    return { ok: false, error: 'Yönetici listesi en fazla 10 e-posta tutar.', reason: 'error' };
+  const res = await putDocument(ADMINS_DOC_PATH, {
+    emails: arr(emails.map(e => str(e))),
+    updatedAt: str(new Date().toISOString()),
+    schemaVersion: int(1),
+  });
+  if (!res.ok) return res;
+  return { ok: true, data: emails };
+}
+
+/** Üyelik kilidi açık mı? (true → kimliksiz istemciler üyelik yazamaz) */
+export async function readMembershipLockdown(): Promise<CloudOutcome<boolean>> {
+  try {
+    const exists = await documentExists(MEMBERSHIP_LOCKDOWN_DOC_PATH);
+    if (exists === null)
+      return { ok: false, error: 'Kilit durumu okunamadı (ağ/kural).', reason: 'offline' };
+    return { ok: true, data: exists };
+  } catch (e) {
+    return classify(e);
+  }
+}

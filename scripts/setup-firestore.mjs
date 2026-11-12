@@ -385,7 +385,9 @@ async function main() {
         '  7) Firebase Auth (önerilen): Console → Authentication → Sign-in method → Email/Password → Enable,',
         '     sonra `npm run setup:firestore -- <proje> --root . --api-key <ANAHTAR>` ve',
         '     `deploy:rules`. Anahtar tanımlıysa uygulama kimlik doğrulamayı Firebase üzerinden yapar.',
-        '  8) Auth oturduysa firestore.rules içinde authRequired() → true (kimliksiz üyelik yazma/okuma kapanır)',
+        '  8) Katı mod: Console\'da meta/membership_lockdown belgesi oluştur → kimliksiz üyelik yazma/okuma kapanır',
+        '     (geri almak = belgeyi silmek; kuralı yeniden yayımlamak gerekmez). Yönetici listesi: meta/admins.',
+        '  9) Eski projeden soru bankasını taşımak için: npm run migrate:content -- --limit 2 --dry-run',
       ].join('\n')
     );
   }

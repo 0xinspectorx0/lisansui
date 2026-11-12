@@ -11,11 +11,11 @@ rules_version = '2';
  *   • Yerel mod (anahtar yoksa): üyelikler `memberships/{e-posta}` belgesinde,
  *     parola cihazda PBKDF2-SHA256 ile hash'lenir (lib/crypto.ts).
  *
- * Aşağıdaki `authRequired()` bayrağı FALSE iken kimliksiz istemciler de üyelik
- * okuyup yazabilir (bugünkü davranış). Firebase Auth'u bağladığında bayrağı
- * TRUE yap: o andan sonra kimliksiz istekler yalnızca içeriği okuyabilir,
- * üyelik belgeleri sadece token sahibi tarafından ve yalnızca KENDİ e-postasıyla
- * okunur/yazılır.
+ * Kademeli geçiş bir VERİ ANAHTARI ile yapılır: `meta/membership_lockdown` belgesi
+ * yokken kimliksiz istemciler de üyelik okuyup yazabilir (bugünkü davranış).
+ * O belgeyi Console'da oluşturduğun an kimliksiz istekler yalnızca içeriği
+ * okuyabilir; üyelik belgeleri sadece token sahibi tarafından ve yalnızca KENDİ
+ * e-postasıyla okunur/yazılır. Belgeyi silmek = geri almak (yeniden yayınlama yok).
  *
  * İKİ YOL DÜZENİ DE DESTEKLENİR (lib/firebaseConfig.ts hangi kökü kullandığını
  * belirler):
@@ -48,9 +48,17 @@ service cloud.firestore {
 
     /* ------------------------------------------------------------- auth modu */
 
-    /** true → üyelik işlemleri için Firebase Auth token'ı zorunlu. */
-    function authRequired() {
-      return false;
+    /**
+     * Katı mod bir KOD BAYRAĞI değil, bir VERİ ANAHTARI: Console'da
+     * `meta/membership_lockdown` belgesini oluşturduğun an üyelik okuma/yazma
+     * yalnızca doğru Firebase Auth token'ıyla mümkün olur. Belgeyi silersen anında
+     * eski (kimliksiz) davranışa dönersin — kuralı yeniden yayımlamak gerekmez.
+     * Uygulama `meta` altına bu listedeki istisna dışında yazamaz, anahtarı yalnız
+     * sen çevirebilirsin.
+     */
+    function lockdownOn() {
+      return exists(/databases/$(database)/documents/meta/membership_lockdown)
+        || exists(/databases/$(database)/documents/artifacts/kpss-asistani/public/data/meta/membership_lockdown);
     }
 
     function signedIn() {
@@ -64,14 +72,32 @@ service cloud.firestore {
         : '';
     }
 
-    /** Admin claim'i: Admin SDK ile `kpss_admin: true` verilen hesaplar. */
+    /**
+     * Yönetici listesi de veride durur: `meta/admins { emails: [küçük harf e-posta] }`.
+     * Admin SDK / custom claim gerekmez; Console'dan satır ekleyip çıkarırsın.
+     * `kpss_admin: true` claim'i de ayrıca kabul edilir (kullanmak istersen).
+     */
     function isAdminSession() {
-      return signedIn() && request.auth.token.kpss_admin == true;
+      return signedIn()
+        && (request.auth.token.kpss_admin == true
+            || (exists(/databases/$(database)/documents/meta/admins)
+                && request.auth.token.email.lower()
+                   in get(/databases/$(database)/documents/meta/admins).data.emails)
+            || (exists(/databases/$(database)/documents/artifacts/kpss-asistani/public/data/meta/admins)
+                && request.auth.token.email.lower()
+                   in get(/databases/$(database)/documents/artifacts/kpss-asistani/public/data/meta/admins)
+                     .data.emails));
     }
 
-    /** Kimliksiz panel/istemci modda admin işlemleri serbest; authRequired'ta değil. */
+    /**
+     * Bütçe notu: get()/exists() çağrıları liste sorgularında HER aday belge için
+     * değerlendirilir (sorgu başına ~100 okuma limiti). Bu yüzden `listMembers`
+     * 30'luk sayfalarla çalışır (lib/firestoreApi.ts). İki yol denemesi, iki yolu da
+     * desteklemek için gerekli; kendi kurulumunu biliyorsan kullanmadığın satırı sil.
+     */
+    /** Kilit kapalıyken kimliksiz istemci bugünkü gibi serbest; kilitte token şart. */
     function adminOk() {
-      return isAdminSession() || !authRequired();
+      return isAdminSession() || !lockdownOn();
     }
 
     /** Yol segmenti oturum e-postası ve (varsa) belge e-postası ile eşleşmeli. */
@@ -262,6 +288,31 @@ service cloud.firestore {
       allow write: if contentWriteOk(collection);
     }
 
+    /**
+     * Yönetici listesinin bootstrap yazımı: kilit kapanana kadar
+     * (meta/membership_lockdown yokken) uygulama kendi e-postasını listeye
+     * ekleyebilir — böylece paneldeki “kendimi yönetici listesine ekle” tek dokunuşla
+     * biter ve Admin SDK gerekmez. Kilit açıldıktan sonra yalnız Console yazar.
+     * Kısıtlar: küçük harf e-posta, en fazla 10 kayıt, başka alan yok, silme yok.
+     */
+    match /meta/admins {
+      allow get: if true;
+      allow write: if !lockdownOn()
+        && request.resource.data.keys().hasOnly(['emails', 'updatedAt', 'schemaVersion'])
+        && request.resource.data.emails is list
+        && request.resource.data.emails.size() <= 10
+        && request.resource.data.emails.all(e, e is string && e == e.lower()
+             && e.size() >= 5 && e.size() <= 180
+             && e.matches("^[^\\s@]+@[^\\s@]+\\.[a-zA-Z]{2,}$"))
+        && request.resource.data.schemaVersion == 1;
+    }
+
+    /** meta altında gerisi (content_lock, membership_lockdown...) istemciye kapalı. */
+    match /meta/{document} {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
     match /memberships/{memberId} {
       allow read: if adminOk() || selfReadOk(memberId);
       allow create: if memberCreateOk(memberId) && (adminOk() || selfCreateOk(memberId));
@@ -321,13 +372,20 @@ service cloud.firestore {
  *    b) `.env.local` → EXPO_PUBLIC_FIREBASE_API_KEY (tek gerekli değer)
  *    c) `npm run setup:firestore -- <proje> --root . --api-key <ANAHTAR>` ve
  *       `npm run deploy:rules`
- *    d) Hazır olduğunda `authRequired()` → true: kimliksiz üyelik okuma/yazma kapanır.
+ *    d) Panel → “Firebase Auth” kartı → “Kendimi yönetici listesine ekle” (bootstrap,
+ *       Admin SDK gerekmez; `meta/admins` belgesi oluşur/güncellenir).
+ *    e) Katı mod: Console'da `meta/membership_lockdown` belgesi oluştur (alan
+ *       gerekmez, `note: 'kilitli'` yeter) → kimliksiz üyelik okuma/yazma kapanır.
+ *       Geri almak = belgeyi silmek. Kod değişikliği/yeniden yayınlama gerekmez.
  *    E-posta doğrulama zorunluluğu istersen `selfReadOk/selfCreateOk/selfUpdateOk`
  *    içindeki eşitliklere `&& request.auth.token.email_verified == true` ekle.
  *
- * 4b) Admin paneli Auth modunda tam yetki için Admin SDK ile bir hesaba
- *    `kpss_admin: true` claim'i ver (yoksa `authRequired()` false kaldıkça
- *    panel bugünkü gibi PIN ile çalışmaya devam eder).
+ * 4b) Yönetici listesi `meta/admins { emails: [...] }` belgesindedir; Admin SDK veya
+ *    custom claim gerekmez (`kpss_admin: true` claim'i de ayrıca kabul edilir).
+ * 4c) `match /meta/admins` bloğu `match /meta/{document}` bloğundan daha spesifik
+ *    olduğu için bootstrap yazımına izin verir; `meta` altındaki HERHANGİ BASHKA
+ *    belge (content_lock, membership_lockdown dahil) istemci tarafından
+ *    yazılamaz/silinemez — anahtarı yalnızca sen çevirirsin.
  *
  * 5) İçerik tohumlaması (bootstrap): uygulamanın "İçeriği Firestore'a yaz" akışı
  *    courses/... ve daily_tips/... belgelerini yazar. Bu pencere, Console'da

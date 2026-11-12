@@ -10,3 +10,6 @@ dist/
 .DS_Store
 serviceAccount*.json
 keyfile*.json
+
+# içerik taşıma ilerleme durumu (yeniden çalıştırmada kullanılır)
+.migrate-state.json

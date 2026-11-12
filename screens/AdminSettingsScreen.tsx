@@ -23,6 +23,7 @@ import {
   type SeedResult,
 } from '../lib/contentSeed';
 import { useAdmin } from '../lib/AdminContext';
+import { useMembership } from '../lib/MembershipContext';
 import { useApp } from '../lib/AppContext';
 import { ThemePreference } from '../lib/theme';
 import {
@@ -41,6 +42,13 @@ import {
 } from '../components/admin/ui';
 import { AdminGate } from '../components/admin/AdminGate';
 import {
+  addAdminEmail,
+  readAdminList,
+  readMembershipLockdown,
+  ADMINS_DOC_PATH,
+  MEMBERSHIP_LOCKDOWN_DOC_PATH,
+} from '../lib/firestoreApi';
+import {
   currentSession,
   isAuthConfigured,
   maskKey,
@@ -57,6 +65,7 @@ export const AdminSettingsScreen: React.FC = () => {
   const app = useApp();
   const { settings, patchSettings } = admin;
   const membershipPolicy = settings.membership;
+  const membership = useMembership();
 
   const [pinSheet, setPinSheet] = useState(false);
   const [pinDraft, setPinDraft] = useState('');
@@ -86,6 +95,48 @@ export const AdminSettingsScreen: React.FC = () => {
       'Root kök (“.”) ama proje hâlâ kpss-asistani — eski projede /courses beklenen veri yok, panelde tohumlama yapman gerekir.'
     );
   }
+
+  /* yönetim anahtarları (meta/admins + meta/membership_lockdown) */
+  const [gov, setGov] = useState<{
+    busy: boolean;
+    emails: string[];
+    locked: boolean | null;
+    note: string;
+  }>({ busy: false, emails: [], locked: null, note: 'Henüz kontrol edilmedi' });
+
+  const refreshGov = async () => {
+    setGov(g => ({ ...g, busy: true, note: 'Okunuyor…' }));
+    const [admins, lock] = await Promise.all([readAdminList(), readMembershipLockdown()]);
+    if (!admins.ok && !lock.ok) {
+      setGov({ busy: false, emails: [], locked: null, note: `Okunamadı: ${admins.error}` });
+      return;
+    }
+    setGov({
+      busy: false,
+      emails: admins.ok ? admins.data.emails : [],
+      locked: lock.ok ? lock.data : null,
+      note: [
+        admins.ok ? (admins.data.exists ? `${admins.data.emails.length} yönetici kaydı` : 'meta/admins henüz yok') : admins.error,
+        lock.ok ? (lock.data ? 'kilit AÇIK' : 'kilit kapalı') : 'kilit durumu okunamadı',
+      ].join(' • '),
+    });
+  };
+
+  const promoteSelf = async () => {
+    const email = membership.member?.email || membership.member?.emailNormalized || '';
+    if (!email) {
+      setGov(g => ({ ...g, note: 'Önce üye olarak giriş yap; listenizdeki e-posta eklenir.' }));
+      return;
+    }
+    setGov(g => ({ ...g, busy: true, note: 'Yazılıyor…' }));
+    const res = await addAdminEmail(email);
+    if (!res.ok) {
+      setGov({ ...gov, busy: false, note: `Eklenemedi: ${res.error}` });
+      return;
+    }
+    const lock = await readMembershipLockdown();
+    setGov({ busy: false, emails: res.data, locked: lock.ok ? lock.data : null, note: `Listede ${res.data.length} e-posta • ${lock.ok && lock.data ? 'kilit AÇIK (liste artık Console’dan)' : 'kilit kapalı'}` });
+  };
 
   /* Firebase Auth durumu */
   const [authProbe, setAuthProbe] = useState<{
@@ -513,6 +564,50 @@ export const AdminSettingsScreen: React.FC = () => {
             }
           />
           <AdminRow
+            icon="people-outline"
+            title="Yönetici listesi"
+            subtitle={gov.emails.length ? gov.emails.join(', ') : 'meta/admins belgesi yok — “Kendimi ekle” ile oluşturabilirsin (Admin SDK gerekmez).'}
+            right={
+              <AdminButton
+                small
+                label="Kendimi ekle"
+                disabled={gov.busy || gov.locked === true}
+                onPress={() => void promoteSelf()}
+              />
+            }
+          />
+          <AdminRow
+            icon="lock-closed-outline"
+            title="Üyelik kilidi"
+            subtitle={`meta/membership_lockdown: ${gov.locked === null ? 'bilinmiyor' : gov.locked ? 'AÇIK — kimliksiz üyelik okuma/yazma kapalı' : 'kapalı (bugünkü davranış)'}`}
+            right={
+              <AdminButton
+                small
+                tone="neutral"
+                label={gov.busy ? 'Okunuyor' : 'Yenile'}
+                disabled={gov.busy}
+                onPress={() => void refreshGov()}
+              />
+            }
+          />
+          <View style={{ paddingHorizontal: 2, gap: 2 }}>
+            <Text style={{ fontSize: 10.5, color: colors.textMuted, lineHeight: 15 }}>
+              Kilidi açmak yalnız Console işidir (uygulama meta altına yazamaz) — belgeyi
+              silmek anında geri alır, kuralı yeniden yayımlamaya gerek yok:
+            </Text>
+            <Text selectable style={{ fontSize: 10.5, color: colors.text, fontFamily: 'monospace', lineHeight: 15 }}>
+              Firestore → Data → Add document → collection `meta` → ID `membership_lockdown`
+              → alan `note` (string) = `kilitli` → Save
+            </Text>
+            <Text selectable style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 14 }}>
+              beklenen yollar → {ADMINS_DOC_PATH} • {MEMBERSHIP_LOCKDOWN_DOC_PATH}
+            </Text>
+            <Text style={{ fontSize: 10, color: colors.textMuted, lineHeight: 14 }}>
+              Liste yolu yanlış görünüyorsa EXPO_PUBLIC_FIRESTORE_ROOT ayarını kontrol et
+              (yukarıdaki “Yol öneki (root)” satırı).
+            </Text>
+          </View>
+          <AdminRow
             icon="flask-outline"
             title="Sağlayıcı testi"
             subtitle={authProbe.text}
@@ -555,8 +650,9 @@ export const AdminSettingsScreen: React.FC = () => {
             </Text>
             <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
               4) Metro’yu `--clear` ile yeniden başlat, sonra buradan “Test et”.{'\n'}
-              5) Katı moda geçmek için firestore.rules içinde authRequired() → true:
-              o andan sonra kimliksiz istekler üyelik belgesi okuyamaz/yazamaz.
+              5) Katı mod (kod değişikliği yok): Console'da `meta/membership_lockdown`
+              belgesi oluştur → kimliksiz üyelik okuma/yazma anında kapanır.
+              Geri almak = belgeyi silmek. Yukarıdaki “Üyelik kilidi” satırı durumu gösterir.
             </Text>
           </View>
         </AdminCard>
