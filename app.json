@@ -24,12 +24,6 @@
     "extra": {
       "eas": {
         "projectId": "552f0665-e30d-4f11-9ea9-97bc22a22809"
-      },
-      "firestore": {
-        "projectId": "kpss-asistani",
-        "databaseId": "(default)",
-        "root": "artifacts/kpss-asistani/public/data",
-        "_not": "Yeni proje için: projectId'i değiştir, root'u \"\" yap (koleksiyonlar kökte) veya kendi önekini ver. EXPO_PUBLIC_FIRESTORE_* env değişkenleri her zaman önceliklidir."
       }
     },
     "updates": {

@@ -34,6 +34,19 @@ function clean(v: string | undefined | null): string {
 }
 
 /**
+ * `root` için özel değerler: koleksiyonları veritabanının KÖKÜNDE aramak.
+ * Boş string yanında '.', './', '/', 'root', '(root)', 'kök', 'none' de kabul
+ * edilir — `.env` dosyalarında boş değerin kaybolması riskine karşı.
+ */
+const ROOT_SENTINELS = new Set(['', '.', './', '/', 'root', '(root)', 'kök', 'kok', 'none']);
+
+function normalizeRoot(v: string | undefined | null): string {
+  const value = String(v ?? '').trim();
+  if (ROOT_SENTINELS.has(value.toLocaleLowerCase('en-US'))) return '';
+  return clean(value);
+}
+
+/**
  * Ortam değişkenleri LİTERAL olarak okunur (`process.env.EXPO_PUBLIC_X`).
  * Expo/Metro yalnızca yazılı üye ifadelerini derleme zamanında gömer; dolaylı
  * erişim (env[name]) native derlemede boş döner. Bu yüzden burada asla
@@ -68,7 +81,7 @@ function fromEnv(): Partial<FirestoreTarget> | null {
   return {
     ...(projectId ? { projectId } : {}),
     ...(databaseId ? { databaseId } : {}),
-    ...(root !== undefined ? { root: clean(root) } : {}),
+    ...(root !== undefined ? { root: normalizeRoot(root) } : {}),
   };
 }
 
@@ -89,7 +102,7 @@ function fromAppJson(): Partial<FirestoreTarget> | null {
     const out: Partial<FirestoreTarget> = {};
     if (cfg.projectId) out.projectId = clean(cfg.projectId);
     if (cfg.databaseId) out.databaseId = clean(cfg.databaseId);
-    if (typeof cfg.root === 'string') out.root = clean(cfg.root);
+    if (typeof cfg.root === 'string') out.root = normalizeRoot(cfg.root);
     return Object.keys(out).length ? out : null;
   } catch {
     return null;
@@ -107,7 +120,7 @@ export function firestoreTarget(): FirestoreTarget {
   cached = {
     projectId: merged.projectId,
     databaseId: merged.databaseId || '(default)',
-    root: clean(merged.root),
+    root: normalizeRoot(merged.root),
     source: env ? 'env' : json ? 'app.json' : 'default',
   };
   return cached;

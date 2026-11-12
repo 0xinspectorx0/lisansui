@@ -32,37 +32,70 @@ olarak duruyor. Hiçbir şey değiştirmezsen uygulama bugünkü gibi çalışma
 >   olduğu gibi kopyalanır; repodaki örnek soruları da dahil edebilirsin.
 > - Kalıcı içerik (tam soru bankası) için 4. adımdaki şemayı kullan.
 
-## 2) Uygulamayı yeni projeye bağla
-Üç yoldan biri (öncelik: env > app.json > varsayılan). Yeni projede koleksiyonları
-**köke** açmanı öneririm → `root: ""`.
+## 2) Uygulamayı yeni projeye bağla (adım adım)
+Öncelik sırası: **env → app.json → repo varsayılanı**. Üç yoldan birini seç.
 
-**A) `.env` (kod değişikliği yok, tavsiye edilen)**
-```bash
-# repo köküne .env.local yaz (.env de olur; repoya commit'leme)
-EXPO_PUBLIC_FIRESTORE_PROJECT=kpss-prod
-EXPO_PUBLIC_FIRESTORE_ROOT=
-# opsiyonel:
-EXPO_PUBLIC_FIRESTORE_DATABASE=(default)
-# EXPO_PUBLIC_FIRESTORE_HOST=http://localhost:8080/v1   # emulator'de test için
-```
-Değiştirdikten sonra Metro'yu **yeniden başlat** (env, derleme zamanında gömülür):
-`npx expo start --clear`.
+### A) `.env.local` — tavsiye edilen, kod değişikliği yok
+1. **Repo köküne** dosya aç (yani `package.json` ile aynı klasöre):
+   ```bash
+   cd <repo>            # package.json'un olduğu klasör
+   cp .env.example .env.local
+   open -e .env.local   # macOS · Linux: xdg-open/ nano, Windows: notepad
+   ```
+2. İçini doldur — **iki satarı birlikte ver**, tek başına proje kimliği yetmez:
+   ```bash
+   EXPO_PUBLIC_FIRESTORE_PROJECT=kpss-prod
+   EXPO_PUBLIC_FIRESTORE_ROOT=.
+   # opsiyonel: EXPO_PUBLIC_FIRESTORE_DATABASE=(default)
+   # emulator:   EXPO_PUBLIC_FIRESTORE_HOST=http://localhost:8080/v1
+   ```
+   - `EXPO_PUBLIC_` ön eki zorunlu: bu önek olmayan değişkenler derlenen pakete
+     gömülmez (Expo kuralı).
+   - `EXPO_PUBLIC_FIRESTORE_ROOT=.` → koleksiyonlar veritabanının **kökünde**
+     (`/courses`, `/daily_tips`, `/memberships`). Boş bırakmak da aynı işi görür;
+     `.` yazman tavsiye edilir (bazı araçlar boş değeri düşürür).
+     Kök yerine eski düzeni kullanmak istersen: `artifacts/kpss-prod/public/data`.
+3. **Metro'yu temiz önbellekle yeniden başlat** (env, derleme zamanında pakete
+   gömülür; canlı yeniden yükleme ile değişmez):
+   ```bash
+   npx expo start --clear
+   # web export alacaksan: CI=1 npx expo export --platform web
+   ```
+4. Doğrula (iki yerden):
+   - Uygulama: kalkan ikonu → PIN `2468` → **Uygulama Ayarları → “Firestore bağlantısı”**
+     kartında `Proje kimliği: kpss-prod`, `Yol öneki: (kök)`, `Ayar kaynağı: env`
+     yazmalı. Kart, proje ile root birbirine uymuyorsa **uyarı satırı** gösterir.
+   - **Test et** düğmesi → `memberships: OK | 404 (koleksiyon henüz yok — normal)` ve
+     `daily_tips: …` satırlarını döndürür.
+5. `.env.local` repoya girmesin: depoda `.gitignore` var (`.env`, `.env.*`,
+   `!.env.example`). `.env.example` şablonu commit'lenebilir, içinde kendi değerlerin
+   olmamalı.
 
-**B) `app.json` → `expo.extra.firestore`**
+### B) `app.json` → `expo.extra.firestore`
 ```json
 "extra": {
   "firestore": {
     "projectId": "kpss-prod",
     "databaseId": "(default)",
-    "root": ""
+    "root": "."
   }
 }
 ```
-**C) `lib/firebaseConfig.ts` içindeki `DEFAULT_TARGET`** — kalıcı tek proje kullanacaksan en basiti.
+Repoda görüneceği için yalnızca proje kimliği gibi sır olmayan değerler için
+kullan; `root` için `.` ya da tam önek yazılabilir (boş string de kabul).
 
-Panelde doğrula: **Yönetim Paneli → Uygulama Ayarları → “Firestore bağlantısı”** kartı
-çözümlenen proje/kök yolunu ve kaynak (env/app.json/default) gösterir;
-**Test et** butonu `memberships` ve `daily_tips` okumalarını dener (yazma denemez).
+### C) `lib/firebaseConfig.ts` → `DEFAULT_TARGET`
+Tek projeyle uzun vadeli çalışacaksan en basiti: varsayılanı kendi projen yap,
+`.env` ile uğraşma.
+
+### EAS/üretim derlemeleri
+`.env.local` EAS'a otomatik yüklenmez. İkiden biri:
+```bash
+eas build --platform all --env-file .env.local
+```
+veya EAS dashboard → Variables → **`EXPO_PUBLIC_FIRESTORE_PROJECT`,
+`EXPO_PUBLIC_FIRESTORE_ROOT`** değerlerini Production/Preview değişkeni olarak ekle
+(EAS, build sırasında bunları da paketin içine gömer).
 
 ## 3) Kuralları yayımla
 ```bash
@@ -157,7 +190,8 @@ projede eski soru bankasının tamamını (9.5k+ soru) kopyalamak için iki prat
 | “Firestore kurallı yazmayı reddetti” | Kurallar yayında değil → 3. adım. |
 | `NOT_FOUND: Database (default) does not exist` | Veritabanını farklı isimle açtın → `EXPO_PUBLIC_FIRESTORE_DATABASE` ile doğru ismi ver veya `(default)` DB oluştur. |
 | Kayıt var ama panel listesi boş | `root` ayarı belge yoluyla uyuşmuyor (kök ↔ artifacts). Kartta görünen “Üyelik koleksiyonu” yolunu Console yoluyla kıyasla. |
-| Env değişikliği etkili olmadı | Metro'yu `--clear` ile yeniden başlat (env/build-time). |
+| Env değişikliği etkili olmadı | `.env.local` repo kökünde mi, ad `EXPO_PUBLIC_` ile mi başlıyor, ve Metro'yu `npx expo start --clear` ile yeniden başlattın mı? |
+| Panel “root hâlâ legacy” uyarısı veriyor | Sadece proje kimliğini verdin; `EXPO_PUBLIC_FIRESTORE_ROOT=.` satırını ekle (B seçeneğinde `root: "."`). |
 | İçerik Console'da var, app boş gösteriyor | Koleksiyon/yol birebir `courses/{courseId}/topics/{docId}` olmalı; `questions` bir **array of map**. |
 
 ## 9) Güvenlik notu

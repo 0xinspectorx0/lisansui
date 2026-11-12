@@ -6,6 +6,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useAppTheme } from '../lib/theme';
 import {
   collectionPath,
+  DEFAULT_TARGET,
   firestoreTarget,
   probeUrls,
   type FirestoreTarget,
@@ -63,6 +64,19 @@ export const AdminSettingsScreen: React.FC = () => {
   });
 
   const fsTarget: FirestoreTarget = firestoreTarget();
+  // Sık düşülen tuzak: yeni proje kimliği verip yol önekini legacy'de bırakmak
+  // (veya tam tersi). Panelde uyar, çünkü iki ayar birlikte anlam kazanıyor.
+  const rootConfigWarnings: string[] = [];
+  if (fsTarget.projectId !== DEFAULT_TARGET.projectId && fsTarget.root !== '') {
+    rootConfigWarnings.push(
+      `Proje “${fsTarget.projectId}” ama root hâlâ ${fsTarget.root} — yeni projede bu ağacı oluşturmadıysan EXPO_PUBLIC_FIRESTORE_ROOT=. ver.`
+    );
+  }
+  if (fsTarget.projectId === DEFAULT_TARGET.projectId && fsTarget.root === '') {
+    rootConfigWarnings.push(
+      'Root kök (“.”) ama proje hâlâ kpss-asistani — eski projede /courses beklenen veri yok, panelde tohumlama yapman gerekir.'
+    );
+  }
 
   /* içerik tohumlama (bootstrap) */
   const [seedPlan, setSeedPlan] = useState<SeedPlan | null>(null);
@@ -366,6 +380,11 @@ export const AdminSettingsScreen: React.FC = () => {
             }
             right={<AdminChip label={fsTarget.source} tone="info" compact />}
           />
+          {rootConfigWarnings.length ? (
+            <Text style={{ fontSize: 11.5, color: colors.warning, lineHeight: 17, marginTop: 2 }}>
+              {rootConfigWarnings.join(' • ')}
+            </Text>
+          ) : null}
           <AdminRow
             icon="pulse-outline"
             title="Bağlantı testi"
