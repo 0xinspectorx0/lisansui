@@ -16,6 +16,7 @@ import * as Haptics from 'expo-haptics';
 
 import { COURSE_LIST, useAppTheme } from '../lib/theme';
 import { useApp } from '../lib/AppContext';
+import { VipLockedScreen, useVipLocked } from '../components/admin/VipGate';
 import { RootStackParamList } from '../lib/types';
 import { calcKpssNet, formatDuration, formatNet } from '../lib/textUtils';
 
@@ -128,6 +129,11 @@ export const FocusStatsScreen: React.FC = () => {
     setSelectedPreset(preset);
     setSecondsLeft(preset.minutes * 60);
   };
+
+  const vipLock = useVipLocked('focus');
+  if (vipLock) {
+    return <VipLockedScreen title="Odak & Analiz" />;
+  }
 
   return (
     <SafeAreaView

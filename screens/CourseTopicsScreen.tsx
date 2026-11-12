@@ -15,6 +15,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { COURSES, useAppTheme } from '../lib/theme';
 import { useApp } from '../lib/AppContext';
+import { useAdmin } from '../lib/AdminContext';
 import { Question, RootStackParamList, TopicMeta } from '../lib/types';
 import {
   buildCourseMixedQuestions,
@@ -29,6 +30,8 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
   const { courseId } = route.params;
   const course = COURSES[courseId];
   const { colors } = useAppTheme();
+  const admin = useAdmin();
+  const questionsPerTest = admin.settings.quizDefaults.questionCount;
   const {
     catalog,
     results,
@@ -68,7 +71,8 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
       const tResults = allResults.filter(
         r => r.topicDocId === t.docId || r.key.startsWith(`${t.docId}_test_`)
       );
-      const totalTests = t.questionCount > 0 ? Math.ceil(t.questionCount / 20) : 0;
+      const totalTests =
+        t.questionCount > 0 ? Math.ceil(t.questionCount / questionsPerTest) : 0;
       const correctSum = tResults.reduce((s, r) => s + r.correct, 0);
       const answeredSum = tResults.reduce((s, r) => s + r.correct + r.wrong, 0);
       map[t.docId] = {
@@ -78,7 +82,7 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
       };
     });
     return map;
-  }, [topics, results]);
+  }, [topics, results, questionsPerTest]);
 
   const weakestTopic = useMemo(() => {
     let worst: { topic: TopicMeta; accuracy: number } | null = null;
@@ -122,8 +126,16 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
     if (startingMixed) return;
     setStartingMixed(true);
     try {
-      const qs = await buildCourseMixedQuestions(courseId, topics, 20);
-      const prepared = prepareQuizQuestions(qs, true, true);
+      const qs = await buildCourseMixedQuestions(
+        courseId,
+        topics,
+        admin.settings.quizDefaults.questionCount
+      );
+      const prepared = prepareQuizQuestions(
+        qs,
+        admin.settings.quizDefaults.shuffleQuestions,
+        admin.settings.quizDefaults.shuffleOptions
+      );
       if (prepared.length > 0) {
         navigation.navigate('Quiz', {
           session: {
@@ -330,7 +342,7 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
           return (
             <Pressable
               onPress={() =>
-                hasQuestions
+                hasQuestions || !admin.featureOn('topicProgress')
                   ? handleOpenTopic(item)
                   : toggleTopicStudied(item.docId)
               }
@@ -347,7 +359,7 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
                 <Pressable
                   onPress={() => toggleTopicStudied(item.docId)}
                   hitSlop={10}
-                  style={styles.checkWrap}
+                  style={[styles.checkWrap, !admin.featureOn('topicProgress') && { display: 'none' }]}
                 >
                   <Ionicons
                     name={isStudied ? 'checkmark-circle' : 'ellipse-outline'}
@@ -439,6 +451,12 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
       />
 
       <TopicTestSheet
+        questionsPerTest={questionsPerTest}
+        timedMinutesPerTest={
+          admin.settings.quizDefaults.timedMinutes > 0
+            ? admin.settings.quizDefaults.timedMinutes
+            : null
+        }
         visible={!!selectedTopic}
         topic={selectedTopic}
         questions={sheetQuestions}
@@ -456,7 +474,11 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
         }) => {
           const currentTopic = selectedTopic;
           setSelectedTopic(null);
-          const prepared = prepareQuizQuestions(questions, true, true);
+          const prepared = prepareQuizQuestions(
+            questions,
+            admin.settings.quizDefaults.shuffleQuestions,
+            admin.settings.quizDefaults.shuffleOptions
+          );
           navigation.navigate('Quiz', {
             session: {
               title,

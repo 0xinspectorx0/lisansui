@@ -94,6 +94,14 @@ export type RootStackParamList = {
   CourseTopics: { courseId: CourseId };
   Quiz: { session: QuizSessionPayload };
   QuizResult: { result: QuizResultPayload };
+  AdminLogin: undefined;
+  AdminPanel: undefined;
+  AdminTopics: { courseId?: CourseId; focusDocId?: string } | undefined;
+  AdminQuestions: { courseId?: CourseId; topicDocId?: string } | undefined;
+  AdminUsers: undefined;
+  AdminTips: undefined;
+  AdminCourses: undefined;
+  AdminSettings: undefined;
 };
 
 export type MainTabParamList = {

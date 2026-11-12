@@ -14,7 +14,7 @@ import { Question, TestResult, TopicMeta } from '../lib/types';
 import { useAppTheme } from '../lib/theme';
 import { formatNet } from '../lib/textUtils';
 
-const QUESTIONS_PER_TEST = 20;
+const DEFAULT_QUESTIONS_PER_TEST = 20;
 
 interface TopicTestSheetProps {
   visible: boolean;
@@ -32,6 +32,10 @@ interface TopicTestSheetProps {
     timedMinutes: number | null;
   }) => void;
   onResetTopic: (topicDocId: string) => void;
+  /** Admin-tunable test size (defaults to 20 questions per test). */
+  questionsPerTest?: number;
+  /** Pre-arm the built-in exam timer with this many minutes per test. */
+  timedMinutesPerTest?: number | null;
 }
 
 export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
@@ -43,18 +47,18 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
   onClose,
   onSelectTest,
   onResetTopic,
+  questionsPerTest = DEFAULT_QUESTIONS_PER_TEST,
+  timedMinutesPerTest = null,
 }) => {
   const { colors } = useAppTheme();
-  const [timedEnabled, setTimedEnabled] = useState(false);
+  const [timedEnabled, setTimedEnabled] = useState(timedMinutesPerTest !== null);
 
   const batches = useMemo(() => {
     if (!questions.length) return [];
-    const total = Math.ceil(questions.length / QUESTIONS_PER_TEST);
+    const size = Math.max(5, questionsPerTest);
+    const total = Math.ceil(questions.length / size);
     return Array.from({ length: total }, (_, index) => {
-      const slice = questions.slice(
-        index * QUESTIONS_PER_TEST,
-        (index + 1) * QUESTIONS_PER_TEST
-      );
+      const slice = questions.slice(index * size, (index + 1) * size);
       const resultKey = topic ? `${topic.docId}_test_${index}` : `test_${index}`;
       return {
         index,
@@ -63,7 +67,7 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
         savedResult: results[resultKey],
       };
     });
-  }, [questions, results, topic]);
+  }, [questions, results, topic, questionsPerTest]);
 
   const hasAnySavedResult = useMemo(
     () => batches.some(b => !!b.savedResult),
@@ -168,12 +172,14 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
                   onPress={() => {
                     const mixedSlice = [...questions]
                       .sort(() => Math.random() - 0.5)
-                      .slice(0, QUESTIONS_PER_TEST);
+                      .slice(0, Math.max(5, questionsPerTest));
                     onSelectTest({
                       questions: mixedSlice,
                       totalTests: batches.length,
                       title: `${topic.name} • Karışık`,
-                      timedMinutes: timedEnabled ? mixedSlice.length : null,
+                      timedMinutes: timedEnabled
+                        ? timedMinutesPerTest ?? mixedSlice.length
+                        : null,
                     });
                   }}
                   style={({ pressed }) => [
@@ -187,7 +193,7 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
                 >
                   <Ionicons name="shuffle" size={18} color={colors.primary} />
                   <Text style={[styles.randomBtnText, { color: colors.primary }]}>
-                    Bu Konudan Karışık {Math.min(QUESTIONS_PER_TEST, questions.length)} Soru Çöz
+                    Bu Konudan Karışık {Math.min(Math.max(5, questionsPerTest), questions.length)} Soru Çöz
                   </Text>
                 </Pressable>
 
@@ -232,7 +238,9 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
                           totalTests: batches.length,
                           resultKey: item.resultKey,
                           title: `${topic.name} • Test ${item.index + 1}`,
-                          timedMinutes: timedEnabled ? item.slice.length : null,
+                          timedMinutes: timedEnabled
+                            ? timedMinutesPerTest ?? item.slice.length
+                            : null,
                         })
                       }
                       style={({ pressed }) => [

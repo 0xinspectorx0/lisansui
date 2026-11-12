@@ -15,6 +15,7 @@ import * as Haptics from 'expo-haptics';
 
 import { useAppTheme } from '../lib/theme';
 import { useApp } from '../lib/AppContext';
+import { useAdmin } from '../lib/AdminContext';
 import { RootStackParamList } from '../lib/types';
 import { formatDuration } from '../lib/textUtils';
 
@@ -25,6 +26,7 @@ const OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E'];
 export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
   const { session } = route.params;
   const { colors } = useAppTheme();
+  const admin = useAdmin();
   const {
     isFavorite,
     toggleFavorite,
@@ -201,6 +203,7 @@ export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
             </Text>
           </View>
 
+          {admin.featureOn('favorites') && (
           <Pressable
             onPress={() => toggleFavorite(currentQuestion)}
             style={[
@@ -219,6 +222,7 @@ export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
               color={fav ? colors.warning : colors.textSecondary}
             />
           </Pressable>
+          )}
         </View>
       </View>
 

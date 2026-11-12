@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Platform,
   Pressable,
@@ -16,9 +17,12 @@ import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 
-import { COURSE_LIST, useAppTheme } from '../lib/theme';
+import { COURSE_LIST, COURSES, useAppTheme } from '../lib/theme';
 import { EXAM_PRESETS, useApp } from '../lib/AppContext';
+import { useAdmin } from '../lib/AdminContext';
+import { VipBadge } from '../components/admin/VipGate';
 import {
+  CourseId,
   MainTabParamList,
   RootStackParamList,
 } from '../lib/types';
@@ -49,6 +53,7 @@ export const HomeScreen: React.FC = () => {
     settings,
     updateSettings,
   } = useApp();
+  const admin = useAdmin();
 
   const [tipIndex, setTipIndex] = useState<number>(() =>
     dailyTips.length > 0 ? Math.floor(Math.random() * dailyTips.length) : 0
@@ -57,11 +62,16 @@ export const HomeScreen: React.FC = () => {
   const [goalModalOpen, setGoalModalOpen] = useState(false);
 
   const totalLiveQuestions = useMemo(() => {
-    return Object.values(catalog).reduce(
-      (sum, topics) => sum + topics.reduce((acc, t) => acc + t.questionCount, 0),
-      0
+    const visible = new Set(
+      (admin.courseOrder.length ? admin.courseOrder : COURSE_LIST.map(c => c.id)).filter(
+        id => !admin.hiddenCourses.includes(id)
+      )
     );
-  }, [catalog]);
+    return (Object.keys(catalog) as CourseId[]).reduce((sum, id) => {
+      if (!visible.has(id)) return sum;
+      return sum + catalog[id].reduce((acc, t) => acc + t.questionCount, 0);
+    }, 0);
+  }, [admin.courseOrder, admin.hiddenCourses, catalog]);
 
   const selectedExam = useMemo(() => {
     return (
@@ -69,12 +79,18 @@ export const HomeScreen: React.FC = () => {
     );
   }, [settings.examPresetId]);
 
+  /** Admin can pin a global exam date; otherwise the user's preset wins. */
+  const examTargetIso = admin.examDateOverride || selectedExam.dateIso;
+  const examLabel = admin.examDateOverride
+    ? `${selectedExam.label} • yönetici takvimi`
+    : selectedExam.label;
+
   const daysUntilExam = useMemo(() => {
-    const target = new Date(selectedExam.dateIso + 'T09:00:00').getTime();
+    const target = new Date(examTargetIso + 'T09:00:00').getTime();
     const now = Date.now();
     const diff = Math.ceil((target - now) / (1000 * 60 * 60 * 24));
     return Math.max(0, diff);
-  }, [selectedExam]);
+  }, [examTargetIso]);
 
   const todayNet = useMemo(
     () => calcKpssNet(todayStats.correct, todayStats.wrong),
@@ -86,9 +102,22 @@ export const HomeScreen: React.FC = () => {
     return Math.min(1, todayStats.solved / settings.dailyGoal);
   }, [todayStats.solved, settings.dailyGoal]);
 
+  /** Admin-controlled ordering, visibility and titles for the course cards. */
+  const visibleCourses = useMemo(() => {
+    const ordered = admin.courseOrder.length
+      ? admin.courseOrder
+      : COURSE_LIST.map(c => c.id);
+    return ordered
+      .filter(id => !admin.hiddenCourses.includes(id))
+      .map(id => ({
+        ...COURSES[id],
+        title: admin.courseTitle(id, COURSES[id].title),
+      }));
+  }, [admin.courseOrder, admin.courseTitle, admin.hiddenCourses]);
+
   const courseStats = useMemo(() => {
     const allResults = Object.values(results);
-    return COURSE_LIST.map(course => {
+    return visibleCourses.map(course => {
       const topics = catalog[course.id] || [];
       const activeTopicsCount = topics.filter(t => t.questionCount > 0).length;
       const totalQuestions = topics.reduce((s, t) => s + t.questionCount, 0);
@@ -109,20 +138,31 @@ export const HomeScreen: React.FC = () => {
         accuracyPercent,
       };
     });
-  }, [catalog, results]);
+  }, [catalog, results, visibleCourses]);
 
   const currentTip = dailyTips[tipIndex % Math.max(1, dailyTips.length)] || '';
   const isCurrentTipSaved = !!savedTips[currentTip];
 
   const handleStartMixedExam = async () => {
     if (startingMixed) return;
+    if (admin.isVipGated('karmaExam')) {
+      Alert.alert(
+        'Karma Deneme VIP’e özel',
+        'Yönetici paneli bu bölümü VIP üyelere ayırdı. Panel → Kullanıcılar bölümünden bu cihaza VIP verebilirsin.'
+      );
+      return;
+    }
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
     setStartingMixed(true);
     try {
       const rawQuestions = await buildGeneralMixedExam(catalog, 25);
-      const prepared = prepareQuizQuestions(rawQuestions, true, true);
+      const prepared = prepareQuizQuestions(
+        rawQuestions,
+        admin.settings.quizDefaults.shuffleQuestions,
+        admin.settings.quizDefaults.shuffleOptions
+      );
       if (prepared.length > 0) {
         stackNav.navigate('Quiz', {
           session: {
@@ -140,6 +180,13 @@ export const HomeScreen: React.FC = () => {
   };
 
   const handleStartMistakes = () => {
+    if (!admin.featureOn('mistakes')) {
+      Alert.alert(
+        'Hata defteri kapalı',
+        'Yönetici paneli → Uygulama Ayarları bölümünden “Hata defterine yazma” özelliğini açabilirsin.'
+      );
+      return;
+    }
     if (mistakes.length === 0) {
       tabNav.navigate('ReviewTab');
       return;
@@ -181,7 +228,8 @@ export const HomeScreen: React.FC = () => {
           </View>
 
           <View style={styles.headerRight}>
-            {streak.current > 0 && (
+            <VipBadge />
+            {admin.featureOn('streak') && streak.current > 0 && (
               <View
                 style={[
                   styles.streakPill,
@@ -197,6 +245,28 @@ export const HomeScreen: React.FC = () => {
                 </Text>
               </View>
             )}
+
+            <Pressable
+              onPress={() =>
+                stackNav.navigate(admin.unlocked ? 'AdminPanel' : 'AdminLogin')
+              }
+              style={[
+                styles.iconBtn,
+                {
+                  backgroundColor: admin.unlocked
+                    ? colors.primarySoft
+                    : colors.surface,
+                  borderColor: colors.border,
+                },
+              ]}
+              hitSlop={8}
+            >
+              <Ionicons
+                name={admin.unlocked ? 'shield-checkmark' : 'shield-outline'}
+                size={19}
+                color={admin.unlocked ? colors.primary : colors.text}
+              />
+            </Pressable>
 
             <Pressable
               onPress={toggleTheme}
@@ -217,6 +287,60 @@ export const HomeScreen: React.FC = () => {
             </Pressable>
           </View>
         </View>
+
+        {/* Admin announcement / maintenance */}
+        {(admin.announcement.enabled || admin.maintenanceActive) && (
+          <View
+            style={[
+              styles.adminBanner,
+              {
+                backgroundColor: admin.maintenanceActive
+                  ? colors.dangerSoft
+                  : admin.announcement.tone === 'warning'
+                  ? colors.warningSoft
+                  : admin.announcement.tone === 'success'
+                  ? colors.successSoft
+                  : colors.primarySoft,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <Ionicons
+              name={admin.maintenanceActive ? 'construct' : 'megaphone'}
+              size={15}
+              color={
+                admin.maintenanceActive
+                  ? colors.danger
+                  : admin.announcement.tone === 'warning'
+                  ? colors.warning
+                  : admin.announcement.tone === 'success'
+                  ? colors.success
+                  : colors.primary
+              }
+            />
+            <Text
+              numberOfLines={2}
+              style={[
+                styles.adminBannerText,
+                {
+                  color: admin.maintenanceActive
+                    ? colors.danger
+                    : colors.textSecondary,
+                },
+              ]}
+            >
+              {admin.maintenanceActive
+                ? admin.settings.maintenance.message
+                : admin.announcement.text}
+            </Text>
+            <Pressable
+              onPress={() => stackNav.navigate('AdminSettings')}
+              hitSlop={8}
+            >
+              <Ionicons name="create-outline" size={15} color={colors.primary} />
+            </Pressable>
+          </View>
+        )}
 
         {/* Daily Goal & Countdown Card */}
         <Pressable
@@ -258,7 +382,7 @@ export const HomeScreen: React.FC = () => {
                 style={[styles.countdownLabel, { color: colors.primary }]}
                 numberOfLines={1}
               >
-                {selectedExam.label}
+                {examLabel}
               </Text>
             </View>
           </View>
@@ -610,6 +734,25 @@ export const HomeScreen: React.FC = () => {
             </View>
 
             <Pressable
+              onPress={() => {
+                setGoalModalOpen(false);
+                stackNav.navigate(admin.unlocked ? 'AdminPanel' : 'AdminLogin');
+              }}
+              style={[
+                styles.adminEntryBtn,
+                { backgroundColor: colors.surfaceSecondary, borderColor: colors.border },
+              ]}
+            >
+              <Ionicons name="shield-checkmark-outline" size={16} color={colors.primary} />
+              <Text style={[styles.adminEntryText, { color: colors.text }]}>
+                Yönetim Paneli
+              </Text>
+              <Text style={[styles.adminEntryHint, { color: colors.textMuted }]}>
+                {admin.unlocked ? 'kilit açık' : 'PIN ile korumalı'}
+              </Text>
+            </Pressable>
+
+            <Pressable
               onPress={() => setGoalModalOpen(false)}
               style={[styles.modalDoneBtn, { backgroundColor: colors.primary }]}
             >
@@ -646,6 +789,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     marginTop: 2,
+  },
+  adminBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  adminBannerText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
   },
   headerRight: {
     flexDirection: 'row',
@@ -917,6 +1076,25 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     padding: 20,
+  },
+  adminEntryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  adminEntryText: {
+    flex: 1,
+    fontSize: 13.5,
+    fontWeight: '800',
+  },
+  adminEntryHint: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   modalHeader: {
     flexDirection: 'row',
