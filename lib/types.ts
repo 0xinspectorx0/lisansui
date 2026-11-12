@@ -47,6 +47,8 @@ export interface TestResult {
   net: number;
   durationSec: number;
   completedAt: string;
+  /** Owning device-profile id; lets the quota follow the account, not the app. */
+  memberId?: string;
 }
 
 export interface StreakData {
@@ -102,6 +104,10 @@ export type RootStackParamList = {
   AdminTips: undefined;
   AdminCourses: undefined;
   AdminSettings: undefined;
+  AdminMembership: undefined;
+  Auth: undefined;
+  Profile: undefined;
+  MembershipPaywall: undefined;
 };
 
 export type MainTabParamList = {

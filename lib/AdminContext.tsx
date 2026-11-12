@@ -17,6 +17,7 @@ import {
   VipPlan,
   clearQuestionsOverride,
   clearTipsOverride,
+  bumpLocalUsage,
   clearTopicsOverride,
   countOverrides,
   ensureQuestionsOverride,
@@ -28,6 +29,7 @@ import {
   questionKey,
   resetAdminState,
   subscribeAdmin,
+  syncMembersIntoAdmin,
   updateAdminSettings,
   updateAdminState,
   writeAdminState,
@@ -119,6 +121,39 @@ interface AdminContextValue {
   grantVip: (id: string, plan: VipPlan, days: number) => void;
   revokeVip: (id: string) => void;
   setUserRole: (id: string, role: AdminRole) => void;
+  /** Mirrors the Firestore `memberships` collection into the panel user list. */
+  syncCloudMembers: (
+    members: {
+      id: string;
+      email: string;
+      displayName: string;
+      role: AdminRole;
+      status: string;
+      vip: boolean;
+      vipPlan: VipPlan;
+      vipExpiresAt: string;
+      createdAt: string;
+      lastLoginAt: string;
+      city: string;
+      exam: string;
+      note: string;
+      testsCompleted: number;
+      questionsSolved: number;
+      netSum: number;
+    }[]
+  ) => { cloud: number };
+  syncCloudMemberPatch: (
+    remoteId: string,
+    patch: Partial<
+      Pick<AdminUser, 'vip' | 'vipPlan' | 'status' | 'note'> & { vipExpiresAt: string | null }
+    >
+  ) => void;
+  dropCloudMember: (remoteId: string) => void;
+  /** Mirror a finished test onto the local device profile (panel usage rows). */
+  addLocalUsage: (
+    courseId: string,
+    stats: { total: number; correct: number; wrong: number }
+  ) => void;
   setUserStatus: (id: string, status: UserStatus) => void;
   bulkVip: (ids: string[], enable: boolean, plan?: VipPlan, days?: number) => void;
 
@@ -670,6 +705,38 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [mutateUsers]
   );
 
+  /** Mirrors the Firestore memberships collection into the panel user list. */
+  const syncCloudMembers = useCallback<AdminContextValue['syncCloudMembers']>(
+    members => {
+      const res = syncMembersIntoAdmin(members as any);
+      return { cloud: res.cloud };
+    },
+    []
+  );
+
+  const syncCloudMemberPatch = useCallback<AdminContextValue['syncCloudMemberPatch']>(
+    (remoteId, patch) => {
+      mutateUsers(list =>
+        list.map(u => (u.remoteId === remoteId ? { ...u, ...(patch as Partial<AdminUser>) } : u))
+      );
+    },
+    [mutateUsers]
+  );
+
+  const addLocalUsage = useCallback<AdminContextValue['addLocalUsage']>(
+    (courseId, questionCount) => {
+      mutateUsers(list => bumpLocalUsage(list, courseId, questionCount));
+    },
+    [mutateUsers]
+  );
+
+  const dropCloudMember = useCallback<AdminContextValue['dropCloudMember']>(
+    remoteId => {
+      mutateUsers(list => list.filter(u => u.remoteId !== remoteId));
+    },
+    [mutateUsers]
+  );
+
   /* ------------------------------------------------------ settings etc */
 
   const patchSettings = useCallback((patch: Partial<AdminSettings>) => {
@@ -845,6 +912,10 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setUserRole,
       setUserStatus,
       bulkVip,
+      syncCloudMembers,
+      syncCloudMemberPatch,
+      addLocalUsage,
+      dropCloudMember,
       patchSettings,
       setPin,
       setCourseOrder,
@@ -899,6 +970,10 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setUserRole,
       setUserStatus,
       bulkVip,
+      syncCloudMembers,
+      syncCloudMemberPatch,
+      addLocalUsage,
+      dropCloudMember,
       patchSettings,
       setPin,
       setCourseOrder,

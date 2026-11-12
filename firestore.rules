@@ -1,0 +1,178 @@
+rules_version = '2';
+
+/**
+ * KPSS Asistanı — Firestore kuralları (içerik + üyelikler)
+ * =========================================================
+ * Bu uygulama Firebase Auth KULLANMAZ. Üyelikler `memberships/{e-posta}`
+ * belgelerinde tutulur; şifre cihazda PBKDF2-SHA256 ile hash'lenir, düz metin
+ * asla Firestore'a yazılmaz (lib/crypto.ts, lib/membership.ts).
+ * Kayıt, giriş, hak takibi ve panel düzenlemeleri bu belgeler üzerinden yapılır.
+ *
+ * Aşağıdaki set, uygulamanın akışını çalıştırırken en kritik suiistimalleri kapar:
+ *
+ *   • Belge id'si ile `email` alanı eşleşmek zorunda (id = normalizeEmail(email)),
+ *     böylece kayıt/kimlik çelişkisi oluşmaz.
+ *   • Yeni kayıt yalnızca `role: user|editor` ve `status: active|pending` ile
+ *     açılabilir; KAYIT SONRASI hiçbir istemci `role` alamaz → uygulamayı kullanan
+ *     biri kendini yönetici yapamaz (rol değişimi Console/Admin SDK işidir).
+ *   • Şifre alanları format denetiminden geçer: verifier 64 hex, salt 32 hex,
+ *     iterations >= 100, algo = pbkdf2-sha256. Boş/eksik hash ile belge
+ *     oluşturulamaz (kimlik doğrulamayı devre dışı bırakma girişimi engellenir).
+ *   • `schemaVersion` 1'dir, sayaçlar negatif olamaz, `courseUsage` en fazla
+ *     12 ders anahtarı ve 0..999 arası tam sayı değerler tutar.
+ *   • Başka bir belgenin üzerine yazılamaz (create'te id = email şartı).
+ *
+ * Dağıtım: `firebase deploy --only firestore:rules`
+ *       veya Console → Firestore → Rules → Publish (bu dosyanın içeriği).
+ *
+ * Kurallar yayınlanmadan kayıt akışı çalışmaz: istemci `permission-denied`
+ * görür ve uygulama "Firestore kurallı reddetti" uyarısını gösterir.
+ */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* ------------------------------------------------------------- yardımcılar */
+
+    function isEmail(value) {
+      return value is string
+        && value.size() >= 5
+        && value.size() <= 180
+        && value.matches("^[^\\s@]+@[^\\s@]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isVerifier(value) {
+      return value is string && value.matches("^[0-9a-f]{64}$");
+    }
+
+    function isSalt(value) {
+      return value is string && value.matches("^[0-9a-f]{32}$");
+    }
+
+    /** Boş string serbest (süresiz plan); yyyy-mm-dd veya ISO zaman damgası kabul. */
+    function isDateLike(value) {
+      return value is string
+        && (value == '' || value.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9:.]+Z?)?$") == true);
+    }
+
+    function isCounter(value) {
+      return value is int && value >= 0 && value <= 1000000;
+    }
+
+    /** Uygulamanın yazdığı düz alan seti — lib/membership.ts#memberToFields. */
+    function memberShapeOk(data) {
+      return data.keys().hasAll([
+          'id', 'email', 'emailNormalized', 'displayName',
+          'verifier', 'salt', 'iterations', 'algo',
+          'role', 'status', 'vip', 'vipPlan', 'vipExpiresAt',
+          'createdAt', 'lastLoginAt', 'city', 'exam', 'note',
+          'testsCompleted', 'questionsSolved', 'netSum', 'courseUsage', 'schemaVersion'
+        ])
+        && isEmail(data.email)
+        && data.id == data.email
+        && data.emailNormalized == data.email
+        && data.displayName is string && data.displayName.size() <= 80
+        && isVerifier(data.verifier)
+        && isSalt(data.salt)
+        && data.iterations is int && data.iterations >= 100
+        && data.algo == 'pbkdf2-sha256'
+        && data.role in ['user', 'editor', 'admin', 'owner']
+        && data.status in ['active', 'pending', 'suspended', 'banned']
+        && data.vip is bool
+        && data.vipPlan in ['free', 'monthly', 'yearly', 'lifetime']
+        && isDateLike(data.vipExpiresAt)
+        && isDateLike(data.createdAt)
+        && isDateLike(data.lastLoginAt)
+        && data.city is string && data.city.size() <= 60
+        && data.exam is string && data.exam.size() <= 80
+        && data.note is string && data.note.size() <= 400
+        && isCounter(data.testsCompleted)
+        && isCounter(data.questionsSolved)
+        && data.netSum is number && data.netSum >= -100000
+        && data.schemaVersion == 1
+        && (data.courseUsage is map
+            && data.courseUsage.size() <= 12
+            && data.courseUsage.values().all(v, v is int && v >= 0 && v <= 999));
+    }
+
+    /** Öğrencinin kendi dokunabildiği alanlar: kullanım + profil + şifre değişimi. */
+    function usageOnlyChange() {
+      return request.resource.data.diff(resource.data)
+        .affectedKeys()
+        .hasOnly([
+          'testsCompleted', 'questionsSolved', 'netSum', 'courseUsage',
+          'lastLoginAt', 'displayName', 'city', 'exam', 'note',
+          'verifier', 'salt', 'iterations', 'algo'
+        ]);
+    }
+
+    /** Panelin yaptığı değişiklikler: hak + durum alanları, rol Hariç. */
+    function entitlementChange() {
+      return request.resource.data.diff(resource.data)
+        .affectedKeys()
+        .hasOnly([
+          'vip', 'vipPlan', 'vipExpiresAt', 'status', 'note',
+          'displayName', 'city', 'exam', 'lastLoginAt',
+          'testsCompleted', 'questionsSolved', 'netSum', 'courseUsage',
+          'verifier', 'salt', 'iterations', 'algo'
+        ]);
+    }
+
+    /* ------------------------------------------------------------------ içerik */
+    // Soru bankası, konu listesi, hap bilgiler: herkese OKUMA, yazma yok.
+    // (Panel yedeği `exportJson` ile alır; içeriği Console/Admin SDK dağıtır.)
+    match /artifacts/{artifact}/public/data/{document=**} {
+      allow read: if artifact == 'kpss-asistani';
+      allow write: if false;
+    }
+
+    /* ------------------------------------------------------------------ üyelik */
+    match /artifacts/{artifact}/public/data/memberships/{memberId} {
+      // Giriş/kayıt kontrolü ve panel listesi bu okumaya dayanır.
+      allow read: if artifact == 'kpss-asistani';
+
+      // Yeni üyelik: id = e-posta, rol kendini yönetici yapamaz, şifre formatlı.
+      allow create: if artifact == 'kpss-asistani'
+        && memberId == request.resource.data.id
+        && request.resource.data.role in ['user', 'editor']
+        && request.resource.data.status in ['active', 'pending']
+        && memberShapeOk(request.resource.data);
+
+      // Güncelleme: ya sadece kullanım/profil ya da panelin hak güncellemesi.
+      // `role` hiçbir şekilde değiştirilemez (hasOnly listelerinde yok).
+      allow update: if artifact == 'kpss-asistani'
+        && memberId == request.resource.data.id
+        && request.resource.data.role == resource.data.role
+        && memberShapeOk(request.resource.data)
+        && (usageOnlyChange() || entitlementChange());
+
+      // Panelden üyelik silme (hesap kapatma akışıyla aynı yetki).
+      allow delete: if artifact == 'kpss-asistani';
+    }
+
+    /* --------------------------------------------------------------- varsayılan */
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+/**
+ * Notlar
+ * ------
+ * 1) `PATCH` isteklerinde Firestore, gönderilen alanları mevcut belgeyle
+ *    birleştirir; kural `request.resource.data` üzerinden birleşik hali görür.
+ *    Bu yüzden `memberShapeOk` güncellemelerde de geçerlidir.
+ *
+ * 2) "Sadece Console" varyantı: VIP/durum değişikliklerinin uygulama içinden
+ *    yapılmasını kapatmak istersen `allow update` satırındaki
+ *    `(usageOnlyChange() || entitlementChange())` ifadesini sadece
+ *    `usageOnlyChange()` olarak bırak. Uygulama içindeki panel o zaman
+ *    "Firestore reddetti" uyarısını gösterir; VIP verme/dondurma yalnızca
+ *    Firebase Console veya Admin SDK üzerinden çalışır.
+ *
+ * 3) Firebase Auth olmadığı için kurallar istemciyi kimlik ile ayıramaz;
+ *    bu dosya suiistimali zorlaştırır, imkânsız kılmaz. Gerçek bir üretim
+ *    kurulumunda üyelik belgelerini `request.auth.uid` ile eşleştirmek
+ *    (Firebase Auth + `request.auth.token.email`) önerilir.
+ */

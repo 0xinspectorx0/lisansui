@@ -66,6 +66,27 @@ const DEFAULT_SETTINGS: UserSettings = {
   autoClearMistakes: true,
 };
 
+/**
+ * Results are scoped to the device profile so switching accounts cannot inherit
+ * another member's used quota. MembershipContext keeps this value current.
+ */
+let localMemberId: string | null = null;
+/** Membership layer registers itself here so every finished test is mirrored to Firestore. */
+let testCompletionListener:
+  | ((courseId: CourseId | 'genel', summary: { total: number; correct: number; wrong: number }) => void)
+  | null = null;
+export function setTestCompletionListener(
+  fn: ((courseId: CourseId | 'genel', summary: { total: number; correct: number; wrong: number }) => void) | null
+): void {
+  testCompletionListener = fn;
+}
+export function setLocalMemberId(id: string | null): void {
+  localMemberId = id;
+}
+function getLocalMemberId(): string | undefined {
+  return localMemberId ?? undefined;
+}
+
 function getTodayKey(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
@@ -108,6 +129,8 @@ interface AppContextValue {
   toggleTipSaved: (tip: string) => void;
   updateSettings: (patch: Partial<UserSettings>) => void;
   recordFocusMinutes: (minutes: number) => void;
+  /** Merges cloud-mirrored test entries so a fresh device cannot dodge the free quota. */
+  updateResultsWithMember: (incoming: Record<string, TestResult>) => void;
   finalizeQuizSession: (
     session: QuizSessionPayload,
     answers: Record<number, number>,
@@ -353,6 +376,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, []);
 
+  const updateResultsWithMember = useCallback((incoming: Record<string, TestResult>) => {
+    setResults(prev => {
+      const next = { ...prev };
+      Object.entries(incoming).forEach(([key, value]) => {
+        if (!next[key]) next[key] = value;
+      });
+      AsyncStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
+
   const updateSettings = useCallback((patch: Partial<UserSettings>) => {
     setSettings(prev => {
       const next = { ...prev, ...patch };
@@ -461,6 +495,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           key: saveKey,
           courseId: session.courseId,
           topicDocId: session.topicDocId,
+          // Quota follows the account, so every result carries its owner (guest included).
+          memberId: getLocalMemberId() ?? undefined,
           title: session.title,
           correct,
           wrong,
@@ -474,6 +510,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const next = { ...prev, [saveKey]: newResult };
           AsyncStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(next)).catch(() => {});
           return next;
+        });
+        testCompletionListener?.(session.courseId, {
+          total: session.questions.length,
+          correct,
+          wrong,
         });
       }
 
@@ -594,6 +635,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       toggleTipSaved,
       updateSettings,
       recordFocusMinutes,
+      updateResultsWithMember,
       finalizeQuizSession,
       resetAllProgress,
     }),
@@ -624,6 +666,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       toggleTipSaved,
       updateSettings,
       recordFocusMinutes,
+      updateResultsWithMember,
       finalizeQuizSession,
       resetAllProgress,
     ]

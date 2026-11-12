@@ -21,6 +21,8 @@ import { COURSE_LIST, COURSES, useAppTheme } from '../lib/theme';
 import { EXAM_PRESETS, useApp } from '../lib/AppContext';
 import { useAdmin } from '../lib/AdminContext';
 import { VipBadge } from '../components/admin/VipGate';
+import { MembershipPill } from '../components/membership/ui';
+import { useMembership } from '../lib/MembershipContext';
 import {
   CourseId,
   MainTabParamList,
@@ -54,6 +56,7 @@ export const HomeScreen: React.FC = () => {
     updateSettings,
   } = useApp();
   const admin = useAdmin();
+  const membership = useMembership();
 
   const [tipIndex, setTipIndex] = useState<number>(() =>
     dailyTips.length > 0 ? Math.floor(Math.random() * dailyTips.length) : 0
@@ -140,6 +143,35 @@ export const HomeScreen: React.FC = () => {
     });
   }, [catalog, results, visibleCourses]);
 
+  const quotaSummary = useMemo(() => {
+    const ids = (Object.keys(catalog) as CourseId[]).filter(
+      id => !admin.hiddenCourses.includes(id)
+    );
+    if (!membership.quota.enforced || membership.isVip) {
+      return { limited: false, blocked: false, text: '' };
+    }
+    const limit = membership.quota.freeTestsPerCourse;
+    const used = ids.map(id => membership.usedFor(id));
+    const blockedAll = used.length > 0 && used.every(u => u >= limit);
+    const anyLeft = used.some(u => u < limit);
+    const coursesBlocked = used.filter(u => u >= limit).length;
+    if (blockedAll || !membership.canStartMixed(catalog)) {
+      return {
+        limited: true,
+        blocked: true,
+        text: `Ücretsiz hakların bitti — ${ids.length} derste de ${limit} test çözdün`,
+      };
+    }
+    return {
+      limited: true,
+      blocked: false,
+      text:
+        coursesBlocked > 0
+          ? `${coursesBlocked} derste hakkın bitti • ${anyLeft ? 'açık dersten devam edebilirsin' : ''}`
+          : `Her dersten ${limit} ücretsiz test hakkın var`,
+    };
+  }, [admin.hiddenCourses, catalog, membership]);
+
   const currentTip = dailyTips[tipIndex % Math.max(1, dailyTips.length)] || '';
   const isCurrentTipSaved = !!savedTips[currentTip];
 
@@ -150,6 +182,11 @@ export const HomeScreen: React.FC = () => {
         'Karma Deneme VIP’e özel',
         'Yönetici paneli bu bölümü VIP üyelere ayırdı. Panel → Kullanıcılar bölümünden bu cihaza VIP verebilirsin.'
       );
+      return;
+    }
+    if (!membership.canStartMixed(catalog)) {
+      // Free quota exhausted (per-course or the karma slot itself).
+      stackNav.navigate('MembershipPaywall');
       return;
     }
     if (Platform.OS !== 'web') {
@@ -228,6 +265,27 @@ export const HomeScreen: React.FC = () => {
           </View>
 
           <View style={styles.headerRight}>
+            <Pressable
+              onPress={() =>
+                stackNav.navigate(membership.signedIn ? 'Profile' : 'Auth')
+              }
+              style={[
+                styles.iconBtn,
+                {
+                  backgroundColor: membership.signedIn
+                    ? colors.successSoft
+                    : colors.surface,
+                  borderColor: colors.border,
+                },
+              ]}
+              hitSlop={8}
+            >
+              <Ionicons
+                name={membership.signedIn ? 'person' : 'person-add-outline'}
+                size={19}
+                color={membership.signedIn ? colors.success : colors.text}
+              />
+            </Pressable>
             <VipBadge />
             {admin.featureOn('streak') && streak.current > 0 && (
               <View
@@ -500,18 +558,53 @@ export const HomeScreen: React.FC = () => {
           </Pressable>
         </View>
 
+        {quotaSummary.blocked || quotaSummary.limited ? (
+          <Pressable
+            onPress={() => stackNav.navigate('MembershipPaywall')}
+            style={[
+              styles.quotaStrip,
+              {
+                backgroundColor: quotaSummary.blocked ? colors.warningSoft : colors.primarySoft,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <Ionicons
+              name={quotaSummary.blocked ? 'lock-closed' : 'gift-outline'}
+              size={15}
+              color={quotaSummary.blocked ? colors.warning : colors.primary}
+            />
+            <Text
+              style={[
+                styles.quotaStripText,
+                { color: quotaSummary.blocked ? colors.warning : colors.primary },
+              ]}
+            >
+              {quotaSummary.text}
+            </Text>
+            <Text style={[styles.quotaStripCta, { color: colors.primary }]}>
+              {quotaSummary.blocked ? 'Seçenekler' : 'VIP'}
+            </Text>
+          </Pressable>
+        ) : null}
+
         {/* Courses Section */}
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Dersler</Text>
-          <Text style={[styles.sectionHint, { color: colors.textMuted }]}>
-            Konu seçip test çözün
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <MembershipPill />
+            <Text style={[styles.sectionHint, { color: colors.textMuted }]}>
+              Konu seçip test çözün
+            </Text>
+          </View>
         </View>
 
         {courseStats.map(item => (
           <CourseCard
             key={item.course.id}
             course={item.course}
+            remainingTests={membership.remainingFor(item.course.id)}
+            quotaBlocked={!membership.isVip && membership.quota.enforced && membership.remainingFor(item.course.id) <= 0}
             totalQuestions={item.totalQuestions}
             activeTopicsCount={item.activeTopicsCount}
             solvedTestsCount={item.solvedTestsCount}
@@ -790,6 +883,18 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginTop: 2,
   },
+  quotaStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 13,
+    borderWidth: 1,
+    marginBottom: 14,
+  },
+  quotaStripText: { flex: 1, fontSize: 11.5, fontWeight: '800', lineHeight: 16 },
+  quotaStripCta: { fontSize: 11.5, fontWeight: '900', textDecorationLine: 'underline' },
   adminBanner: {
     flexDirection: 'row',
     alignItems: 'center',

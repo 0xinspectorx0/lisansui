@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import { useNavigation } from '@react-navigation/native';
 import { useAppTheme } from '../lib/theme';
 import { useAdmin } from '../lib/AdminContext';
 import { useApp } from '../lib/AppContext';
@@ -24,9 +25,11 @@ import { AdminGate } from '../components/admin/AdminGate';
 
 export const AdminSettingsScreen: React.FC = () => {
   const { colors } = useAppTheme();
+  const navigation = useNavigation<any>();
   const admin = useAdmin();
   const app = useApp();
   const { settings, patchSettings } = admin;
+  const membershipPolicy = settings.membership;
 
   const [pinSheet, setPinSheet] = useState(false);
   const [pinDraft, setPinDraft] = useState('');
@@ -147,6 +150,79 @@ export const AdminSettingsScreen: React.FC = () => {
             max={90}
             onChange={v => patchSettings({ vipTrialDays: v })}
             suffix="gün"
+          />
+        </AdminCard>
+
+        {/* Membership policy */}
+        <AdminSectionTitle
+          label="Üyelik & test limiti"
+          hint="Üye olmayan (ve ücretsiz üye) her dersten yalnızca belirlenen sayıda test çözer. Tüm üyelik kayıtları Firestore’dadır."
+        />
+        <AdminCard>
+          <AdminToggle
+            icon="lock-closed-outline"
+            label="Limit uygulansın"
+            description="Kapatırsan herkes sınırsız çözer. Firestore kurallarını dağıtmadan önce geçici kaçış kapısı."
+            value={membershipPolicy.enforce}
+            onValueChange={v =>
+              patchSettings({ membership: { ...membershipPolicy, enforce: v } })
+            }
+          />
+          <AdminStepper
+            label="Ücretsiz test / ders"
+            description="Ders başına çözülebilen test sayısı. Tarih için 1, Türkçe için 1 ayrı hak tanınır."
+            value={membershipPolicy.freeTestsPerCourse}
+            min={0}
+            max={20}
+            onChange={v =>
+              patchSettings({
+                membership: { ...membershipPolicy, freeTestsPerCourse: v },
+              })
+            }
+            suffix="test"
+          />
+          <AdminToggle
+            icon="cloud-outline"
+            label="VIP durumu Firestore’dan okunsun"
+            description="Açıkken üyelik belgesindeki `vip`/`vipPlan`/`vipExpiresAt` esas alınır. Kapatırsan yalnızca bu cihazın yerel etiketi geçerli."
+            value={membershipPolicy.cloudVip}
+            onValueChange={v => patchSettings({ membership: { ...membershipPolicy, cloudVip: v } })}
+          />
+          <AdminToggle
+            icon="people-outline"
+            label="Panel listesi Firestore üyelerini göstersin"
+            description="Kullanıcılar ekranı demo kayıtlar yerine `memberships` koleksiyonundaki gerçek belgeleri listeler."
+            value={membershipPolicy.cloudMembers}
+            onValueChange={v =>
+              patchSettings({ membership: { ...membershipPolicy, cloudMembers: v } })
+            }
+          />
+          <AdminStepper
+            label="Yeni kayıt deneme VIP"
+            description="Kaydolacak üyelere tanınacak gün sayısı (0 = deneme yok)."
+            value={membershipPolicy.defaultTrialDays}
+            min={0}
+            max={90}
+            onChange={v =>
+              patchSettings({ membership: { ...membershipPolicy, defaultTrialDays: v } })
+            }
+            suffix="gün"
+          />
+          <AdminToggle
+            icon="hourglass-outline"
+            label="Kayıtlar onay beklesin"
+            description="Yeni üyeler `pending` durumunda oluşur; sen onaylayana kadar erişim kısıtlı kalır."
+            value={membershipPolicy.requireApproval}
+            onValueChange={v =>
+              patchSettings({ membership: { ...membershipPolicy, requireApproval: v } })
+            }
+          />
+          <AdminRow
+            icon="person-badge-outline"
+            title="Üyelik paneli"
+            subtitle="Üye oluştur, düzenle, plan/rol değiştir, sil — doğrudan Firestore’a yazar"
+            onPress={() => navigation.navigate('AdminMembership')}
+            badge={membershipPolicy.cloudMembers ? 'bulut' : 'yerel'}
           />
         </AdminCard>
 

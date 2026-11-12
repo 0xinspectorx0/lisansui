@@ -11,6 +11,9 @@ interface CourseCardProps {
   solvedTestsCount: number;
   accuracyPercent: number | null;
   onPress: () => void;
+  /** Free membership quota is exhausted for this course. */
+  quotaBlocked?: boolean;
+  remainingTests?: number;
 }
 
 export const CourseCard: React.FC<CourseCardProps> = ({
@@ -20,6 +23,8 @@ export const CourseCard: React.FC<CourseCardProps> = ({
   solvedTestsCount,
   accuracyPercent,
   onPress,
+  quotaBlocked,
+  remainingTests,
 }) => {
   const { colors } = useAppTheme();
   const accent = colors.isDark ? course.accentDark : course.accentLight;
@@ -83,6 +88,36 @@ export const CourseCard: React.FC<CourseCardProps> = ({
             {activeTopicsCount} hazır konu • {totalQuestions.toLocaleString('tr-TR')} soru
             {solvedTestsCount > 0 ? ` • ${solvedTestsCount} test çözüldü` : ''}
           </Text>
+
+          {quotaBlocked || (remainingTests !== undefined && Number.isFinite(remainingTests)) ? (
+            <View style={styles.quotaRow}>
+              <View
+                style={[
+                  styles.quotaChip,
+                  {
+                    backgroundColor: quotaBlocked ? colors.warningSoft : colors.primarySoft,
+                    borderColor: quotaBlocked ? colors.warning : 'transparent',
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={quotaBlocked ? 'lock-closed' : 'gift-outline'}
+                  size={11}
+                  color={quotaBlocked ? colors.warning : colors.primary}
+                />
+                <Text
+                  style={[
+                    styles.quotaChipText,
+                    { color: quotaBlocked ? colors.warning : colors.primary },
+                  ]}
+                >
+                  {quotaBlocked
+                    ? 'Ücretsiz hak bitti'
+                    : `${remainingTests} ücretsiz test hakkı`}
+                </Text>
+              </View>
+            </View>
+          ) : null}
         </View>
 
         <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
@@ -92,6 +127,18 @@ export const CourseCard: React.FC<CourseCardProps> = ({
 };
 
 const styles = StyleSheet.create({
+  quotaRow: { marginTop: 6 },
+  quotaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  quotaChipText: { fontSize: 10.5, fontWeight: '900' },
   card: {
     borderRadius: 16,
     borderWidth: 1,

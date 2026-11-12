@@ -51,6 +51,32 @@ export interface AdminUser {
   note: string;
   /** Marks the profile that belongs to this device (drives VIP gating in-app). */
   isLocal?: boolean;
+  /**
+   * Firestore document id when this row mirrors a real cloud member
+   * (`memberships/{remoteId}`). Undefined = local-only fixture row.
+   */
+  remoteId?: string;
+  /** Row mirrors a cloud member but the last write was rejected by rules. */
+  pendingSync?: boolean;
+  testsCompleted?: number;
+  questionsSolved?: number;
+}
+
+export interface MembershipConfig {
+  /** Master switch: enforce "free members solve N tests per course". */
+  enforce: boolean;
+  freeTestsPerCourse: number;
+  /**
+   * Read the VIP flag from the signed-in member's Firestore document instead of
+   * the local device profile. Turn off to test gates on a device without an account.
+   */
+  cloudVip: boolean;
+  /** Sync the admin panel's user list against the `memberships` collection. */
+  cloudMembers: boolean;
+  /** Days granted when a new sign-up is created (0 = none). */
+  defaultTrialDays: number;
+  /** When true a sign-up also has to be approved (status = pending) by an admin. */
+  requireApproval: boolean;
 }
 
 export interface AdminSettings {
@@ -86,7 +112,18 @@ export interface AdminSettings {
     shuffleQuestions: boolean;
     shuffleOptions: boolean;
   };
+  /** Membership + quota policy; the member records themselves live in Firestore. */
+  membership: MembershipConfig;
 }
+
+export const DEFAULT_MEMBERSHIP: MembershipConfig = {
+  enforce: true,
+  freeTestsPerCourse: 1,
+  cloudVip: true,
+  cloudMembers: true,
+  defaultTrialDays: 0,
+  requireApproval: false,
+};
 
 export interface AdminActivity {
   id: string;
@@ -150,6 +187,7 @@ export const DEFAULT_SETTINGS: AdminSettings = {
     shuffleQuestions: true,
     shuffleOptions: false,
   },
+  membership: { ...DEFAULT_MEMBERSHIP },
 };
 
 function isoDaysFromNow(days: number): string {
@@ -360,6 +398,7 @@ function createDefaultState(): AdminState {
       vipGates: { ...DEFAULT_SETTINGS.vipGates },
       featureFlags: { ...DEFAULT_SETTINGS.featureFlags },
       quizDefaults: { ...DEFAULT_SETTINGS.quizDefaults },
+      membership: { ...DEFAULT_MEMBERSHIP },
     },
     activity: [],
     savedAt: null,
@@ -467,6 +506,10 @@ export async function hydrateAdminState(): Promise<void> {
           quizDefaults: {
             ...def.settings.quizDefaults,
             ...(parsed.settings?.quizDefaults || {}),
+          },
+          membership: {
+            ...def.settings.membership,
+            ...(parsed.settings?.membership || {}),
           },
         },
         activity: Array.isArray(parsed.activity) ? parsed.activity : [],
@@ -650,6 +693,29 @@ export function writeAdminState(next: AdminState): void {
 }
 
 /** How many scopes are currently overridden — used by the dashboard. */
+/**
+ * Mirror a finished test onto the local device profile so the admin panel's
+ * own row shows real usage (cloud members get their numbers from Firestore).
+ */
+export function bumpLocalUsage(
+  users: AdminUser[],
+  _courseId: string,
+  stats: { total: number; correct: number; wrong: number }
+): AdminUser[] {
+  return users.map(u => {
+    if (!u.isLocal) return u;
+    return {
+      ...u,
+      solved: u.solved + stats.total,
+      net: u.net + stats.correct - stats.total * 0.25,
+      streak: Math.max(1, u.streak),
+      lastActiveAt: new Date().toISOString().slice(0, 10),
+      testsCompleted: (u.testsCompleted ?? 0) + 1,
+      questionsSolved: (u.questionsSolved ?? 0) + stats.total,
+    };
+  });
+}
+
 export function countOverrides(s: AdminState = state): {
   courses: number;
   topics: number;
@@ -667,4 +733,63 @@ export function countOverrides(s: AdminState = state): {
     questions: Object.keys(s.content.questions).length,
     tips: s.content.tips !== null,
   };
+}
+
+/**
+ * Mirrors the Firestore `memberships` collection into the admin user list so the
+ * panel edits/creates real cloud records (id stays addressable via `remoteId`).
+ * Local demo rows that do not exist in the cloud are dropped.
+ */
+export function syncMembersIntoAdmin(
+  members: {
+    id: string;
+    email: string;
+    displayName: string;
+    role: AdminRole;
+    /** MembershipStatus from lib/membership — kept as string to avoid a store->domain import cycle. */
+    status: string;
+    vip: boolean;
+    vipPlan: VipPlan;
+    vipExpiresAt: string;
+    createdAt: string;
+    lastLoginAt: string;
+    city: string;
+    exam: string;
+    note: string;
+    testsCompleted: number;
+    questionsSolved: number;
+    netSum: number;
+    pendingSync?: boolean;
+  }[]
+): { keptLocal: number; cloud: number } {
+  const local = state.users.find(u => u.isLocal);
+  const mapped: AdminUser[] = members.map(m => ({
+    id: `cloud_${m.id}`,
+    remoteId: m.id,
+    name: m.displayName || m.email,
+    email: m.email,
+    role: m.role,
+    status: (m.status === 'pending' || m.status === 'active' || m.status === 'banned'
+      ? m.status
+      : 'suspended') as UserStatus,
+    vip: m.vip,
+    vipPlan: m.vipPlan,
+    vipExpiresAt: m.vipExpiresAt || null,
+    joinedAt: (m.createdAt || '').slice(0, 10) || '—',
+    lastActiveAt: (m.lastLoginAt || '').slice(0, 10) || '—',
+    solved: m.questionsSolved,
+    net: Math.round(m.netSum * 10) / 10,
+    streak: 0,
+    exam: m.exam,
+    city: m.city,
+    note: m.note,
+    pendingSync: m.pendingSync,
+    testsCompleted: m.testsCompleted,
+  }));
+  const next = local ? [local, ...mapped] : mapped;
+  updateAdminState(s => ({ ...s, users: next }), {
+    icon: 'cloud-upload-outline',
+    label: `Üyelikler Firestore’dan senkronize edildi (${mapped.length} kayıt)`,
+  });
+  return { keptLocal: local ? 1 : 0, cloud: mapped.length };
 }

@@ -6,12 +6,18 @@ import { useNavigation } from '@react-navigation/native';
 
 import { useAppTheme } from '../../lib/theme';
 import { useAdmin, type VipGateKey } from '../../lib/AdminContext';
+import { useMembership } from '../../lib/MembershipContext';
 import { AdminButton } from './ui';
 
-/** True when the admin switched this gate on and the local profile is not VIP. */
+/**
+ * True when the admin switched this gate on and the current member is not VIP.
+ * VIP state comes from the Firestore membership document (or the local admin
+ * profile when the panel disables cloud VIP), never from a cached flag.
+ */
 export function useVipLocked(gate: VipGateKey): boolean {
   const admin = useAdmin();
-  return admin.isVipGated(gate);
+  const { isVip } = useMembership();
+  return !!admin.settings.vipGates[gate] && !isVip;
 }
 
 /**
@@ -44,7 +50,7 @@ export const VipLockedScreen: React.FC<{ title: string; hint?: string }> = ({
           <View style={styles.actions}>
             <AdminButton
               small
-              label={admin.isVip ? 'VIP’i kapat' : 'Bu cihaza VIP ver'}
+              label={admin.isVip ? 'Yerel VIP’i kapat' : 'Bu cihaza VIP ver (yerel)'}
               icon="diamond-outline"
               tone="ghost"
               onPress={() => admin.toggleVip(admin.localUser.id)}
@@ -62,10 +68,10 @@ export const VipLockedScreen: React.FC<{ title: string; hint?: string }> = ({
   );
 };
 
-/** Compact crown pill for headers. */
+/** Compact VIP pill for headers — reflects the cloud membership record. */
 export const VipBadge: React.FC = () => {
   const { colors } = useAppTheme();
-  const { isVip } = useAdmin();
+  const { isVip } = useMembership();
   if (!isVip) return null;
   return (
     <View style={[styles.badge, { backgroundColor: colors.warningSoft, borderColor: colors.border }]}>

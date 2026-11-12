@@ -47,6 +47,13 @@ const SHORTCUTS: {
     route: 'AdminUsers',
   },
   {
+    id: 'membership',
+    label: 'Üyelik Paneli',
+    desc: 'Firestore üyeleri, plan/durum, test limiti',
+    icon: 'person-badge-outline',
+    route: 'AdminMembership',
+  },
+  {
     id: 'tips',
     label: 'Hap Bilgiler',
     desc: 'Listeyi düzenle ve sırala',

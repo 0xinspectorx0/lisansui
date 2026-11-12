@@ -1,11 +1,13 @@
-import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { useAppTheme } from '../lib/theme';
 import { useAdmin } from '../lib/AdminContext';
 import { AdminRole, AdminUser, UserStatus, VipPlan } from '../lib/adminStore';
+import { useMembership } from '../lib/MembershipContext';
+import { normalizeEmail, type MemberDoc } from '../lib/membership';
 import {
   AdminButton,
   AdminCard,
@@ -80,18 +82,117 @@ const emptyUser = (): AdminUser => ({
   note: '',
 });
 
+/** Maps an edited panel row back onto its Firestore member document. */
+function memberFromRow(row: AdminUser, doc: MemberDoc): MemberDoc {
+  return {
+    ...doc,
+    email: row.email || doc.email,
+    emailNormalized: normalizeEmail(row.email || doc.email),
+    displayName: row.name,
+    role:
+      row.role === 'owner' || row.role === 'admin'
+        ? 'admin'
+        : row.role === 'editor'
+        ? 'editor'
+        : 'user',
+    status: row.status === 'active' ? 'active' : 'suspended',
+    city: row.city,
+    exam: row.exam,
+    note: row.note,
+    vip: row.vip,
+    vipPlan: row.vipPlan,
+    vipExpiresAt: row.vipExpiresAt ?? '',
+    testsCompleted: row.testsCompleted ?? doc.testsCompleted,
+    questionsSolved: row.questionsSolved ?? doc.questionsSolved,
+  };
+}
+
 export const AdminUsersScreen: React.FC = () => {
   const { colors } = useAppTheme();
   const navigation = useNavigation<any>();
   const admin = useAdmin();
+  const membership = useMembership();
   const { users, settings, isVip, localUser } = admin;
+
+  const [vipDays, setVipDays] = useState(30);
+
+  /** Firestore is the source of truth: a row that mirrors a member document is
+   *  written back to `memberships/{id}` instead of only living in the panel. */
+  const cloudError = (message: string) => {
+    Alert.alert('Firestore yazılamadı', message);
+  };
+
+  const setVipFor = useCallback(
+    async (row: AdminUser, enable: boolean, plan: VipPlan = 'monthly', days = 30) => {
+      if (row.remoteId) {
+        const res = await membership.adminSetVip(row.remoteId, enable ? plan : 'free');
+        if (!res.ok) cloudError(res.error);
+        return;
+      }
+      if (enable) admin.grantVip(row.id, plan, days);
+      else admin.revokeVip(row.id);
+    },
+    [admin, membership]
+  );
+
+  const setStatusFor = useCallback(
+    async (row: AdminUser, status: UserStatus) => {
+      if (row.remoteId) {
+        const res = await membership.adminSetStatus(
+          row.remoteId,
+          status === 'active' ? 'active' : 'suspended'
+        );
+        if (!res.ok) cloudError(res.error);
+        return;
+      }
+      admin.setUserStatus(row.id, status);
+    },
+    [admin, membership]
+  );
+
+  const bulkVipFor = useCallback(
+    async (ids: string[], enable: boolean) => {
+      const rows = users.filter(u => ids.includes(u.id));
+      const local = rows.filter(r => !r.remoteId);
+      if (local.length) {
+        admin.bulkVip(
+          local.map(r => r.id),
+          enable,
+          enable ? (vipDays >= 365 ? 'yearly' : 'monthly') : 'free',
+          vipDays
+        );
+      }
+      for (const row of rows.filter(r => r.remoteId)) {
+        const res = await membership.adminSetVip(
+          row.remoteId!,
+          enable ? (vipDays >= 365 ? 'yearly' : 'monthly') : 'free'
+        );
+        if (!res.ok) cloudError(res.error);
+      }
+      setSelected({});
+    },
+    [admin, membership, users, vipDays]
+  );
+
+  const deleteFor = useCallback(
+    async (row: AdminUser) => {
+      if (row.remoteId) {
+        const res = await membership.adminDeleteMember(row.remoteId);
+        if (!res.ok) {
+          cloudError(res.error);
+          return;
+        }
+      }
+      admin.deleteUser(row.id);
+    },
+    [admin, membership]
+  );
 
   const [filter, setFilter] = useState<FilterId>('all');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [editor, setEditor] = useState<{ mode: 'add' | 'edit'; draft: AdminUser } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<AdminUser | null>(null);
-  const [vipDays, setVipDays] = useState(30);
 
   const list = useMemo(() => {
     const q = search.trim().toLocaleLowerCase('tr-TR');
@@ -117,11 +218,31 @@ export const AdminUsersScreen: React.FC = () => {
   const selectedIds = Object.keys(selected).filter(id => selected[id]);
   const vipCount = users.filter(u => u.vip).length;
 
-  const saveUser = () => {
+  const saveUser = async () => {
     if (!editor) return;
     const draft = editor.draft;
     if (!draft.name.trim()) return;
-    admin.upsertUser({ ...draft, name: draft.name.trim(), email: draft.email.trim() });
+    const next = { ...draft, name: draft.name.trim(), email: draft.email.trim() };
+
+    // Cloud rows must be written back to their Firestore document first;
+    // the panel row is only updated when the write succeeded.
+    if (next.remoteId) {
+      const { members } = await membership.adminListMembers();
+      const doc = members.find(m => m.id === next.remoteId);
+      if (!doc) {
+        Alert.alert(
+          'Üye bulunamadı',
+          'Bu satırın Firestore belgesi okunamadı. Listeyi yenileyip tekrar dene.'
+        );
+        return;
+      }
+      const res = await membership.adminUpsertMember(memberFromRow(next, doc));
+      if (!res.ok) {
+        cloudError(res.error);
+        return;
+      }
+    }
+    admin.upsertUser(next);
     setEditor(null);
   };
 
@@ -185,10 +306,7 @@ export const AdminUsersScreen: React.FC = () => {
             icon="diamond"
             label="VIP aç"
             disabled={selectedIds.length === 0}
-            onPress={() => {
-              admin.bulkVip(selectedIds, true, vipDays >= 365 ? 'yearly' : 'monthly', vipDays);
-              setSelected({});
-            }}
+            onPress={() => void bulkVipFor(selectedIds, true)}
           />
           <AdminButton
             small
@@ -196,10 +314,7 @@ export const AdminUsersScreen: React.FC = () => {
             icon="diamond-outline"
             label="VIP kapat"
             disabled={selectedIds.length === 0}
-            onPress={() => {
-              admin.bulkVip(selectedIds, false);
-              setSelected({});
-            }}
+            onPress={() => void bulkVipFor(selectedIds, false)}
           />
         </View>
         <AdminCard pad={10} style={{ marginBottom: 12 }}>
@@ -255,7 +370,7 @@ export const AdminUsersScreen: React.FC = () => {
                       subtitle={`${u.email || '—'} • ${u.city || '—'} • ${u.solved.toLocaleString(
                         'tr-TR'
                       )} soru • net ${u.net} • ${u.streak} gün seri`}
-                      badge={u.isLocal ? 'BU CİHAZ' : undefined}
+                      badge={u.isLocal ? 'BU CİHAZ' : u.remoteId ? 'BULUT' : undefined}
                       onPress={() => setEditor({ mode: 'edit', draft: { ...u } })}
                       right={<RightChevron />}
                     />
@@ -314,7 +429,7 @@ export const AdminUsersScreen: React.FC = () => {
                     icon={u.vip ? 'diamond' : 'diamond-outline'}
                     color={u.vip ? colors.warning : colors.textMuted}
                     size={17}
-                    onPress={() => admin.toggleVip(u.id)}
+                    onPress={() => void setVipFor(u, !u.vip, u.vip ? 'free' : 'monthly', vipDays)}
                   />
                   <AdminIconButton
                     icon={u.role === 'user' ? 'shield-checkmark-outline' : 'person-outline'}
@@ -326,7 +441,7 @@ export const AdminUsersScreen: React.FC = () => {
                     color={u.status === 'active' ? colors.danger : colors.success}
                     size={17}
                     onPress={() =>
-                      admin.setUserStatus(u.id, u.status === 'active' ? 'suspended' : 'active')
+                      void setStatusFor(u, u.status === 'active' ? 'suspended' : 'active')
                     }
                   />
                   <AdminIconButton
@@ -535,7 +650,7 @@ export const AdminUsersScreen: React.FC = () => {
         message={`${confirmDelete?.name || ''} kaydı yönetim listesinden silinecek.`}
         onCancel={() => setConfirmDelete(null)}
         onConfirm={() => {
-          if (confirmDelete) admin.deleteUser(confirmDelete.id);
+          if (confirmDelete) void deleteFor(confirmDelete);
           setConfirmDelete(null);
         }}
       />

@@ -15,6 +15,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { ThemeProvider, useAppTheme } from './lib/theme';
 import { AppProvider, useApp } from './lib/AppContext';
 import { AdminProvider } from './lib/AdminContext';
+import { MembershipProvider } from './lib/MembershipContext';
 import { MainTabParamList, RootStackParamList } from './lib/types';
 
 import { HomeScreen } from './screens/HomeScreen';
@@ -32,6 +33,10 @@ import { AdminUsersScreen } from './screens/AdminUsersScreen';
 import { AdminTipsScreen } from './screens/AdminTipsScreen';
 import { AdminCoursesScreen } from './screens/AdminCoursesScreen';
 import { AdminSettingsScreen } from './screens/AdminSettingsScreen';
+import { AdminMembershipScreen } from './screens/AdminMembershipScreen';
+import { AuthScreen } from './screens/AuthScreen';
+import { ProfileScreen } from './screens/ProfileScreen';
+import { MembershipPaywallScreen } from './screens/MembershipPaywallScreen';
 import { AdminMaintenanceGate } from './components/admin/MaintenanceGate';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -221,6 +226,13 @@ function RootNavigator() {
             <Stack.Screen name="AdminTips" component={AdminTipsScreen} />
             <Stack.Screen name="AdminCourses" component={AdminCoursesScreen} />
             <Stack.Screen name="AdminSettings" component={AdminSettingsScreen} />
+            <Stack.Screen name="AdminMembership" component={AdminMembershipScreen} />
+            <Stack.Screen name="Auth" component={AuthScreen} />
+            <Stack.Screen name="Profile" component={ProfileScreen} />
+            <Stack.Screen
+              name="MembershipPaywall"
+              component={MembershipPaywallScreen}
+            />
           </Stack.Navigator>
         </NavigationContainer>
       </View>
@@ -252,7 +264,9 @@ export default function App() {
       <ThemeProvider>
         <AppProvider>
           <AdminProvider>
-            <RootNavigator />
+            <MembershipProvider>
+              <RootNavigator />
+            </MembershipProvider>
           </AdminProvider>
         </AppProvider>
       </ThemeProvider>

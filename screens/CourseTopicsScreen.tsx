@@ -16,6 +16,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { COURSES, useAppTheme } from '../lib/theme';
 import { useApp } from '../lib/AppContext';
 import { useAdmin } from '../lib/AdminContext';
+import { useMembership } from '../lib/MembershipContext';
 import { Question, RootStackParamList, TopicMeta } from '../lib/types';
 import {
   buildCourseMixedQuestions,
@@ -31,7 +32,10 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
   const course = COURSES[courseId];
   const { colors } = useAppTheme();
   const admin = useAdmin();
+  const membership = useMembership();
   const questionsPerTest = admin.settings.quizDefaults.questionCount;
+  const remainingTests = membership.remainingFor(courseId);
+  const quotaBlocked = Number.isFinite(remainingTests) && remainingTests <= 0;
   const {
     catalog,
     results,
@@ -124,6 +128,10 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
 
   const handleStartCourseMixed = async () => {
     if (startingMixed) return;
+    if (!membership.canStart(courseId, topics)) {
+      navigation.navigate('MembershipPaywall');
+      return;
+    }
     setStartingMixed(true);
     try {
       const qs = await buildCourseMixedQuestions(
@@ -204,6 +212,38 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
           <Text style={[styles.mixedBtnText, { color: accent }]}>Karma 20</Text>
         </Pressable>
       </View>
+
+      {Number.isFinite(remainingTests) && (
+        <Pressable
+          onPress={() => navigation.navigate('MembershipPaywall')}
+          style={[
+            styles.quotaStrip,
+            {
+              backgroundColor: quotaBlocked ? colors.warningSoft : colors.primarySoft,
+              borderColor: colors.border,
+            },
+          ]}
+        >
+          <Ionicons
+            name={quotaBlocked ? 'lock-closed' : 'gift-outline'}
+            size={15}
+            color={quotaBlocked ? colors.warning : colors.primary}
+          />
+          <Text
+            style={[
+              styles.quotaStripText,
+              { color: quotaBlocked ? colors.warning : colors.primary },
+            ]}
+          >
+            {quotaBlocked
+              ? `${course.title} dersinde ücretsiz test hakkın bitti — tekrar çözebilirsin`
+              : `Ücretsiz hak: ${course.title} dersinde ${remainingTests} test`}
+          </Text>
+          <Text style={[styles.quotaStripCta, { color: colors.primary }]}>
+            {quotaBlocked ? 'Seçenekler' : 'VIP'}
+          </Text>
+        </Pressable>
+      )}
 
       {/* Search + Mode Filter */}
       <View style={styles.controlsArea}>
@@ -452,6 +492,10 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
 
       <TopicTestSheet
         questionsPerTest={questionsPerTest}
+        remainingTests={remainingTests}
+        memberId={membership.member?.id ?? 'device:guest'}
+        quotaCourseLabel={course.title}
+        onRequestMembership={() => navigation.navigate('MembershipPaywall')}
         timedMinutesPerTest={
           admin.settings.quizDefaults.timedMinutes > 0
             ? admin.settings.quizDefaults.timedMinutes
@@ -543,6 +587,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  quotaStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 13,
+    borderWidth: 1,
+  },
+  quotaStripText: { flex: 1, fontSize: 11.5, fontWeight: '800', lineHeight: 16 },
+  quotaStripCta: { fontSize: 11.5, fontWeight: '900', textDecorationLine: 'underline' },
   controlsArea: {
     paddingHorizontal: 16,
     paddingBottom: 8,
