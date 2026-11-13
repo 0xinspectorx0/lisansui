@@ -87,6 +87,8 @@ interface AdminContextValue {
   loadQuestions: (courseId: CourseId, docId: string) => Promise<Question[]>;
   materializeQuestions: (courseId: CourseId, docId: string) => Promise<Question[]>;
   createQuestion: (courseId: CourseId, docId: string, q: Question) => void;
+  /** Tek işlemde birden çok soru: tek yazma + tek etkinlik kaydı (toplu ekleme). */
+  createQuestions: (courseId: CourseId, docId: string, list: Question[]) => void;
   updateQuestion: (
     courseId: CourseId,
     docId: string,
@@ -405,6 +407,22 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         icon: 'help-outline',
         label: 'Yeni soru eklendi',
       });
+    },
+    [editList]
+  );
+
+  const createQuestions = useCallback(
+    (courseId: CourseId, docId: string, list: Question[]) => {
+      if (!list.length) return;
+      editList(
+        courseId,
+        docId,
+        cur => [...cur, ...list.map(q => ({ ...q, courseId, topicDocId: docId }))],
+        {
+          icon: 'albums-outline',
+          label: `${list.length} soru toplu eklendi`,
+        }
+      );
     },
     [editList]
   );
@@ -890,6 +908,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       loadQuestions,
       materializeQuestions,
       createQuestion,
+      createQuestions,
       updateQuestion,
       deleteQuestion,
       duplicateQuestion,
@@ -948,6 +967,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       loadQuestions,
       materializeQuestions,
       createQuestion,
+      createQuestions,
       updateQuestion,
       deleteQuestion,
       duplicateQuestion,
