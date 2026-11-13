@@ -208,6 +208,6 @@ const styles = StyleSheet.create({
   courseMeta: { fontSize: 11.5, marginTop: 3, fontWeight: '700' },
   courseActions: { flexDirection: 'row', alignItems: 'center', gap: 0 },
   karmaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  footer: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  footer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
   iconPick: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingBottom: 4 },
 });

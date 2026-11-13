@@ -509,6 +509,11 @@ const styles = StyleSheet.create({
   randomBtnText: {
     fontSize: 13,
     fontWeight: '700',
+    // flex:1 kutusunda payını komşularla bölüşür: uzun etiket ("Bu Konudan
+    // Karışık 20 Soru Çöz") kutudan taşınca yan butonun üstüne biniyordu —
+    // shrink + merkez, satırın buton içinde sarmasını sağlar.
+    textAlign: 'center',
+    flexShrink: 1,
   },
   resetBtn: {
     width: 42,

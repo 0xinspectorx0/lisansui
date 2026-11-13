@@ -507,8 +507,8 @@ const styles = StyleSheet.create({
   },
   miniValue: { fontSize: 14, fontWeight: '900' },
   miniLabel: { fontSize: 10.5 },
-  progressActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  progressActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
   expiring: { fontSize: 11.5, fontWeight: '700', marginTop: 10, lineHeight: 16 },
-  footer: { flexDirection: 'row', gap: 8 },
+  footer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   footerHint: { fontSize: 11, lineHeight: 16, marginTop: 8 },
 });

@@ -773,6 +773,7 @@ const styles = StyleSheet.create({
   },
   clockControls: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   playBtn: {
@@ -823,6 +824,7 @@ const styles = StyleSheet.create({
   },
   modalBtnRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   modalCancel: {

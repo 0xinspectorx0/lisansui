@@ -1310,7 +1310,7 @@ export const AdminSettingsScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  dataRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  dataRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   dataHint: { fontSize: 11, lineHeight: 16, marginTop: 4 },
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
   codeBox: { maxHeight: 260, marginBottom: 6 },

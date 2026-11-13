@@ -186,5 +186,5 @@ const styles = StyleSheet.create({
   bannerText: { fontSize: 11.5, lineHeight: 16, marginTop: 3 },
   quotaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 10, paddingHorizontal: 4 },
   iconWrap: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  ctaRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  ctaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
 });

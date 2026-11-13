@@ -689,7 +689,7 @@ const styles = StyleSheet.create({
   quickRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 5 },
   quickActions: { flexDirection: 'row', alignItems: 'center', gap: 0 },
-  footer: { flexDirection: 'row', gap: 8, marginTop: 16 },
+  footer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16 },
   statsRow: { gap: 0, marginTop: 4 },
-  sheetActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
 });

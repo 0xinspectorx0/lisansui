@@ -535,6 +535,7 @@ const styles = StyleSheet.create({
   },
   qCardActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
   },

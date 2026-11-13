@@ -562,6 +562,7 @@ const styles = StyleSheet.create({
   },
   dualRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   dualBtn: {

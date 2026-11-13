@@ -231,7 +231,7 @@ export const AdminTipsScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  topRow: { flexDirection: 'row', gap: 6, marginBottom: 12 },
+  topRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
   rowActions: { flexDirection: 'row', alignItems: 'center', gap: 0 },
   resetRow: { marginTop: 16, gap: 6 },
   resetHint: { fontSize: 11.5, lineHeight: 16, textAlign: 'center' },
