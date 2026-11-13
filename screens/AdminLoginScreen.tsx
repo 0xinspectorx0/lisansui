@@ -222,7 +222,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   keyText: { fontSize: 17, fontWeight: '800' },
-  actions: { flexDirection: 'row', gap: 8, marginTop: 18, width: '100%', maxWidth: 320 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 18, width: '100%', maxWidth: 320 },
   backRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 14 },
   backText: { fontSize: 12.5, fontWeight: '700' },
 });

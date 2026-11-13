@@ -201,13 +201,31 @@ export const AdminButton: React.FC<{
         opacity: disabled ? 0.45 : pressed ? 0.86 : 1,
         borderWidth: tone === 'neutral' ? 1 : 0,
         borderColor: colors.border,
+        // flex verilmediyse buton İÇERİĞİNE göre boyutlanır.
+        // Tuzak: eskiden burada sabit `flexBasis: 0` + `flexGrow: 0` vardı; RN'de
+        // flexShrink'in varsayılanı 0 olduğu için kutu 0 px kalıyor, ikon+yazı
+        // kutunun dışına taşıp YANDAKİ butonların üstüne biniyordu (ve yazı
+        // "So / ek" diye bir-iki harfe kıvrılıyordu).
         flexGrow: flex ? 1 : 0,
-        flexBasis: 0,
+        flexShrink: flex ? 1 : 0,
+        flexBasis: flex ? 0 : 'auto',
         ...(style || {}),
       })}
     >
       {!!icon && <Ionicons name={icon as any} size={small ? 14 : 17} color={fg} />}
-      <Text style={{ fontSize: small ? 12.5 : 14, fontWeight: '800', color: fg }}>{label}</Text>
+      <Text
+        style={{
+          fontSize: small ? 12.5 : 14,
+          fontWeight: '800',
+          color: fg,
+          // flex=true olduğunda payı komşularla bölüşür: yazı kutudan taşmak
+          // yerine sarar (textAlign merkezde kalır).
+          textAlign: 'center',
+          flexShrink: 1,
+        }}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 };

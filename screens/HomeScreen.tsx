@@ -1141,6 +1141,7 @@ const styles = StyleSheet.create({
   },
   tipActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
@@ -1158,6 +1159,7 @@ const styles = StyleSheet.create({
   },
   tipNavPair: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 6,
   },

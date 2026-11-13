@@ -318,9 +318,9 @@ const styles = StyleSheet.create({
   courseTabText: { fontSize: 12, fontWeight: '800' },
   courseTabCount: { fontSize: 10.5 },
   rowActions: { flexDirection: 'row', alignItems: 'center', gap: 1 },
-  actions: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
   resetRow: { marginTop: 16, gap: 6 },
   resetHint: { fontSize: 11.5, lineHeight: 16, textAlign: 'center' },
   sheetHint: { fontSize: 12, lineHeight: 17 },
-  sheetSortRow: { flexDirection: 'row', gap: 6, paddingTop: 2, paddingBottom: 4 },
+  sheetSortRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingTop: 2, paddingBottom: 4 },
 });

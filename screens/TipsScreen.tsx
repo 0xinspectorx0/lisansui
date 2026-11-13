@@ -605,6 +605,7 @@ const styles = StyleSheet.create({
   },
   deckControls: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 10,
     marginTop: 16,

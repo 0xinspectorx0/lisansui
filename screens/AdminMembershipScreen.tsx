@@ -722,8 +722,8 @@ const styles = StyleSheet.create({
   meta: { fontSize: 11.5, marginTop: 6, fontWeight: '600' },
   note: { fontSize: 11, marginTop: 4, fontStyle: 'italic' },
   planRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  actions: { flexDirection: 'row', gap: 6, marginTop: 10 },
-  sheetFooter: { flexDirection: 'row', gap: 8 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
+  sheetFooter: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 });
 
 export default AdminMembershipScreen;

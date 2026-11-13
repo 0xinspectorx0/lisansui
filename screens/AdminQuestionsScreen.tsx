@@ -604,7 +604,7 @@ const styles = StyleSheet.create({
   bulkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
   rowActions: { flexDirection: 'row', alignItems: 'center', gap: 0 },
   resetRow: { marginTop: 14 },
-  footLinks: { flexDirection: 'row', gap: 8, marginTop: 16 },
+  footLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16 },
   optionsLabel: { fontSize: 11.5, fontWeight: '800', marginBottom: 8 },
   optionRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   letter: {
