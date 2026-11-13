@@ -244,6 +244,9 @@ ok(/Authorization: `Bearer \$\{token\}`/.test(api), 'firestoreApi: idToken beare
 ok(/const token = await currentIdToken\(\);/.test(api), 'firestoreApi: token yenileme dahil alınıyor');
 ok(ctx.includes('authMode: auth.isAuthConfigured(),') && ctx.includes('sendPasswordReset,'), 'context: authMode + sendPasswordReset dışa açık');
 ok(/await auth\.ensureAuthConfigLoaded\(\);\n        await auth\.currentIdToken\(\)\.catch\(\(\) => null\);/.test(ctx), 'boot: cihaz anahtarı + oturum yüklenmeden Firestore isteği gitmiyor');
+ok(/const missingDoc =\s*!found\.ok && authMode && \(found\.reason === 'notfound' \|\| found\.reason === 'denied'\)/.test(ctx), 'katı modda 403 dönen eksik belge “yok” sayılıyor (yeni üye girişebilir)');
+ok(/missingDoc && created\.reason === 'denied'/.test(ctx), 'okuma+yazma reddedilirse “kural yayınlanmamış” uyarısı veriliyor');
+ok(!/function selfCreateOk[\s\S]{0,200}?[^.]resource\.data\./.test(rules), 'selfCreateOk eksik belgeye bakmıyor → okuma yasağı ilk girişte yazmayı engellemiyor');
 ok((ctx.match(/await auth\.ensureAuthConfigLoaded\(\);/g) || []).length >= 4, 'kayıt/giriş/parola akışları da yüklenmeyi bekliyor');
 const panelSrc = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
 ok(/setDeviceApiKey/.test(panelSrc) && /clearDeviceApiKey/.test(panelSrc), 'panel anahtarı kaydet/kaldır kullanıyor');
