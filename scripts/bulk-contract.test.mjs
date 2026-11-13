@@ -15,7 +15,15 @@ const ok = (cond, label, extra = '') => {
 };
 
 const B = await import('/tmp/bulkBundle.mjs');
-const { parseQuestionBulk, formatBulkSummary, sampleBulkText, resolveAnswerToken, BULK_LETTERS } = B;
+const {
+  parseQuestionBulk,
+  formatBulkSummary,
+  sampleBulkText,
+  resolveAnswerToken,
+  parseIndexRange,
+  findDuplicateQuestionIds,
+  BULK_LETTERS,
+} = B;
 
 const T = lines => lines.join('\n');
 const allMsg = r => r.issues.map(i => i.message).join(' | ');
@@ -327,6 +335,37 @@ ok(/soru hazır/.test(formatBulkSummary(parseQuestionBulk(sampleBulkText()))), '
   ok(res.items.length === 0 && res.notes.length > 0, 'anlamsız giriş notla açıklanıyor', JSON.stringify({ i: res.items.length, n: res.notes }));
 }
 
+console.log('\x1b[1m[3b] toplu silme yardımcıları\x1b[0m');
+{
+  const r = parseIndexRange('1-5, 12, 20-24', 40);
+  ok(JSON.stringify(r.indexes) === JSON.stringify([0, 1, 2, 3, 4, 11, 19, 20, 21, 22, 23]), 'küme ve aralık 0 tabanlı indekse döndü', JSON.stringify(r.indexes));
+  ok(!r.invalid.length, 'geçersiz token yok', JSON.stringify(r.invalid));
+}
+{
+  ok(JSON.stringify(parseIndexRange('9-5', 20).indexes) === '[4,5,6,7,8]', 'tersten aralık düzeltiliyor');
+  ok(JSON.stringify(parseIndexRange('38-45', 40).indexes) === '[37,38,39]', 'uçtan taşan aralık kırpılıyor');
+  ok(parseIndexRange('41-60', 40).invalid.length === 1, 'tamamen dışarıdaki aralık geçersiz sayılıyor', JSON.stringify(parseIndexRange('41-60', 40)));
+  ok(parseIndexRange('0', 40).invalid.length === 1, '0 kabul edilmiyor (1 tabanlı)');
+  ok(JSON.stringify(parseIndexRange(' 3. , [4]  #5 ; 7 ', 10).indexes) === '[2,3,4,6]', 'süsler ve ayraçlar tolere ediliyor');
+  ok(parseIndexRange('', 10).indexes.length === 0 && parseIndexRange('', 10).invalid.length === 0, 'boş giriş boş sonuç');
+  ok(parseIndexRange('abc', 10).invalid.length === 1, 'anlamsız token bildiriliyor');
+  ok(JSON.stringify(parseIndexRange('5 5 5', 10).indexes) === '[4]', 'tekrar eden numaralar tekilleşiyor');
+  ok(parseIndexRange('1-9999', 3).indexes.length === 3, 'dev aralık liste uzunluğunda duruyor');
+}
+{
+  const list = [
+    { id: 'a', question: 'Başkent hangisidir?' },
+    { id: 'b', question: 'Lozan hangi yıl?' },
+    { id: 'c', question: 'Başkent hangisidir ?' },
+    { id: 'd', question: 'BAŞKENT HANGİSİDİR?' },
+    { id: 'e', question: '' },
+    { id: 'f', question: '' },
+  ];
+  ok(JSON.stringify(findDuplicateQuestionIds(list)) === '["c","d"]', 'iyi normalleşmiş tekrarlarda ilk kayıt kalıyor', JSON.stringify(findDuplicateQuestionIds(list)));
+  ok(findDuplicateQuestionIds([]).length === 0, 'boş liste güvenli');
+  ok(findDuplicateQuestionIds(list.slice(0, 2)).length === 0, 'tekrar yoksa kimse silinmiyor');
+}
+
 console.log('\x1b[1m[4] panel bağı (kaynak düzeyinde)\x1b[0m');
 const fs = await import('node:fs');
 const screen = fs.readFileSync('screens/AdminQuestionsScreen.tsx', 'utf8');
@@ -349,6 +388,32 @@ ok(/diğerleri için dokun/.test(screen), 'tek satıra kullanıcıya ipucu veril
 ok(/pickerList: \{ maxHeight: 300 \}/.test(screen), 'uzun konu listesi kaydırılabilir yükseklikte');
 ok(/createQuestions: \(courseId: CourseId, docId: string, list: Question\[\]\) => void;/.test(ctx), 'context ara-yüzünde createQuestions var');
 ok(/label: `\$\{list\.length\} soru toplu eklendi`/.test(ctx), 'etkinlik kaydı toplu eklemeyi raporluyor');
+// ---- toplu SİLME bölümü ----
+ok(/const \[selectMode, setSelectMode\] = useState\(false\)/.test(screen), 'seçim modu kapalı başlıyor');
+ok(/admin\.deleteQuestions\(courseId, docId, ids\)/.test(screen), 'silme tek mutation ile yapılıyor');
+ok(/type: 'delete' \| 'restore' \| 'bulk' \| 'topic-all' \| 'dups'/.test(screen), 'onay türleri genişletildi');
+ok(/visible=\{confirm\?\.type === 'bulk'\}/.test(screen), 'seçilenleri sil onay modalı var');
+ok(/visible=\{confirm\?\.type === 'topic-all'\}/.test(screen), 'tüm konuyu sil onay modalı var');
+ok(/visible=\{confirm\?\.type === 'dups'\}/.test(screen), 'tekrar ayıklama onay modalı var');
+ok(/\`\$\{selectedIds\.length\} soru silinsin mi\?\`/.test(screen), 'onay başlığında tam sayı yazıyor');
+ok(/Numaralar: \$\{numberListText\(selectedNumbers\)\}/.test(screen), 'onayda silinecek soru numaraları listeleniyor');
+ok(/setLastDeleted\(doomed\)/.test(screen) && /undoBulkDelete/.test(screen), 'silinenler tutulup geri alınabiliyor');
+ok(/admin\.createQuestions\(courseId, docId, list\)/.test(screen), 'geri-al mevcut toplu ekleme yolunu kullanıyor');
+ok(/const \[rangeMode, setRangeMode\] = useState<'set' \| 'add'>\('set'\)/.test(screen), 'aralık yerine mi ekleniyor mu seçilebiliyor');
+ok(/parseIndexRange\(rangeText, \(source \|\| \[\]\)\.length\)/.test(screen), 'aralık kaynak sırasına göre çözümleniyor');
+ok(/useEffect\(\(\) => \{\s*\/\/ Konu\/ders değişince seçim ve geri-al listesi anlamsızlaşır\./.test(screen), 'konu değişince seçim temizleniyor');
+ok(/disabled=\{!docId \|\| \(!rows\.length && !selectMode\)\}/.test(screen), 'her şey silinse de seçim modundan çıkılabilir');
+{
+  const order = screen.indexOf('const realIndex = (indexInView: number)');
+  const used = screen.indexOf('range.indexes.map(n => byNumber.get(n + 1))');
+  ok(order >= 0 && used > order, 'realIndex, aralık çözümlemesinden ÖNCE tanımlı (TDZ yok)');
+}
+ok(
+  (screen.match(/<View style=\{styles\.bulkRow\}>/g) || []).length >= 3 &&
+    /^  bulkRow: \{ flexDirection: 'row', flexWrap: 'wrap', gap: \d+/m.test(screen),
+  'yeni düğme satırları PR #4 sözleşmesine uyuyor (flexWrap)'
+);
+ok(!/overflow: 'visible'/.test(screen), 'taşma hilesi yok (Android ripple sözleşmesi)');
 {
   const src = fs.readFileSync('lib/questionBulk.ts', 'utf8');
   ok(!/from 'react-native'|require\('react-native'\)/.test(src), 'ayrıştırıcı saf TS — RN import yok (node’da test edilebilir)');

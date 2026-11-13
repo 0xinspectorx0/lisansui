@@ -13,3 +13,5 @@ keyfile*.json
 
 # içerik taşıma ilerleme durumu (yeniden çalıştırmada kullanılır)
 .migrate-state.json
+# test gölge dosyaları (npm run test:ui üretir ve siler)
+screens/_uishadow-*.tsx

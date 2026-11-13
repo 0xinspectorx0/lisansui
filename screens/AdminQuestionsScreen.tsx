@@ -9,7 +9,9 @@ import { CourseId, Question } from '../lib/types';
 import { ALL_COURSE_IDS, questionKey } from '../lib/adminStore';
 import {
   BULK_DEFAULT_MAX,
+  findDuplicateQuestionIds,
   formatBulkSummary,
+  parseIndexRange,
   parseQuestionBulk,
   sampleBulkText,
 } from '../lib/questionBulk';
@@ -83,9 +85,18 @@ export const AdminQuestionsScreen: React.FC = () => {
   const [bulkText, setBulkText] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
   const bulk = useMemo(() => parseQuestionBulk(bulkText, { maxItems: BULK_DEFAULT_MAX }), [bulkText]);
-  const [confirm, setConfirm] = useState<{ type: 'delete' | 'restore'; index: number } | null>(
-    null
-  );
+  const [confirm, setConfirm] = useState<
+    { type: 'delete' | 'restore' | 'bulk' | 'topic-all' | 'dups'; index: number } | null
+  >(null);
+  // Toplu silme: liste "seçim moduna" girer, satıra dokunmak seçer/bırakır.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [rangeText, setRangeText] = useState('');
+  /** Aralık seçimi mevcut seçimin yerine mi geçer, ona mı eklenir? */
+  const [rangeMode, setRangeMode] = useState<'set' | 'add'>('set');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  /** Son toplu silmenin kayıtları: aynı oturumda listeye sonuna eklenerek geri alınır. */
+  const [lastDeleted, setLastDeleted] = useState<Question[] | null>(null);
   const [moveSheet, setMoveSheet] = useState<{ index: number } | null>(null);
 
   const override = admin.state.content.questions[questionKey(courseId, docId)] ?? null;
@@ -225,14 +236,98 @@ export const AdminQuestionsScreen: React.FC = () => {
     }
   };
 
-  /** Sheet şu an "toplu ekleme" ekranını mı gösteriyor? */
-  const isBulkAdd = sheet?.mode === 'add' && addMode === 'bulk';
-
   const realIndex = (indexInView: number) => {
     const q = rows[indexInView];
     if (!q) return -1;
     return (source || []).findIndex(item => String(item.id) === String(q.id));
   };
+
+  /* ---------------- Toplu silme (çoklu seçim) ---------------- */
+
+  /** Konudaki tüm soru id'leri (filtreden bağımsız). */
+  const allIds = useMemo(() => (source || []).map(q => String(q.id)), [source]);
+  /** Seçimden, hâlâ listede olan id'ler (araç: silme sırasında kayan satır kalmaz). */
+  const selectedIds = useMemo(() => {
+    const live = new Set(allIds);
+    return selected.filter(id => live.has(id));
+  }, [selected, allIds]);
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const dupIds = useMemo(() => findDuplicateQuestionIds(source || []), [source]);
+  /** "1-5, 12" → kaynak numarası üzerinden satır indeksleri (filtre açıkken de doğru). */
+  const range = useMemo(() => parseIndexRange(rangeText, (source || []).length), [rangeText, source]);
+  const rangeRows = useMemo(() => {
+    if (!range.indexes.length) return [];
+    const byNumber = new Map<number, number>();
+    rows.forEach((_, i) => byNumber.set(realIndex(i) + 1, i));
+    return range.indexes.map(n => byNumber.get(n + 1)).filter((v): v is number => v != null);
+  }, [range, rows, realIndex]);
+
+  useEffect(() => {
+    // Konu/ders değişince seçim ve geri-al listesi anlamsızlaşır.
+    setSelected([]);
+    setRangeText('');
+    setLastDeleted(null);
+  }, [courseId, docId]);
+
+  /** Seçilen soruların listeye soldaki numaraları — onay öncesi göz gezdirmek için. */
+  const selectedNumbers = useMemo(() => {
+    const set = selectedSet;
+    return (source || []).map((q, i) => (set.has(String(q.id)) ? i + 1 : 0)).filter(Boolean);
+  }, [source, selectedSet]);
+  const numberListText = (nums: number[]) =>
+    nums.length <= 14
+      ? nums.join(', ')
+      : `${nums.slice(0, 14).join(', ')} … (+${nums.length - 14} soru)`;
+
+  const undoBulkDelete = async () => {
+    const list = lastDeleted;
+    if (!list?.length || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await mutate(() => admin.createQuestions(courseId, docId, list));
+      setLastDeleted(null);
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  const toggleSelect = (id: string) =>
+    setSelected(cur => (cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]));
+
+  const toggleSelectMode = () => {
+    setSelectMode(prev => {
+      if (prev) {
+        setSelected([]);
+        setRangeText('');
+      }
+      return !prev;
+    });
+  };
+
+  const applyRange = () => {
+    const ids = rangeRows.map(i => String(rows[i]?.id)).filter(Boolean);
+    if (!ids.length) return;
+    setSelected(cur => (rangeMode === 'add' ? Array.from(new Set([...cur, ...ids])) : ids));
+  };
+
+  const runBulkDelete = async (ids: string[]) => {
+    if (!ids.length || deleteBusy) return;
+    const drop = new Set(ids);
+    const doomed = (source || []).filter(q => drop.has(String(q.id)));
+    setDeleteBusy(true);
+    try {
+      await mutate(() => admin.deleteQuestions(courseId, docId, ids));
+      setLastDeleted(doomed);
+      setSelected(cur => cur.filter(id => !ids.includes(id)));
+      setRangeText('');
+      setConfirm(null);
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  /** Sheet şu an "toplu ekleme" ekranını mı gösteriyor? */
+  const isBulkAdd = sheet?.mode === 'add' && addMode === 'bulk';
 
   return (
     <AdminScaffold
@@ -400,6 +495,14 @@ export const AdminQuestionsScreen: React.FC = () => {
             />
             <AdminButton
               small
+              tone={selectMode ? 'danger' : 'neutral'}
+              label={selectMode ? 'Seçim modunu kapat' : 'Toplu sil'}
+              icon={selectMode ? 'close-outline' : 'trash-bin-outline'}
+              onPress={toggleSelectMode}
+              disabled={!docId || (!rows.length && !selectMode)}
+            />
+            <AdminButton
+              small
               tone="neutral"
               label="Sırayı karıştır"
               icon="shuffle"
@@ -417,6 +520,135 @@ export const AdminQuestionsScreen: React.FC = () => {
               }
             />
           </View>
+
+          {selectMode && (
+            <AdminCard pad={10}>
+              <Text style={{ fontSize: 12.5, fontWeight: '800', color: colors.text, marginBottom: 4 }}>
+                Konunun sorularını toplu silme
+              </Text>
+              <Text style={[styles.bulkHint, { color: colors.textSecondary }]}>
+                {currentTopic ? currentTopic.name : 'Bu konu'} · {allIds.length} soru ·{' '}
+                {selectedIds.length} seçili. Satıra dokununca seçilir; soldaki numaralarla aralık
+                da verebilirsin. Silme TEK yazmadır ve yalnızca bu konuyu etkiler.
+              </Text>
+
+              <View style={styles.bulkRow}>
+                <AdminButton
+                  small
+                  tone="neutral"
+                  label={`Tümünü seç (${allIds.length})`}
+                  icon="list-outline"
+                  disabled={!allIds.length}
+                  onPress={() => setSelected(allIds)}
+                />
+                <AdminButton
+                  small
+                  tone="neutral"
+                  label={`Görünenleri seç (${rows.length})`}
+                  icon="eye-outline"
+                  disabled={!rows.length || rows.length === allIds.length}
+                  onPress={() => setSelected(rows.map(q => String(q.id)))}
+                />
+                <AdminButton
+                  small
+                  tone="ghost"
+                  label="Seçimi temizle"
+                  icon="close-outline"
+                  disabled={!selectedIds.length && !rangeText}
+                  onPress={() => {
+                    setSelected([]);
+                    setRangeText('');
+                  }}
+                />
+              </View>
+
+              <AdminField
+                label="Soru numarası aralığı"
+                value={rangeText}
+                onChangeText={setRangeText}
+                placeholder="Örn: 1-5, 12, 20-24"
+                autoCapitalize="none"
+                keyboardType="default"
+                hint={
+                  !rangeText.trim()
+                    ? 'Numarasız da seçebilirsin; aralık filtre açıkken bile kaynak sırasını kullanır.'
+                    : range.invalid.length
+                    ? `Geçersiz: ${range.invalid.slice(0, 3).join(', ')}${range.invalid.length > 3 ? ' …' : ''}`
+                    : `${range.indexes.length} numara bulundu · ${rangeRows.length} satır ${rangeMode === 'add' ? 'eklenecek' : 'seçilecek'}`
+                }
+              />
+              <AdminSegmented
+                label="Aralık nasıl uygulansın"
+                value={rangeMode}
+                onChange={id => setRangeMode(id as 'set' | 'add')}
+                options={[
+                  { id: 'set', label: "Yalnız onları seç" },
+                  { id: 'add', label: 'Seçime ekle' },
+                ]}
+              />
+              <View style={styles.bulkRow}>
+                <AdminButton
+                  small
+                  label={rangeMode === 'add' ? 'Aralığı seçime ekle' : 'Aralığı seç'}
+                  icon="checkbox-outline"
+                  disabled={!rangeRows.length}
+                  onPress={applyRange}
+                />
+                <AdminButton
+                  small
+                  tone="neutral"
+                  label="Aralıktan çıkar"
+                  icon="close"
+                  disabled={!rangeRows.length || !selectedIds.length}
+                  onPress={() => setSelected(cur => cur.filter(id => !rangeRows.some(i => String(rows[i]?.id) === id)))}
+                />
+              </View>
+
+              <View style={[styles.bulkRow, { marginTop: 2 }]}>
+                <AdminButton
+                  small
+                  tone="danger"
+                  label={deleteBusy ? 'Siliniyor…' : `Seçilenleri sil (${selectedIds.length})`}
+                  icon="trash-outline"
+                  disabled={!selectedIds.length || deleteBusy}
+                  onPress={() => setConfirm({ type: 'bulk', index: -1 })}
+                />
+                <AdminButton
+                  small
+                  tone="neutral"
+                  label={`Tekrarları ayıkla (${dupIds.length})`}
+                  icon="copy-outline"
+                  disabled={!dupIds.length || deleteBusy}
+                  onPress={() => setConfirm({ type: 'dups', index: -1 })}
+                />
+                <AdminButton
+                  small
+                  tone="neutral"
+                  label="Konunun TÜM sorularını sil"
+                  icon="trash-bin-outline"
+                  disabled={!allIds.length || deleteBusy}
+                  onPress={() => setConfirm({ type: 'topic-all', index: -1 })}
+                />
+              </View>
+
+              {!!lastDeleted?.length && (
+                <View style={[styles.bulkRow, { marginTop: 2 }]}>
+                  <AdminButton
+                    small
+                    tone="success"
+                    label={deleteBusy ? 'Geri alınıyor…' : lastDeleted.length + ' soruyu geri al'}
+                    icon="refresh"
+                    disabled={deleteBusy}
+                    onPress={undoBulkDelete}
+                  />
+                  <Text style={{ fontSize: 11, lineHeight: 16, color: colors.textMuted, flex: 1, minWidth: 140 }}>
+                    Silinen {lastDeleted.length} soru listeye geri eklenir (sona sıralanır) — istersen
+                    “Sırayı karıştır”la düzeltebilirsin.
+                  </Text>
+                </View>
+              )}
+            </AdminCard>
+          )}
 
           {loading ? (
             <AdminCard>
@@ -451,9 +683,11 @@ export const AdminQuestionsScreen: React.FC = () => {
           ) : (
             <>
               <AdminSectionTitle
-                label={`${rows.length} soru`}
+                label={`${rows.length} soru${selectMode ? ` · ${selectedIds.length} seçili` : ''}`}
                 hint={
-                  override
+                  selectMode
+                    ? 'Seçim modu açık — satıra dokun, seçtiklerini tek yazmada sil.'
+                    : override
                     ? 'Yerel liste etkin — sıralama, düzenleme ve silmeler anında uygulamaya yansır.'
                     : 'Liste canlı veriden okunuyor; ilk düzenlemede kopyası oluşturulur.'
                 }
@@ -461,6 +695,28 @@ export const AdminQuestionsScreen: React.FC = () => {
               <AdminCard pad={4}>
                 {rows.map((q, i) => {
                   const index = realIndex(i);
+                  const qid = String(q.id);
+                  if (selectMode) {
+                    const checked = selectedSet.has(qid);
+                    return (
+                      <AdminRow
+                        key={qid}
+                        compact
+                        icon={checked ? 'checkbox' : 'square-outline'}
+                        iconColor={checked ? colors.primary : colors.textMuted}
+                        style={
+                          checked
+                            ? { backgroundColor: colors.primarySoft, borderRadius: 12 }
+                            : undefined
+                        }
+                        title={`${index + 1}. ${q.question}`}
+                        subtitle={`${q.options.length} şık · Doğru: ${
+                          LETTERS[q.answer] || '?'
+                        }${checked ? ' — seçili' : ''}`}
+                        onPress={() => toggleSelect(qid)}
+                      />
+                    );
+                  }
                   return (
                     <AdminRow
                       key={String(q.id)}
@@ -807,6 +1063,37 @@ export const AdminQuestionsScreen: React.FC = () => {
           setConfirm(null);
           if (q) await mutate(() => admin.deleteQuestion(courseId, docId, q.id));
         }}
+      />
+
+      <AdminConfirm
+        visible={confirm?.type === 'bulk'}
+        title={`${selectedIds.length} soru silinsin mi?`}
+        message={`“${currentTopic ? currentTopic.name : docId}” konusundan ${selectedIds.length} soru kaldırılacak.${
+          selectedNumbers.length ? ` Numaralar: ${numberListText(selectedNumbers)}.` : ''
+        } Konuda ${Math.max(0, allIds.length - selectedIds.length)} soru kalır. Silme tek yazma olarak uygulanır; bu panel açıkken “geri al” düğmesiyle dönebilirsin.`}
+        confirmLabel={deleteBusy ? 'Siliniyor…' : 'Seçilenleri sil'}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => runBulkDelete(selectedIds)}
+      />
+
+      <AdminConfirm
+        visible={confirm?.type === 'dups'}
+        title={`${dupIds.length} yinelenen soru silinsin mi?`}
+        message={`Aynı soru metni birden fazla kez duruyor. İlk kayıt korunur, ${dupIds.length} tekrar kayıt “${
+          currentTopic ? currentTopic.name : docId
+        }” havuzundan kaldırılır.`}
+        confirmLabel={deleteBusy ? 'Ayıklanıyor…' : 'Tekrarları sil'}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => runBulkDelete(dupIds)}
+      />
+
+      <AdminConfirm
+        visible={confirm?.type === 'topic-all'}
+        title="Konunun TÜM soruları silinsin mi?"
+        message={`“${currentTopic ? currentTopic.name : docId}” konusundaki ${allIds.length} sorunun tamamı havuzdan kaldırılacak ve öğrenciler bu konuda test göremez. Onay için önce listeden “Tümünü seç” yapıp sayıyı gördüğünden emin ol; bu panel açıkken geri alabilirsin.`}
+        confirmLabel={deleteBusy ? 'Siliniyor…' : `${allIds.length} soruyu sil`}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => runBulkDelete(allIds)}
       />
 
       <AdminConfirm

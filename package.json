@@ -47,7 +47,8 @@
     "migrate:content": "node scripts/migrate-content.mjs",
     "migrate:content:selftest": "node scripts/migrate-content.mjs --self-test",
     "test:copy": "bash scripts/copy-contract.sh",
-    "test:bulk": "bash scripts/bulk-contract.sh"
+    "test:bulk": "bash scripts/bulk-contract.sh",
+    "test:ui": "bash scripts/admin-ui.sh"
   },
   "private": true
 }

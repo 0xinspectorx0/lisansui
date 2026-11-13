@@ -96,6 +96,8 @@ interface AdminContextValue {
     patch: Partial<Question>
   ) => void;
   deleteQuestion: (courseId: CourseId, docId: string, id: string) => void;
+  /** Çoklu seçimden silme: N id = TEK yazma + TEK etkinlik kaydı. */
+  deleteQuestions: (courseId: CourseId, docId: string, ids: string[]) => void;
   duplicateQuestion: (courseId: CourseId, docId: string, id: string) => void;
   moveQuestion: (courseId: CourseId, docId: string, index: number, dir: -1 | 1) => void;
   shuffleQuestions: (courseId: CourseId, docId: string) => void;
@@ -445,6 +447,20 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         icon: 'trash-outline',
         label: 'Soru silindi',
       });
+    },
+    [editList]
+  );
+
+  const deleteQuestions = useCallback(
+    (courseId: CourseId, docId: string, ids: string[]) => {
+      const drop = new Set((ids || []).map(String));
+      if (!drop.size) return;
+      editList(
+        courseId,
+        docId,
+        list => list.filter(q => !drop.has(String(q.id))),
+        { icon: 'trash-outline', label: `${drop.size} soru toplu silindi` }
+      );
     },
     [editList]
   );
@@ -911,6 +927,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createQuestions,
       updateQuestion,
       deleteQuestion,
+      deleteQuestions,
       duplicateQuestion,
       moveQuestion,
       shuffleQuestions,
@@ -970,6 +987,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createQuestions,
       updateQuestion,
       deleteQuestion,
+      deleteQuestions,
       duplicateQuestion,
       moveQuestion,
       shuffleQuestions,

@@ -275,6 +275,9 @@ function optionRunAhead(lines: string[], from: number, n = 8): boolean {
  *     Soru metnindeki paragraf yapısı `\n\n` olarak KORUNUR (test ekranında
  *     öncüller alt alta görünür).
  *
+ * Ayrıca iki saf yardımcı toplu SİLME bölümünde kullanılır: `parseIndexRange`
+ * ("1-5, 12" → indeksler) ve `findDuplicateQuestionIds` (yinelenen soru id’leri).
+ *
  * Bu dosya bilinçli olarak React Native'den hiçbir şey import etmiyor:
  * scripts/bulk-contract.sh ile doğrudan node'da test ediliyor.
  */
@@ -757,6 +760,63 @@ export function formatBulkSummary(res: BulkParseResult): string {
   if (res.format === 'text') bits.push(`${res.blocks} kayıt tarandı`);
   if (res.notes.length) bits.push(res.notes[0]);
   return bits.join(' · ');
+}
+
+/**
+ * "1-5, 12, 20-24" gibi soru numarası kümelerini 0 tabanlı indeks listesine çevirir.
+ * Toplu SİLME seçiminde kullanılır: sorularını numaralayarak yazan biri için
+ * "şu numaraları sil" demek, uzun listede tek tek dokunmaktan hızlıdır.
+ *  - ayraç: virgül, noktalı virgül, boşluk, satır sonu
+ *  - küme: `5-9`, `5 - 9`, `5..9`; tersten yazım (`9-5`) düzeltilir
+ *  - `1.`, `[3]`, `#4` gibi süsler soyulur
+ *  - 1..max dışına taşan küme kırpılır, tümü dışarıdaysa `invalid`a yazılır
+ */
+export function parseIndexRange(spec: string, max: number): { indexes: number[]; invalid: string[] } {
+  const indexes = new Set<number>();
+  const invalid: string[] = [];
+  const cleaned = (spec || '')
+    .replace(/[;,\n\r\t]+/g, ' ')
+    .replace(/\.\./g, '-')
+    .replace(/\s*[-–—]\s*/g, '-')
+    .split(/\s+/)
+    .map(t => ({ raw: t, token: t.replace(/^[^\d]+/, '').replace(/[^\d-]+$/, '').trim() }))
+    .filter(t => t.token || /\d|[A-Za-zÇĞİÖŞÜçğıöşü]/.test(t.raw));
+  for (const { raw, token } of cleaned) {
+    const m = /^(\d{1,5})(?:-(\d{1,5}))?$/.exec(token);
+    if (!m) {
+      // "abc", "1x" gibi okunamayan parça: yok saymak yerine söyle.
+      invalid.push(token || raw);
+      continue;
+    }
+    const a = Number(m[1]);
+    const b = m[2] != null && m[2] !== '' ? Number(m[2]) : a;
+    const from = Math.min(a, b);
+    const to = Math.max(a, b);
+    if (to < 1 || from > max) {
+      invalid.push(`${token} (1–${max} dışında)`);
+      continue;
+    }
+    for (let n = Math.max(1, from); n <= Math.min(max, to); n++) indexes.add(n - 1);
+  }
+  return { indexes: [...indexes].sort((x, y) => x - y), invalid };
+}
+
+/**
+ * Yinelenen soruların id'leri: aynı metin (noktalama/büyük-küçük farkı yok sayılarak)
+ * tekrar geçiyorsa İKİNCİ ve sonrakiler döner — ilki korunur. Toplu ayıklama için.
+ */
+export function findDuplicateQuestionIds(
+  list: { id: string | number; question: string }[]
+): string[] {
+  const seen = new Set<string>();
+  const dup: string[] = [];
+  for (const item of list || []) {
+    const key = norm(String(item?.question || ''));
+    if (key.length < 4) continue;
+    if (seen.has(key)) dup.push(String(item.id));
+    else seen.add(key);
+  }
+  return dup;
 }
 
 /** "Örnek biçimi doldur" düğmesinin doldurduğu metin — panelde kullanılan kalıp. */
