@@ -126,6 +126,26 @@ Anahtarı iki yerden birine verebilirsin:
 5. `.env.local` repoya girmesin: depoda `.gitignore` var (`.env`, `.env.*`,
    `!.env.example`). `.env.example` şablonu commit'lenebilir, içinde kendi değerlerin
    olmamalı.
+6. **Web'e yayın (Vercel)** — repo kökündeki `vercel.json` her şeyi anlatıyor; Vercel
+   proje ayarlarına dokunmana gerek yok (vercel.json, dashboard'daki Build/Output
+   ayarlarını ezer):
+   `installCommand: npm ci` → `buildCommand: npm run build`
+   (= `expo export --platform web --output-dir dist`) → `outputDirectory: dist`.
+   - `dist/` **gitignore'da**dır. Build emri eksik kalırsa (`buildCommand: null` gibi)
+     Vercel'in servis edeceği hiçbir şey olmaz ve depo kaynak dosyalarına düşer;
+     belirti: site açılmaz, tarayıcı `app.json` benzeri bir dosya indirir. Bu ayarı
+     bozma; build komutu her zaman `npm run build` kalsın.
+   - Proje kimliği pakette `app.json`'dan gelir, bu yüzden Vercel'de **environment
+     variable tanımlaman gerekmez**. `.env.local`'ı Vercel'e de vermen şart değil.
+   - Build'i yerelde gör: `npm run build` → `npm run build:serve`
+     (`npx serve dist -s -l 8081`; dev sunucusu çalışıyorsa portu değiştir).
+   - Yayın sonrası tek satırlık kontrol:
+     `curl -sI https://<ad>.vercel.app/ | grep -i '^content-type'` → `text/html` olmalı.
+     `application/json` ya da `octet-stream` dönüyorsa build alınmamıştır.
+   - `apiKey`'i kısıtlı kullanacaksan (Console → Google Cloud → APIs → Credentials →
+     API key → Application restrictions) `*.vercel.app` referrer'ını ekle; Vercel
+     domain'i Firebase'in "Authorized domains" listesini ancak popup/redirect ile
+     giriş yaparsan gerektirir — biz doğrudan REST kullandığımız için gerektirmiyor.
 
 ### B) `app.json` → `expo.extra.firestore`
 ```json
