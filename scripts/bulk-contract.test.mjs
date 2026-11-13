@@ -148,6 +148,16 @@ console.log('\x1b[1m[0] kullanıcının kalıbı: numaralı soru + öncüller + 
   ok(res.items[1].answer === 0, '"Cevap: 1" → A şıkkı', String(res.items[1].answer));
 }
 {
+  // şık satırına yapışmış cevap + cevap satırına yapışmış açıklama
+  const res = parseQuestionBulk(
+    T(['1. Başkent hangisidir?', 'A) İstanbul', 'B) Ankara', 'C) İzmir', 'E) Sivas Cevap: B', 'Açıklama: 13 Ekim 1923.'])
+  );
+  ok(res.items.length === 1 && res.items[0].options.length === 4, `yapışık "Cevap:" şıkkından ayrıldı (${res.items.length})`, JSON.stringify(res.issues));
+  ok(res.items[0]?.options[3] === 'Sivas' && res.items[0]?.answer === 1, 'atlanan harf (D) şığı bozmadı, cevap B', JSON.stringify(res.items[0]));
+  const res2 = parseQuestionBulk(T(['2. İkinci soru?', 'A) bir', 'B) iki', 'Cevap: A Açıklama: Çünkü öyledir.']));
+  ok(res2.items[0]?.answer === 0 && res2.items[0]?.explanation === 'Çünkü öyledir.', 'aynı satırdaki açıklama da ayrılıyor', JSON.stringify(res2.items[0] ?? res2.issues));
+}
+{
   // açıklama birden çok satıra sarılmış + sonda numarasız devam
   const res = parseQuestionBulk(
     T([
@@ -200,6 +210,7 @@ console.log('\x1b[1m[1] düz metin blokları\x1b[0m');
   ok(res.items[0].answer === 1 && res.items[0].options.length === 4, 'Doğru: B → 1. indeks, 4 şık');
   ok(/^13 Ekim 1923/.test(res.items[0].explanation), 'Açıklama satırı alındı', res.items[0].explanation);
   ok(res.items[1].answer === 2, 'Cevap: 3 → 1 tabanlı okundu (2. indeks)', String(res.items[1].answer));
+  ok(res.items[1].question === 'Lozan Antlaşması hangi yıl imzalandı?', 'numarasız ikinci sorunun gövdesi temiz', res.items[1].question);
   ok(res.items[1].explanation === '', 'açıklama olmayan soru boş diziyle döner');
 }
 {

@@ -341,6 +341,10 @@ const EXPLAIN_LINE =
 /** `1.` `12)` `Soru 3:` `Soru No 4 -` — kaydı bölen soru numarası. */
 const QNUM = /^\s*(?:(?:soru|question|problem)\s*(?:no\.?|numarası|#)?\s*[:.\-–—]?\s*)?(\d{1,3})\s*(?:[.)\]]|:|\s)\s*(.*)$/i;
 const QUESTION_PREFIX = /^\s*(?:soru|question|problem)\s*[:#.\-–—]?\s*/i;
+/** Şık satırına yapışmış cevap/açıklama kuyruğu: `E) ... Cevap: E` / `Cevap: E Açıklama: X`. */
+const GLUED_TAIL =
+  /^(.*\S)[ \t]+((?:do[ğg]ru\s*cevap|do[ğg]ru|cevap|answer|yan[ıi]t|correct(?:\s*answer)?|key|a[çc]ıklama|explanation|gerek[çc]e)\s*[:=]\s*\S.*)$/i;
+const TAIL_LABEL = /^(do[ğg]ru\s*cevap|do[ğg]ru|cevap|answer|yan[ıi]t|correct(?:\s*answer)?|key|a[çc]ıklama|explanation|gerek[çc]e)\s*[:=]/i;
 /** Satır başında kalabilecek `12)` / `Soru 3:` öneki (rakam + ayraç şart). */
 const QNUM_STRIP = /^\s*(?:(?:soru|question)\s*\d{1,3}\s*[:.\-–—]?\s*)?\d{1,3}\s*[.)]\s*/i;
 /** Markdown yatay çizgi: `---`, `***`, `___` */
@@ -455,6 +459,14 @@ function scanTextRecords(text: string): { records: TextRec[]; numberingFixed: nu
       }
     }
 
+    // 1b) Şık satırına yapışmış "Cevap: X" / "Açıklama: X" kuyruğunu ayır.
+    const glued = GLUED_TAIL.exec(line);
+    if (glued && (LINE_LETTER.test(glued[1]) || ANSWER_LINE.test(glued[1]))) {
+      lines.splice(i + 1, 0, glued[2]);
+      line = glued[1].trim();
+      if (!line) continue;
+    }
+
     // 2) Cevap / açıklama etiketleri
     const ans = ANSWER_LINE.exec(line);
     if (ans) {
@@ -487,7 +499,10 @@ function scanTextRecords(text: string): { records: TextRec[]; numberingFixed: nu
       if (letterM && letterM[2].trim()) {
         const rank = OPTION_RANK.indexOf(letterM[1].toUpperCase());
         const startsFresh = rank === 0 && rec.optLines.length > 0;
-        if (rank >= 0 && (rank === rec.optLines.length || (rec.optLines.length === 0 && rank < BULK_LETTERS.length))) {
+        // Harf, sıradaki (veya daha ilerideki) yerden başlıyorsa şıktır: atlanmış harf
+        // (A, B, C, E) şık kaybetmez; önceki harfe dönüş (C'den sonra B)) şık sayılmaz.
+        // Roman rakamlar (I, II, III) OPTION_RANK'ta yok → şık sanılmaz.
+        if (rank >= 0 && rank >= rec.optLines.length && rank < OPTION_RANK.length) {
           const st = takeStarMarker(stripMd(letterM[2]));
           if (st.marked && rec.marked === null) rec.marked = rec.optLines.length;
           rec.optLines.push(st.text.trim());
