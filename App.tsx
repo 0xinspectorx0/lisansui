@@ -3,7 +3,7 @@ import { Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   NavigationContainer,
   DefaultTheme,
@@ -45,6 +45,10 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 function MainTabsNavigator() {
   const { colors } = useAppTheme();
   const { mistakes } = useApp();
+  // Alt güvenli alan (iPhone çentiği/Android gezinme çubuğu) — kütüphanenin kendi
+  // `paddingBottom: insets.bottom` değeri biz tabBarStyle'da paddingBottom yazınca
+  // eziliyor; bu yüzden inset'i kendimiz ekliyoruz. Web'de 0 (iOS Safari'de >0).
+  const insets = useSafeAreaInsets();
 
   return (
     <Tab.Navigator
@@ -52,17 +56,44 @@ function MainTabsNavigator() {
         headerShown: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
+        // ── Neden bu sayılar? ────────────────────────────────────────────────
+        // bottom-tabs'ın uikit dikey yerleşimi her sekmede şunu harcıyor:
+        //   .tabVerticalUiKit padding 5+5 = 10  +  TabBarIcon kutusu 28 (simge 22
+        //   değil, KUTU 28)  +  etiket satır kutusu 16  =  54px İÇERİK gerekir.
+        // Eskiden: height 62 − paddingTop 6 − paddingBottom 8 = 48 → 6px eksikti
+        // ve etiketin altı (ğ/ı/Ç kuyrukları) kesiliyordu. Şimdi 64 − 3 − 3 = 58
+        // içerik → 4px pay kalıyor; justifyContent:'center' bu payı eşit dağıtıyor
+        // (rozetin tepe kesimi yok: rozet ikon kutusunun 3px üstüne taşıyor, 7px pay).
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: 62,
-          paddingTop: 6,
-          paddingBottom: 8,
+          height: 64 + insets.bottom,
+          paddingTop: 3,
+          paddingBottom: 3 + insets.bottom,
+          // Not: çubuğa `overflow: 'visible'` vermiyoruz — yer açıldığı için
+          // gerek yok ve Android'deki borderless ripple'ı çubuğun dışına taşırır.
+          // Kesilmeyi engelleyen şey etiketin kendi overflow'u (aşağıda).
+          // Sekme çubuğu ekran içeriğinin ÜSTÜNDE kalsın.
+          zIndex: 20,
         },
         tabBarLabelStyle: {
           fontSize: 11.5,
           fontWeight: '700',
+          // Satır kutusunu kendimiz veriyoruz: tema `fonts.medium` yalnız
+          // fontFamily/fontWeight taşıyor, yükseklik tarayıcıya kalıyordu.
+          lineHeight: 16,
+          flexShrink: 0,
+          overflow: 'visible',
+          // Yazı katman olarak en üstte (zIndex konumlanmış öğede çalışır).
+          position: 'relative',
+          zIndex: 10,
+        },
+        // Kütüphane simge+etiket bloğunu buton içinde üstten başlatıyor
+        // (.tabVerticalUiKit justifyContent:'flex-start'); bu stil o bloğu
+        // sekmenin tam yüksekliğinde ortalamasını sağlar.
+        tabBarItemStyle: {
+          justifyContent: 'center',
         },
       }}
     >
