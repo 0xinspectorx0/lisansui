@@ -590,8 +590,11 @@ export const AdminQuestionsScreen: React.FC = () => {
             <>
               <Text style={[styles.bulkHint, { color: colors.textSecondary }]}>
                 Hedef konu: {currentTopic ? currentTopic.name : '—'} · tek seferde en fazla{' '}
-                {BULK_DEFAULT_MAX} soru. İki biçim kabul edilir: JSON dizisi veya boş satırla
-                ayrılmış metin blokları.
+                {BULK_DEFAULT_MAX} soru. Her soru numarayla başlasın (1., 2., 3. …); numara
+                eksik/atlamsa sırayla tamamlarız. Soru bölümü birden çok paragraf olabilir
+                (öncüller dahil) — aradaki boş satırlar soruyu bölmez. Sonra şıklar A) … E),
+                sonra {"Cevap: B"} ve Açıklama: satırları. **kalın**, # başlık ve satır arası
+                ayraç gibi markdown artıkları temizlenir. JSON dizisi de kabul edilir.
               </Text>
               <AdminField
                 label="Soru listesi"
@@ -600,7 +603,9 @@ export const AdminQuestionsScreen: React.FC = () => {
                 multiline
                 autoCapitalize="none"
                 hint={formatBulkSummary(bulk)}
-                placeholder={'Hangisi...?\nA) ilk\nB) ikinci\nC) üçüncü\nD) dördüncü\nDoğru: B\nAçıklama: kısa gerekçe\n\n'}
+                placeholder={
+                  '1. Aşağıdakilerden hangisi...?\n\n   I. Birinci öncül.\n\n   II. İkinci öncül.\n\nYukarıdaki öncüllerden hangileri doğrudur?\n\nA) Yalnız I\n\nB) Yalnız II\n\nC) I ve II\n\nCevap: C\n\nAçıklama: Kısa gerekçe buraya yazılır.'
+                }
               />
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
                 <AdminButton
@@ -628,7 +633,7 @@ export const AdminQuestionsScreen: React.FC = () => {
                   {bulk.items.slice(0, 3).map((q, i) => (
                     <View key={`prev-${i}`} style={{ marginBottom: 8 }}>
                       <Text numberOfLines={2} style={{ fontSize: 12, fontWeight: '700', color: colors.text, lineHeight: 17 }}>
-                        {i + 1}. {q.question}
+                        {q.no}. {q.question}
                       </Text>
                       <Text numberOfLines={1} style={{ fontSize: 11, color: colors.success, marginTop: 2 }}>
                         Doğru: {LETTERS[q.answer]}) {q.options[q.answer]}
@@ -637,6 +642,16 @@ export const AdminQuestionsScreen: React.FC = () => {
                         {q.options.length} şık{q.explanation ? ' · açıklama var' : ' · açıklama yok'}
                       </Text>
                     </View>
+                  ))}
+                </AdminCard>
+              )}
+
+              {bulk.notes.length > 0 && (
+                <AdminCard pad={10}>
+                  {bulk.notes.map((n, i) => (
+                    <Text key={`note-${i}`} style={[styles.bulkIssue, { color: colors.textSecondary }]}>
+                      {n}
+                    </Text>
                   ))}
                 </AdminCard>
               )}
