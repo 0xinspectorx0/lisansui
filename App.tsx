@@ -16,6 +16,7 @@ import { ThemeProvider, useAppTheme } from './lib/theme';
 import { AppProvider, useApp } from './lib/AppContext';
 import { AdminProvider } from './lib/AdminContext';
 import { MembershipProvider } from './lib/MembershipContext';
+import { hasPendingAuthRedirect } from './lib/authClient';
 import { MainTabParamList, RootStackParamList } from './lib/types';
 
 import { HomeScreen } from './screens/HomeScreen';
@@ -238,6 +239,7 @@ function RootNavigator() {
         <NavigationContainer theme={navTheme}>
           <StatusBar style={colors.isDark ? 'light' : 'dark'} />
           <Stack.Navigator
+            initialRouteName={hasPendingAuthRedirect() ? 'Auth' : 'MainTabs'}
             screenOptions={{
               headerShown: false,
               animation: 'slide_from_right',

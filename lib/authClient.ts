@@ -255,6 +255,11 @@ export interface AuthSession {
   refreshToken: string;
   /** epoch ms */
   expiresAt: number;
+  userMetadata?: {
+    displayName?: string;
+    city?: string;
+    exam?: string;
+  };
 }
 
 let memory: AuthSession | null = null;
@@ -562,12 +567,18 @@ function safeParse(text: string): any {
 /** GoTrue yanıtından oturum; `user` yoksa (e-posta doğrulama açık) boş döner. */
 function toSession(data: any, fallbackEmail: string): AuthSession {
   const user = data?.user || {};
+  const meta = user?.user_metadata || data?.user_metadata || {};
   return {
     uid: String(user.id || data?.uid || ''),
     email: String(user.email || data?.email || fallbackEmail || ''),
     idToken: String(data.access_token || ''),
     refreshToken: String(data.refresh_token || ''),
     expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000,
+    userMetadata: {
+      ...(meta.display_name ? { displayName: String(meta.display_name) } : {}),
+      ...(meta.city ? { city: String(meta.city) } : {}),
+      ...(meta.exam ? { exam: String(meta.exam) } : {}),
+    },
   };
 }
 
@@ -588,7 +599,7 @@ export function authErrorMessage(raw: string): string {
   if (/invalid login credentials|invalid credentials|wrong password|password is invalid/i.test(lower))
     return 'E-posta veya parola hatalı.';
   if (/email not confirmed|confirm.*email|verification/i.test(lower))
-    return 'E-posta doğrulaması açık: Supabase → Authentication → Providers → Email → “Confirm email” kapalı olmalı (ya da maildeki bağlantıya dokun).';
+    return 'E-posta adresiniz henüz onaylanmamış. Lütfen e-posta kutunuza (ve spam klasörüne) gelen onay bağlantısına tıklayın.';
   if (/rate limit|too many requests/i.test(lower))
     return 'Çok fazla deneme. Bir süre sonra tekrar dene (Supabase Auth geçici olarak kilitledi).';
   if (/unauthorized|api key|apikey|invalid jwt|jwt expired/i.test(lower))
@@ -606,6 +617,141 @@ export function authErrorMessage(raw: string): string {
   return `Kimlik doğrulama hatası: ${text || 'bilinmiyor'}`;
 }
 
+/* ------------------------------------------- e-posta yönlendirme (redirect) */
+
+export interface AuthRedirectState {
+  kind: 'signup' | 'recovery' | 'error';
+  email?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  tokenHash?: string;
+  rawType?: string;
+  error?: string;
+}
+
+/** Tarayıcıda uygulamanın kendi kök adresi (örn. https://site.vercel.app). */
+export function appRedirectUrl(): string {
+  const win = typeof globalThis !== 'undefined' ? (globalThis as any).window : undefined;
+  const origin = String(win?.location?.origin || '').trim();
+  if (origin && /^https?:\/\//i.test(origin)) return origin;
+  return resolveAuthConfig()?.url || '';
+}
+
+function parseUrlParams(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const clean = String(raw || '').replace(/^[#?]+/, '');
+  if (!clean) return out;
+  for (const part of clean.split('&')) {
+    if (!part) continue;
+    const eq = part.indexOf('=');
+    const k = eq < 0 ? part : part.slice(0, eq);
+    const v = eq < 0 ? '' : part.slice(eq + 1);
+    try {
+      out[decodeURIComponent(k)] = decodeURIComponent(v.replace(/\+/g, ' '));
+    } catch {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function detectInitialAuthRedirect(): AuthRedirectState | null {
+  const win = typeof globalThis !== 'undefined' ? (globalThis as any).window : undefined;
+  if (!win?.location) return null;
+  const hashParams = parseUrlParams(win.location.hash || '');
+  const queryParams = parseUrlParams(win.location.search || '');
+  const params = { ...queryParams, ...hashParams };
+
+  const hasAuthError = Boolean(params.error && (params.error_code || params.error_description || win.location.hash?.includes('error=')));
+  const accessToken = params.access_token || '';
+  const tokenHash = params.token_hash || '';
+  const rawType = String(params.type || '').toLowerCase();
+
+  if (!hasAuthError && !accessToken && !tokenHash && rawType !== 'signup' && rawType !== 'recovery' && rawType !== 'email') {
+    return null;
+  }
+
+  try {
+    win.history?.replaceState?.(null, '', win.location.pathname || '/');
+  } catch {
+    /* ignore */
+  }
+
+  if (hasAuthError) {
+    return {
+      kind: 'error',
+      error: 'E-posta bağlantısının süresi dolmuş veya geçersiz. Lütfen tekrar deneyin.',
+    };
+  }
+
+  const kind: 'signup' | 'recovery' = rawType === 'recovery' ? 'recovery' : 'signup';
+  const decoded = accessToken ? decodeIdToken(accessToken) : { email: '', uid: '', projectId: null, exp: null };
+  const expiresIn = Number(params.expires_in || 3600) || 3600;
+  const refreshToken = params.refresh_token || '';
+
+  if (kind === 'recovery' && accessToken) {
+    void persist({
+      uid: decoded.uid || '',
+      email: decoded.email || '',
+      idToken: accessToken,
+      refreshToken,
+      expiresAt: Date.now() + expiresIn * 1000,
+    });
+  } else if (kind === 'signup') {
+    // E-posta onaylandığında doğrudan içeri sokmak yerine Giriş ekranına yönlendiriyoruz.
+    void persist(null);
+  }
+
+  return {
+    kind,
+    email: decoded.email || params.email || '',
+    accessToken: accessToken || undefined,
+    refreshToken: refreshToken || undefined,
+    expiresIn,
+    tokenHash: tokenHash || undefined,
+    rawType: rawType || kind,
+  };
+}
+
+let pendingAuthRedirect: AuthRedirectState | null = detectInitialAuthRedirect();
+
+/** Uygulama e-posta onay veya şifre sıfırlama bağlantısından mı açıldı? */
+export function hasPendingAuthRedirect(): boolean {
+  return pendingAuthRedirect !== null;
+}
+
+/** Yakalanan e-posta yönlendirmesini bir kez okur (token_hash varsa doğrular) ve temizler. */
+export async function consumeAuthRedirect(): Promise<AuthRedirectState | null> {
+  const current = pendingAuthRedirect;
+  pendingAuthRedirect = null;
+  if (!current) return null;
+  if (current.tokenHash) {
+    await ensureAuthConfigLoaded();
+    const data = await postJson(`${authRoot()}/verify`, {
+      token_hash: current.tokenHash,
+      type: current.rawType || (current.kind === 'recovery' ? 'recovery' : 'signup'),
+    });
+    if (data?.error) {
+      return {
+        kind: 'error',
+        error: 'E-posta bağlantısının süresi dolmuş veya geçersiz. Lütfen tekrar deneyin.',
+      };
+    }
+    const session = toSession(data, current.email || '');
+    if (current.kind === 'recovery' && data?.access_token) {
+      await persist(session);
+    } else if (current.kind === 'signup') {
+      await persist(null);
+    }
+    return {
+      ...current,
+      email: session.email || current.email || '',
+    };
+  }
+  return current;
+}
+
 /* ------------------------------------------------------------ operations */
 
 export interface AuthResult {
@@ -613,10 +759,18 @@ export interface AuthResult {
   session?: AuthSession;
   error?: string;
   code?: string;
+  /** E-posta doğrulama maili gönderildi; kullanıcı linke tıkladıktan sonra giriş yapacak. */
+  confirmationRequired?: boolean;
+}
+
+export interface SignUpMeta {
+  displayName?: string;
+  city?: string;
+  exam?: string;
 }
 
 /** Üyelik = Auth hesabı + `members` satırı; bu fonksiyon yalnız hesabı açar. */
-export async function signUp(email: string, password: string): Promise<AuthResult> {
+export async function signUp(email: string, password: string, meta?: SignUpMeta): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
   if (!cfg)
@@ -625,20 +779,46 @@ export async function signUp(email: string, password: string): Promise<AuthResul
       code: 'NOT_CONFIGURED',
       error: 'Supabase hedefi tanımlı değil — `npm run setup:supabase` ile url + anon anahtarı bir kez yaz.',
     };
-  const data = await postJson(`${authRoot()}/signup`, {
+  const redirectTo = appRedirectUrl();
+  const signupUrl = redirectTo
+    ? `${authRoot()}/signup?redirect_to=${encodeURIComponent(redirectTo)}`
+    : `${authRoot()}/signup`;
+  const data = await postJson(signupUrl, {
     email,
     password,
-    // Uygulama kendi hesabını açar; doğrulama akışı yok (Console'da kapalı olmalı).
-    data: { email_verified: true },
+    ...(redirectTo ? { email_redirect_to: redirectTo, options: { emailRedirectTo: redirectTo } } : {}),
+    data: {
+      ...(meta?.displayName ? { display_name: meta.displayName } : {}),
+      ...(meta?.city ? { city: meta.city } : {}),
+      ...(meta?.exam ? { exam: meta.exam } : {}),
+    },
   });
   if (data.error)
     return { ok: false, code: codeOf(data.error.message), error: authErrorMessage(String(data.error.message)) };
-  if (!data.access_token)
+  const identities = data?.user?.identities ?? data?.identities;
+  if (Array.isArray(identities) && identities.length === 0) {
     return {
       ok: false,
-      code: 'EMAIL_CONFIRMATION_REQUIRED',
-      error: authErrorMessage('email not confirmed'),
+      code: 'USER_ALREADY_REGISTERED',
+      error: authErrorMessage('user already registered'),
     };
+  }
+  if (!data.access_token) {
+    const uid = String(data?.user?.id || data?.id || '');
+    const userEmail = String(data?.user?.email || data?.email || email || '');
+    return {
+      ok: true,
+      confirmationRequired: true,
+      code: 'EMAIL_CONFIRMATION_REQUIRED',
+      session: {
+        uid,
+        email: userEmail,
+        idToken: '',
+        refreshToken: '',
+        expiresAt: 0,
+      },
+    };
+  }
   const session = toSession(data, email);
   await persist(session);
   return { ok: true, session };
@@ -685,9 +865,13 @@ export async function sendPasswordResetEmail(email: string): Promise<AuthResult>
   const cfg = resolveAuthConfig();
   if (!cfg)
     return { ok: false, code: 'NOT_CONFIGURED', error: 'Supabase hedefi tanımlı değil.' };
-  const data = await postJson(`${authRoot()}/recover`, {
+  const redirectTo = appRedirectUrl() || cfg.url;
+  const recoverUrl = redirectTo
+    ? `${authRoot()}/recover?redirect_to=${encodeURIComponent(redirectTo)}`
+    : `${authRoot()}/recover`;
+  const data = await postJson(recoverUrl, {
     email,
-    redirect_to: cfg.url,
+    redirect_to: redirectTo,
   });
   if (data.error)
     return { ok: false, code: codeOf(data.error.message), error: authErrorMessage(String(data.error.message)) };
