@@ -5,13 +5,15 @@
  * (`identitytoolkit.googleapis.com/v1/accounts:*`), böylece Expo Go'da, web'de ve
  * native derlemelerde aynı kod çalışıyor ve yeni bir bağımlılık eklenmiyor.
  *
- * Yapılandırma (tek satır yeterli):
+ * Yapılandırma KULLANICIDAN İSTENMEZ: normal kurulumda anahtar depodaki
+ * `config/firebaseApp.ts` içinden okunur (bir kez yazılır, commit'lenir).
+ * Geliştirici istersen override edebilir:
  *   EXPO_PUBLIC_FIREBASE_API_KEY=...      Console → Project settings → Web app SDK config
  *   EXPO_PUBLIC_FIRESTORE_PROJECT=...     (yoksa projeyi oradan alıyoruz)
  *   EXPO_PUBLIC_FIREBASE_PROJECT_ID=...   (opsiyonel override)
  *
- * Anahtar yoksa `isAuthConfigured()` false döner ve üyelikler eski yerel
- * doğrulama (PBKDF2 + Firestore belgesi) ile çalışmaya devam eder.
+ * Hiçbir kaynakta anahtar yoksa `isAuthConfigured()` false döner ve üyelikler
+ * eski yerel doğrulama (PBKDF2 + Firestore belgesi) ile çalışmaya devam eder.
  *
  * Oturum native'de expo-secure-store, web'de AsyncStorage içinde saklanır;
  * idToken ~1 saat sonra `refresh_token` ile sessizce yenilenir.
@@ -21,6 +23,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
 import { firestoreTarget } from './firebaseConfig';
+import { FIREBASE_WEB_CONFIG } from '../config/firebaseApp';
 
 const IK_API = 'https://identitytoolkit.googleapis.com/v1/accounts';
 const SESSION_KEY = 'kpss.firebaseAuth.session.v1';
@@ -56,8 +59,33 @@ export interface AuthConfig {
   projectId: string;
   authDomain: string;
   appId: string;
-  /** 'env' = pakete gömülü, 'device' = panelde bu cihaza girildi */
-  source: 'env' | 'device';
+  /** 'repo' = depoya gömülü config, 'env' = .env.local, 'device' = eski cihaz kaydı */
+  source: 'env' | 'device' | 'repo';
+}
+
+/**
+ * Tek birleştirme noktası: eksik alanları Firestore hedefinden/proje adından
+ * tamamlar. `apiKey` boşsa null döner (yani o kaynak devre dışı).
+ */
+export function buildAuthConfig(
+  raw: Partial<Pick<AuthConfig, 'apiKey' | 'projectId' | 'authDomain' | 'appId'>> | null | undefined,
+  source: AuthConfig['source']
+): AuthConfig | null {
+  const apiKey = String(raw?.apiKey || '').trim();
+  if (!apiKey) return null;
+  const projectId = String(raw?.projectId || '').trim() || firestoreTarget().projectId;
+  return {
+    apiKey,
+    projectId,
+    authDomain: String(raw?.authDomain || '').trim() || `${projectId}.firebaseapp.com`,
+    appId: String(raw?.appId || '').trim(),
+    source,
+  };
+}
+
+/** Depoya gömülü yapılandırma (config/firebaseApp.ts) — kullanıcının bir şey girmesi gerekmez. */
+export function repoAuthConfig(): AuthConfig | null {
+  return buildAuthConfig(FIREBASE_WEB_CONFIG, 'repo');
 }
 
 /**
@@ -72,17 +100,15 @@ let deviceOverride: AuthConfig | null = null;
 let deviceConfigLoaded = false;
 
 function fromEnv(): AuthConfig | null {
-  const apiKey = envValue('EXPO_PUBLIC_FIREBASE_API_KEY').trim();
-  if (!apiKey) return null;
-  const projectId = envValue('EXPO_PUBLIC_FIREBASE_PROJECT_ID').trim() || firestoreTarget().projectId;
-  return {
-    apiKey,
-    projectId,
-    authDomain:
-      envValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN').trim() || `${projectId}.firebaseapp.com`,
-    appId: envValue('EXPO_PUBLIC_FIREBASE_APP_ID').trim(),
-    source: 'env',
-  };
+  return buildAuthConfig(
+    {
+      apiKey: envValue('EXPO_PUBLIC_FIREBASE_API_KEY').trim(),
+      projectId: envValue('EXPO_PUBLIC_FIREBASE_PROJECT_ID').trim(),
+      authDomain: envValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN').trim(),
+      appId: envValue('EXPO_PUBLIC_FIREBASE_APP_ID').trim(),
+    },
+    'env'
+  );
 }
 
 /** Modül yüklendiğinde bir kez oku; `ensureAuthConfigLoaded()` ile beklenebilir. */
@@ -112,13 +138,13 @@ export async function ensureAuthConfigLoaded(): Promise<void> {
 }
 
 /**
- * Çözümleme sırası: panelde girilen anahtar → pakete gömülü `EXPO_PUBLIC_*`.
- * (Cihazda elle girilen değer, eski/gömülü değerüzerine yazmak için önceliklidir;
- * “Kaldır” ile env değerine dönülür.)
+ * Çözümleme sırası: eski cihaz kaydı → `.env.local` → depoya gömülü config.
+ * (Cihazda elle girilen değer yalnız geriye dönük uyumluluk için en üstte
+ * durur; “Kaldır” ile config değerine dönülür.)
  */
 export function resolveAuthConfig(): AuthConfig | null {
   if (cachedConfig !== undefined) return cachedConfig;
-  cachedConfig = deviceOverride ?? fromEnv() ?? null;
+  cachedConfig = deviceOverride ?? fromEnv() ?? repoAuthConfig();
   return cachedConfig;
 }
 
@@ -150,7 +176,7 @@ export async function setDeviceApiKey(
   return { ok: true };
 }
 
-/** Panel → “Kaldır”: cihaz kaydı silinir, varsa env değeri devreye girer. */
+/** Panel → “Kaldır”: cihaz kaydı silinir; env/depodaki config değeri devreye girer. */
 export async function clearDeviceApiKey(): Promise<void> {
   deviceOverride = null;
   cachedConfig = undefined;
@@ -363,7 +389,7 @@ export function authErrorMessage(raw: string): string {
     case 'API_KEY_INVALID':
     case 'KEY_INVALID':
     case 'INVALID_ARGUMENT':
-      return 'EXPO_PUBLIC_FIREBASE_API_KEY geçersiz görünüyor. Console → Project settings → Web app SDK config değerini kontrol et.';
+      return 'Firebase web API anahtarı geçersiz görünüyor. Depoda `config/firebaseApp.ts` (yoksa .env.local) içindeki apiKey değerini kontrol et.';
     case 'CREDENTIAL_TOO_OLD_LOGIN_AGAIN':
     case 'TOKEN_EXPIRED':
       return 'Oturum süresi doldu. Yeniden giriş yap.';
@@ -384,7 +410,7 @@ export interface AuthResult {
 export async function signUp(email: string, password: string): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
-  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış.' };
+  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış — config/firebaseApp.ts içindeki apiKey boş.' };
   const data = await postJson(`${IK_API}:signUp?key=${encodeURIComponent(cfg.apiKey)}`, {
     email,
     password,
@@ -399,7 +425,7 @@ export async function signUp(email: string, password: string): Promise<AuthResul
 export async function signIn(email: string, password: string): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
-  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış.' };
+  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış — config/firebaseApp.ts içindeki apiKey boş.' };
   const data = await postJson(`${IK_API}:signInWithPassword?key=${encodeURIComponent(cfg.apiKey)}`, {
     email,
     password,
@@ -436,7 +462,7 @@ export async function updatePassword(newPassword: string): Promise<AuthResult> {
 export async function sendPasswordResetEmail(email: string): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
-  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış.' };
+  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış — config/firebaseApp.ts içindeki apiKey boş.' };
   const data = await postJson(`${IK_API}:sendOobCode?key=${encodeURIComponent(cfg.apiKey)}`, {
     requestType: 'PASSWORD_RESET',
     email,
@@ -462,7 +488,11 @@ export async function deleteAccount(): Promise<AuthResult> {
 export async function probeAuth(): Promise<{ ok: boolean; note: string }> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
-  if (!cfg) return { ok: false, note: 'API anahtarı tanımlı değil (EXPO_PUBLIC_FIREBASE_API_KEY).' };
+  if (!cfg)
+    return {
+      ok: false,
+      note: 'API anahtarı tanımlı değil — `config/firebaseApp.ts` içine yazılınca kendiliğinden aktifleşir (kullanıcıdan bir şey istenmez).',
+    };
   // E-posta biçimi geçerli, parola kasıtlı zayıf → kullanıcı OLUŞMAZ; ama yanıt
   // kodu hem anahtarı hem Email/Password sağlayıcısını ayırt ettirir.
   const data = await postJson(`${IK_API}:signUp?key=${encodeURIComponent(cfg.apiKey)}`, {

@@ -63,7 +63,8 @@ export const fbMap = (fields: Record<string, FbValue>): FbValue => ({ mapValue: 
 /* ------------------------------------------------------------------ fetch */
 
 /**
- * Firebase Auth bağlıysa (EXPO_PUBLIC_FIREBASE_API_KEY) her isteğe idToken eklenir;
+ * Firebase Auth bağlıysa (config/firebaseApp.ts ya da EXPO_PUBLIC_FIREBASE_API_KEY)
+ * her isteğe idToken eklenir;
  * böylece firestore.rules üyelik belgelerini `request.auth.uid` ile koruyabilir.
  * Token alınamazsa istek kimliksiz gider (eski davranış) ve kurallar izin verirse çalışır.
  */

@@ -17,7 +17,7 @@ export interface MemberDoc {
   emailNormalized: string;
   displayName: string;
   password: { verifier: string; salt: string; iterations: number; algo: string };
-  /** Firebase Auth uid'si (EXPO_PUBLIC_FIREBASE_API_KEY tanımlıysa doldurulur). */
+  /** Firebase Auth uid'si (depoda config/firebaseApp.ts içinde anahtar varsa doldurulur). */
   authUid?: string;
   role: MemberRole;
   status: MembershipStatus;

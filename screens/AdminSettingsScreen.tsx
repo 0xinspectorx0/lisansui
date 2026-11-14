@@ -69,9 +69,9 @@ import {
   readDeviceApiKey,
   resolveAuthConfig,
   resetAuthConfigCache,
-  setDeviceApiKey,
   signOut as authSignOut,
 } from '../lib/authClient';
+import { hasRepoApiKey } from '../config/firebaseApp';
 
 export const AdminSettingsScreen: React.FC = () => {
   const { colors } = useAppTheme();
@@ -111,8 +111,10 @@ export const AdminSettingsScreen: React.FC = () => {
     );
   }
 
-  /* cihazdan girilen Firebase web API anahtarı (`.env.local` şart değil) */
-  const [keyDraft, setKeyDraft] = useState('');
+  /* Firebase web API anahtarı KULLANICIDAN İSTENMEZ: depoda `config/firebaseApp.ts`
+     içinde durur. Aşağıdaki state yalnız eski kurulumlardan kalan cihaz kaydını
+     göstermek/clear etmek için tutuluyor. */
+  const [deviceKey, setDeviceKey] = useState<string | null>(null);
   const [keyNote, setKeyNote] = useState<string | null>(null);
   const [keyBusy, setKeyBusy] = useState(false);
 
@@ -121,35 +123,35 @@ export const AdminSettingsScreen: React.FC = () => {
     void (async () => {
       await ensureAuthConfigLoaded();
       const k = await readDeviceApiKey();
-      if (alive && k) setKeyDraft(k);
+      if (alive) setDeviceKey(k);
     })();
     return () => {
       alive = false;
     };
   }, []);
 
-  const saveDeviceKey = async () => {
-    setKeyBusy(true);
-    const res = await setDeviceApiKey(keyDraft);
-    if (!res.ok) {
-      setKeyBusy(false);
-      setKeyNote(res.error || 'Kaydedilemedi.');
-      return;
-    }
-    await ensureAuthConfigLoaded();
-    resetAuthConfigCache();
-    setKeyBusy(false);
-    setKeyNote('Kaydedildi — Firebase Auth bu cihazda aktif. Üye ol / giriş yap diyebilirsin.');
-  };
-
   const removeDeviceKey = async () => {
     setKeyBusy(true);
     await clearDeviceApiKey();
+    await ensureAuthConfigLoaded();
     resetAuthConfigCache();
-    setKeyDraft('');
+    setDeviceKey(null);
     setKeyBusy(false);
-    setKeyNote('Cihaz kaydı silindi. `.env.local` içinde anahtar varsa o kullanılır, yoksa yerel PBKDF2 moduna dönülür.');
+    setKeyNote(
+      hasRepoApiKey()
+        ? 'Cihaz kaydı silindi — depodaki anahtar (config/firebaseApp.ts) kullanılmaya devam ediyor.'
+        : 'Cihaz kaydı silindi. Depoda anahtar yoksa yerel PBKDF2 moduna dönülür.'
+    );
   };
+
+  const authSourceLabel =
+    authConfigSource() === 'device'
+      ? 'bu cihazda kayıtlı eski anahtar'
+      : authConfigSource() === 'env'
+        ? '.env.local (pakete gömülü)'
+        : authConfigSource() === 'repo'
+          ? 'depoya gömülü config (config/firebaseApp.ts)'
+          : 'yok';
 
   /* eski projeden içerik kopyalama (terminal gerekmez) */
   const [copySrc, setCopySrc] = useState(LEGACY_SOURCE.projectId);
@@ -604,7 +606,7 @@ export const AdminSettingsScreen: React.FC = () => {
         {/* Firebase Auth */}
         <AdminSectionTitle
           label="Firebase Auth (kimlik doğrulama)"
-          hint=".env.local içinde EXPO_PUBLIC_FIREBASE_API_KEY tanımlıysa parola Firebase’de doğrulanır ve Firestore istekleri idToken taşır. Anahtar yoksa yerel PBKDF2 modu devam eder."
+          hint="Anahtar uygulamanın içinde: config/firebaseApp.ts (bir kez yazılır, commit’lenir). Tanımlıysa parola Firebase’de doğrulanır ve Firestore istekleri idToken taşır; senden bir yere anahtar yapıştırman istenmez."
         />
         <AdminCard>
           <AdminRow
@@ -612,10 +614,8 @@ export const AdminSettingsScreen: React.FC = () => {
             title="Kimlik modu"
             subtitle={
               isAuthConfigured()
-                ? `Firebase Auth açık — üyelik belgelerinde parola hash’i tutulmuyor. Kaynak: ${
-                    authConfigSource() === 'device' ? 'bu cihazda girilen anahtar' : '.env.local (pakete gömülü)'
-                  }`
-                : 'Yerel mod — parola cihazda hash’lenip belgeye yazılıyor.'
+                ? `Firebase Auth açık — üyelik belgelerinde parola hash’i tutulmuyor. Kaynak: ${authSourceLabel}`
+                : 'Yerel mod — parola cihazda hash’lenip belgeye yazılıyor. Anahtar depoya yazıldığı an bu satır kendiliğinden Firebase Auth’a döner.'
             }
             right={
               <AdminChip
@@ -624,25 +624,31 @@ export const AdminSettingsScreen: React.FC = () => {
               />
             }
           />
-          <AdminField
-            label="Web API anahtarı (apiKey)"
-            value={keyDraft}
-            onChangeText={setKeyDraft}
-            autoCapitalize="none"
-            maxLength={64}
-            placeholder="AIza…  ← Console → Project settings → General → Your apps → Web app → SDK config"
-            hint="Buraya yazarsan `.env.local` ve Metro’yu yeniden başlatmak gerekmez: anahtar yalnız bu cihazda saklanır ve hemen kullanılır. Üretim derlemesi için .env.local/EAS değişkeni önerilir."
-          />
-          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 6 }}>
-            <AdminButton
-              small
-              flex
-              label={keyBusy ? 'Uğraşıyor…' : 'Kaydet'}
-              disabled={keyBusy || !keyDraft.trim()}
-              onPress={() => void saveDeviceKey()}
+          {!isAuthConfigured() ? (
+            <View style={{ paddingHorizontal: 2, marginBottom: 6 }}>
+              <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16 }}>
+                {'Anahtarı kendin girmeye çalışman gerekmiyor. Tek yapman gereken anahtarı'}{'\n'}
+                {'geliştiriciye iletmek; o da `config/firebaseApp.ts` içine yazıp commit’liyor.'}{'\n'}
+                {'Uygulama güncellendiği anda Firebase Auth kendiliğinden açılır.'}
+              </Text>
+            </View>
+          ) : null}
+          {deviceKey ? (
+            <AdminRow
+              icon="phone-portrait-outline"
+              title="Bu cihazda kayıtlı eski anahtar"
+              subtitle={`${maskKey(deviceKey)} — depodaki anahtardan önce bunu kullanır. Kaldırırsan config değeri devreye girer.`}
+              right={
+                <AdminButton
+                  small
+                  tone="neutral"
+                  label={keyBusy ? 'Uğraşıyor…' : 'Kaldır'}
+                  disabled={keyBusy}
+                  onPress={() => void removeDeviceKey()}
+                />
+              }
             />
-            <AdminButton small flex tone="neutral" label="Kaldır" disabled={keyBusy} onPress={() => void removeDeviceKey()} />
-          </View>
+          ) : null}
           {keyNote ? (
             <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16, marginBottom: 6 }}>
               {keyNote}
@@ -652,7 +658,7 @@ export const AdminSettingsScreen: React.FC = () => {
             <AdminRow
               icon="pulse-outline"
               title="API anahtarı"
-              subtitle="EXPO_PUBLIC_FIREBASE_API_KEY (pakete gömülür; public web anahtarı, gizli değil)"
+              subtitle={`Pakete gömülü public web anahtarı (gizli değil; koruma Firestore kurallarında). Kaynak: ${authSourceLabel}`}
               right={
                 <Text style={{ fontSize: 11.5, fontWeight: '800', color: colors.textMuted }}>
                   {maskKey(authCfg.apiKey)}
@@ -753,8 +759,9 @@ export const AdminSettingsScreen: React.FC = () => {
               “Register app” (npm/Next.js adımlarını atla) → çıkan SDK config içindeki `apiKey`{'\n'}
               (Your apps boşsa anahtar da yoktur; tek yapman gereken bu kayıt.){'\n'}
               2) Console → Authentication → Sign-in method → **Email/Password → Enable**{'\n'}
-              3) Anahtarı yukarıdaki alana yapıştır → “Kaydet” (terminal gerekmez){'\n'}
-              3b) İstersen kalıcı yap (tüm cihazlar + üretim):
+              3) Anahtarı geliştiriciye ilet → o `config/firebaseApp.ts` içine yazar ve commit’ler.
+              Panelden/uygulamadan hiçbir şey girmene gerek yok.{'\n'}
+              3b) Kalıcı/override iki yol daha var (yalnız geliştirici için):
             </Text>
             <Text
               selectable
@@ -766,8 +773,8 @@ export const AdminSettingsScreen: React.FC = () => {
               npm run deploy:rules
             </Text>
             <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
-              4) “Test et” yeşil olmalı (4) — anahtarı panele yazdıysan Metro’yu yeniden
-              başlatmana gerek yok; `.env.local` kullandıysan `npx expo start --clear`.{'\n'}
+              4) “Test et” yeşil olmalı — anahtar depoda olduğu için sen hiçbir şey yapmıyorsun;
+              Metro’yu yalnız geliştirici `npx expo start --clear` ile yeniden başlatır.{'\n'}
               5) Katı mod (kod değişikliği yok): Console'da `meta/membership_lockdown`
               belgesi oluştur → kimliksiz üyelik okuma/yazma anında kapanır.
               Geri almak = belgeyi silmek. Yukarıdaki “Üyelik kilidi” satırı durumu gösterir.

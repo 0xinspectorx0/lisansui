@@ -104,6 +104,7 @@ function bundle(entryFile, outName) {
     `--alias:react-native-safe-area-context=${shim('safe-area.js')}`,
     `--alias:@react-navigation/native=${shim('navigation.js')}`,
     `--alias:@react-native-async-storage/async-storage=${shim('async-storage.js')}`,
+    `--alias:expo-secure-store=${shim('secure-store.js')}`,
   ];
   const r = spawnSync('npx', args, { cwd: REPO, encoding: 'utf8' });
   if (r.status !== 0) {
@@ -214,6 +215,97 @@ console.log('\x1b[1m[4] konu seçici ve toplu ekleme hâlâ yerinde\x1b[0m');
   ok(!/Konu seç —/.test(vis), 'konu listesi kapalı başlıyor');
 }
 
+console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan istenmiyor\x1b[0m');
+{
+  const SET_SRC = 'screens/AdminSettingsScreen.tsx';
+  const setSrc = fs.readFileSync(path.join(REPO, SET_SRC), 'utf8');
+
+  /** `import { a, b } from '<spec>';` ifadesini dizi taramayla bulur (regex kaçışı kırılgan). */
+  const findImport = (source, spec) => {
+    const tail = `from '${spec}';`;
+    const fromIdx = source.indexOf(tail);
+    if (fromIdx < 0) return null;
+    const start = source.lastIndexOf('import', fromIdx);
+    const open = source.indexOf('{', start);
+    const close = source.lastIndexOf('}', fromIdx);
+    if (start < 0 || open < 0 || open > fromIdx || close < open) return null;
+    const names = source
+      .slice(open + 1, close)
+      .split(',')
+      .map(x => x.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim())
+      .filter(Boolean);
+    return { statement: source.slice(start, fromIdx + tail.length), names };
+  };
+
+  // Ayarlar ekranı onlarca bağlama/API’ye dokunuyor; hepsi nötr stub’a bağlanır,
+  // böylece EKRAN’IN KODU ve JSX’i gerçek hâliyle render edilmiş olur.
+  const stubbed = [
+    '../lib/AppContext',
+    '../lib/AdminContext',
+    '../lib/MembershipContext',
+    '../lib/contentSeed',
+    '../lib/contentCopy',
+    '../lib/firestoreApi',
+    '../lib/firebaseConfig',
+  ];
+  const shimDir = path.join(TMP, 'stubs');
+  fs.mkdirSync(shimDir, { recursive: true });
+  const plainPath = path.join(REPO, 'scripts', 'admin-ui-shims', 'plain.js');
+  let shadowSrc = setSrc;
+  const seen = new Set();
+  for (const spec of stubbed) {
+    const found = findImport(shadowSrc, spec);
+    if (!found) {
+      fail++;
+      throw new Error(`ayarlar gölgesi: import bulunamadı (${spec})`);
+    }
+    const file = path.join(shimDir, `${spec.replace(/[^a-z0-9]/gi, '_')}.js`);
+    const lines = [`import { plain, neutralHook } from '${plainPath}';`];
+    for (const n of found.names) {
+      if (seen.has(n)) continue;
+      seen.add(n);
+      lines.push(`export const ${n} = ${/^use[A-Z]/.test(n) ? 'neutralHook' : 'plain'};`);
+    }
+    fs.writeFileSync(file, lines.join('\n') + '\n', 'utf8');
+    shadowSrc = shadowSrc.replace(found.statement, `import {${found.names.join(',')}} from '${file}';`);
+  }
+  ok(true, 'ayarlar gölgesi: 6 modül nötr stub’a bağlandı', `${seen.size} export`);
+  const uiShim = f => path.join(REPO, 'scripts', 'admin-ui-shims', f);
+  // AdminGate (PIN kapısı) gerçek shim ile açılır; AdminContext yukarıda stub’landı.
+  shadowSrc = shadowSrc.replace(
+    "from '../components/admin/AdminGate'",
+    `from '${uiShim('admin-gate.js')}'`
+  );
+  shadowSrc = shadowSrc.replace(
+    "import React, { useEffect, useState } from 'react';",
+    "import React, { useEffect, useState } from 'react';\nimport { renderToString } from 'react-dom/server';"
+  );
+  shadowSrc +=
+    '\nexport function render() {\n  return renderToString(React.createElement(AdminSettingsScreen as any));\n}\n';
+  const setFile = `${SHADOW_PREFIX}settings.tsx`;
+  fs.writeFileSync(path.join(REPO, setFile), shadowSrc, 'utf8');
+  written.push(setFile);
+
+  const { html, vis } = await renderOf(setFile);
+  const repoKey = ((fs.readFileSync(path.join(REPO, 'config', 'firebaseApp.ts'), 'utf8').match(/apiKey:\s*'([^']*)'/) || [])[1] || '').trim();
+  ok(html.length > 8000, `ayarlar ekranı çökmeden render edildi (${(html.length / 1024) | 0} KB)`);
+  if (process.env.UI_DUMP) console.log('DUMP>>>', vis.slice(vis.indexOf('Firebase Auth (kimlik'), vis.indexOf('Firebase Auth (kimlik') + 2200));
+  ok(vis.includes('Firebase Auth (kimlik doğrulama)'), 'Firebase Auth bölümü görünüyor');
+  ok(!vis.includes('Web API anahtarı (apiKey)'), 'apiKey yapıştırma alanı ekranda YOK');
+  ok(!/placeholder="AIza[^"]*"/.test(html), 'AIza… placeholder’lı input basılmıyor');
+  ok(vis.includes('config/firebaseApp.ts'), 'ekran anahtarın depodan geldiğini söylüyor');
+  ok(!/Kaydet \| Kaldır/.test(vis), '“Kaydet / Kaldır” anahtar formu kaldırıldı');
+  if (repoKey) {
+    ok(vis.includes('firebase-auth') && vis.includes('depoya gömülü config'), 'depoda anahtar var → kaynak “repo” gösteriliyor');
+    ok(vis.includes('Kaynak:'), 'anahtar kaynağı satırı basılıyor');
+  } else {
+    ok(vis.includes('Yerel mod'), 'depoda anahtar yok → yerel mod açıkça söyleniyor');
+    ok(vis.includes('geliştiriciye iletmek'), 'kullanıcıya “yapıştır” değil “ilet” deniyor');
+  }
+  ok(!vis.includes('EXPO_PUBLIC_FIREBASE_API_KEY'), 'panel kullanıcıya ortam değişkeni ezberletmiyor');
+  ok(!/Bu cihazda kayıtlı eski anahtar/.test(vis), 'cihaz anahtarı yoksa o satır da görünmüyor');
+}
+
 cleanup();
-console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);
+console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${fail + pass} kontrol\x1b[0m\n`);
 process.exit(fail ? 1 : 0);
