@@ -26,6 +26,38 @@
 create extension if not exists "pgcrypto";
 create extension if not exists "citext";
 
+/* ============================================================== üyelik politikası */
+
+/**
+ * Panelin üyelik ayarları — cihazda değil, burada. require_approval varsayılan
+ * AÇIK: admin onayı olmadan üyelik aktif olmaz (hangi cihazdan kayıt olursa olsun).
+ */
+create table if not exists public.membership_policy (
+  id                   int primary key default 1 check (id = 1),
+  "requireApproval"    boolean not null default true,
+  "registrationOpen"   boolean not null default true,
+  "enforce"            boolean not null default false,
+  "freeTestsPerCourse" int     not null default 1 check ("freeTestsPerCourse" between 0 and 100),
+  "defaultTrialDays"   int     not null default 7   check ("defaultTrialDays" between 0 and 3650),
+  "cloudVip"           boolean not null default false,
+  "cloudMembers"       boolean not null default false,
+  "membershipLockdown" boolean not null default false,
+  "contentLock"        boolean not null default false,
+  "schemaVersion"      int     not null default 1 check ("schemaVersion" = 1),
+  "updatedAt"          text    not null default to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+);
+
+insert into public.membership_policy (id) values (1) on conflict (id) do nothing;
+
+/** Yönetici listesi (eski meta/admins belgesi): satır = bir e-posta. */
+create table if not exists public.admins (
+  email    citext primary key check (position('@' in email::text) > 1),
+  "userId" uuid,
+  "addedAt" timestamptz not null default now(),
+  "addedBy" text
+);
+create unique index if not exists admins_userid_key on public.admins ("userId") where "userId" is not null;
+
 /* ============================================================ oturum yardımcıları */
 
 create or replace function kpss_signed_in()
@@ -183,38 +215,6 @@ as $$
     else true
   end;
 $$;
-
-/* ============================================================== üyelik politikası */
-
-/**
- * Panelin üyelik ayarları — cihazda değil, burada. require_approval varsayılan
- * AÇIK: admin onayı olmadan üyelik aktif olmaz (hangi cihazdan kayıt olursa olsun).
- */
-create table if not exists public.membership_policy (
-  id                   int primary key default 1 check (id = 1),
-  "requireApproval"    boolean not null default true,
-  "registrationOpen"   boolean not null default true,
-  "enforce"            boolean not null default false,
-  "freeTestsPerCourse" int     not null default 1 check ("freeTestsPerCourse" between 0 and 100),
-  "defaultTrialDays"   int     not null default 7   check ("defaultTrialDays" between 0 and 3650),
-  "cloudVip"           boolean not null default false,
-  "cloudMembers"       boolean not null default false,
-  "membershipLockdown" boolean not null default false,
-  "contentLock"        boolean not null default false,
-  "schemaVersion"      int     not null default 1 check ("schemaVersion" = 1),
-  "updatedAt"          text    not null default to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
-);
-
-insert into public.membership_policy (id) values (1) on conflict (id) do nothing;
-
-/** Yönetici listesi (eski meta/admins belgesi): satır = bir e-posta. */
-create table if not exists public.admins (
-  email    citext primary key check (position('@' in email::text) > 1),
-  "userId" uuid,
-  "addedAt" timestamptz not null default now(),
-  "addedBy" text
-);
-create unique index if not exists admins_userid_key on public.admins ("userId") where "userId" is not null;
 
 /* ========================================================================= üyeler */
 
@@ -1191,6 +1191,20 @@ create policy user_data_self on public.user_data for all
 
 /* ======================================================================= yetkiler */
 
+/**
+ * “Bu e-posta kayıtlı mı?” — oturum olmadan da sorulabilir ama yanıt yalnız bir
+ * boolean'dır; hiçbir üye alanı sızmaz (security definer, sabit search_path).
+ */
+create or replace function kpss_member_exists(p_email text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.members m where m."email"::text = lower(trim(p_email)));
+$$;
+
 grant usage on schema public to anon, authenticated;
 grant select on public.courses, public.topics, public.questions, public.tips,
   public.membership_policy, public.admins to anon, authenticated;
@@ -1211,20 +1225,6 @@ grant execute on function
   public.kpss_list_docs(text, int, text),
   public.kpss_member_exists(text)
   to anon, authenticated;
-
-/**
- * “Bu e-posta kayıtlı mı?” — oturum olmadan da sorulabilir ama yanıt yalnız bir
- * boolean'dır; hiçbir üye alanı sızmaz (security definer, sabit search_path).
- */
-create or replace function kpss_member_exists(p_email text)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (select 1 from public.members m where m."email"::text = lower(trim(p_email)));
-$$;
 grant execute on function public.kpss_member_exists(text) to anon, authenticated;
 
 -- =============================================================================

@@ -487,6 +487,12 @@ head('\x1b[1m[5] supabase/migrations — tablo + bekçi + politika + grant\x1b[0
   ok(sql.includes('on conflict ("email") do update set'), 'çakışma anahtarı e-posta (PK)');
   ok(!/select x\.\* from jsonb_populate_record/.test(sql), 'tüm kolonlu eski `select x.*` yazma yolu kaldırıldı');
   ok(flat.includes('not exists (select 1 from public.admins)'), 'ilk yönetici kendisini ekleyebiliyor (bootstrap), sonrası yöneticide');
+  ok(sql.indexOf('create table if not exists public.admins') < sql.indexOf('create or replace function kpss_is_admin('),
+    'public.admins tablosu kpss_is_admin() fonksiyonundan önce oluşturuluyor (42P01 hatası olmaz)');
+  ok(sql.indexOf('create table if not exists public.membership_policy') < sql.indexOf('create or replace function kpss_membership_locked('),
+    'public.membership_policy tablosu kpss_membership_locked() fonksiyonundan önce oluşturuluyor');
+  ok(sql.indexOf('create or replace function kpss_member_exists(') < sql.indexOf('public.kpss_member_exists(text)'),
+    'kpss_member_exists fonksiyonu grant satırından önce tanımlanıyor');
 }
 
 /* ============================== [6] kullanıcı verisi: kopya yok, anlık yazma */
