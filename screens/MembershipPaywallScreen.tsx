@@ -40,11 +40,15 @@ export const MembershipPaywallScreen: React.FC = () => {
   const blockedCourse = admin.state.content.courseOrder.find(
     id => rows.find(r => r.course === COURSES[id].title)?.used === quota.freeTestsPerCourse
   );
+  const goBackSafe = () => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('MainTabs');
+  };
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: colors.background }}>
       <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Pressable onPress={goBackSafe} hitSlop={10} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <Ionicons name="chevron-back" size={18} color={colors.text} />
         </Pressable>
         <Text style={[styles.title, { color: colors.text }]}>VIP üyelik</Text>
@@ -71,7 +75,7 @@ export const MembershipPaywallScreen: React.FC = () => {
                 </Text>
               </View>
             </View>
-            <AdminButton label="Çalışmaya dön" icon="play-circle-outline" onPress={() => navigation.goBack()} style={{ alignSelf: 'stretch' }} />
+            <AdminButton label="Çalışmaya dön" icon="play-circle-outline" onPress={goBackSafe} style={{ alignSelf: 'stretch' }} />
           </AdminCard>
         ) : (
           <>

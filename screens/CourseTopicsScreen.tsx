@@ -28,7 +28,8 @@ import { TopicTestSheet } from '../components/TopicTestSheet';
 type Props = NativeStackScreenProps<RootStackParamList, 'CourseTopics'>;
 
 export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
-  const { courseId } = route.params;
+  const rawCourseId = route.params?.courseId;
+  const courseId = rawCourseId && rawCourseId in COURSES ? rawCourseId : 'tarih';
   const course = COURSES[courseId];
   const { colors } = useAppTheme();
   const admin = useAdmin();
@@ -177,7 +178,7 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
       {/* Top Bar */}
       <View style={styles.topBar}>
         <Pressable
-          onPress={() => navigation.goBack()}
+          onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('MainTabs'))}
           style={[
             styles.backBtn,
             { backgroundColor: colors.surface, borderColor: colors.border },

@@ -61,7 +61,10 @@ export const AdminScaffold: React.FC<{
       >
         {!hideBack && (
           <Pressable
-            onPress={() => navigation.goBack()}
+            onPress={() => {
+              if (navigation.canGoBack()) navigation.goBack();
+              else (navigation as any).navigate('MainTabs');
+            }}
             hitSlop={10}
             style={{
               width: 34,

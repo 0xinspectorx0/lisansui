@@ -672,8 +672,9 @@ function detectInitialAuthRedirect(): AuthRedirectState | null {
     return null;
   }
 
+  const targetPath = rawType === 'recovery' ? '/giris/yeni-sifre' : '/giris';
   try {
-    win.history?.replaceState?.(null, '', win.location.pathname || '/');
+    win.history?.replaceState?.(null, '', targetPath);
   } catch {
     /* ignore */
   }

@@ -2,26 +2,42 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 
 import { useAppTheme } from '../lib/theme';
 import { useAdmin } from '../lib/AdminContext';
 import { useMembership } from '../lib/MembershipContext';
 import { consumeAuthRedirect } from '../lib/authClient';
 import { EXAM_PRESETS } from '../lib/AppContext';
+import { AuthRouteMode } from '../lib/types';
 import { AdminButton, AdminCard, AdminField, AdminSectionTitle } from '../components/admin/ui';
 import { CloudStatusBanner } from '../components/membership/ui';
 
 type Mode = 'signin' | 'signup' | 'forgot' | 'recovery';
 
+function slugToMode(slug?: string): Mode {
+  if (slug === 'uye-ol' || slug === 'kayit' || slug === 'signup') return 'signup';
+  if (slug === 'sifremi-unuttum' || slug === 'forgot') return 'forgot';
+  if (slug === 'yeni-sifre' || slug === 'recovery') return 'recovery';
+  return 'signin';
+}
+
+function modeToSlug(mode: Mode): AuthRouteMode | undefined {
+  if (mode === 'signup') return 'uye-ol';
+  if (mode === 'forgot') return 'sifremi-unuttum';
+  if (mode === 'recovery') return 'yeni-sifre';
+  return undefined;
+}
+
 export const AuthScreen: React.FC = () => {
   const { colors } = useAppTheme();
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
   const membership = useMembership();
   const admin = useAdmin();
   const { settings, patchSettings } = admin;
 
-  const [mode, setMode] = useState<Mode>('signin');
+  const [mode, setMode] = useState<Mode>(() => slugToMode(route?.params?.mode));
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -51,9 +67,19 @@ export const AuthScreen: React.FC = () => {
       setLocalNotice(notice);
       membership.clearError();
       setMode(nextMode);
+      try {
+        navigation.setParams?.({ mode: modeToSlug(nextMode) });
+      } catch {
+        /* ignore */
+      }
     },
-    [membership]
+    [membership, navigation]
   );
+
+  useEffect(() => {
+    const fromRoute = slugToMode(route?.params?.mode);
+    setMode(prev => (prev === fromRoute ? prev : fromRoute));
+  }, [route?.params?.mode]);
 
   // E-postadaki onay veya şifre sıfırlama bağlantısından gelindiyse yakala
   useEffect(() => {

@@ -64,12 +64,16 @@ export const ProfileScreen: React.FC = () => {
   const totalUsed = rows.reduce((s, r) => s + r.used, 0);
   const left = member ? daysLeft(member.vipExpiresAt) : null;
   const localUser = admin.localUser;
+  const goBackSafe = () => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('MainTabs');
+  };
 
   if (!signedIn) {
     return (
       <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: colors.background }}>
         <View style={styles.header}>
-          <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Pressable onPress={goBackSafe} hitSlop={10} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Ionicons name="chevron-back" size={18} color={colors.text} />
           </Pressable>
           <Text style={[styles.title, { color: colors.text }]}>Hesabım</Text>
@@ -109,7 +113,7 @@ export const ProfileScreen: React.FC = () => {
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: colors.background }}>
       <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Pressable onPress={goBackSafe} hitSlop={10} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <Ionicons name="chevron-back" size={18} color={colors.text} />
         </Pressable>
         <Text style={[styles.title, { color: colors.text }]}>Hesabım</Text>
@@ -330,7 +334,7 @@ export const ProfileScreen: React.FC = () => {
               onPress={async () => {
                 const res = await membership.deleteAccount(deletePw);
                 setConfirm(null);
-                if (res.ok) navigation.goBack();
+                if (res.ok) goBackSafe();
               }}
               flex
             />
