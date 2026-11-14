@@ -9,11 +9,13 @@ Kimlik doğrulama iki moddan birinde çalışır (otomatik seçilir, kod değiş
 
 | Mod | Ne zaman | Parola nerede | Firestore isteği |
 | --- | --- | --- | --- |
-| **Firebase Auth** | `.env.local` içinde `EXPO_PUBLIC_FIREBASE_API_KEY` varsa | Firebase'de (belgede yalnızca `algo: 'firebase-auth'` + `authUid` işaretçisi) | `Authorization: Bearer <idToken>` |
-| **Yerel** (bugünkü) | anahtar tanımlı değilse | cihazda PBKDF2-SHA256 hash, belgede `verifier/salt/iterations` | anonim |
+| **Firebase Auth** | anahtar tanımlıysa — sırası: cihaz kaydı → `.env.local` → **`config/firebaseApp.ts`** | Firebase'de (belgede yalnızca `algo: 'firebase-auth'` + `authUid` işaretçisi) | `Authorization: Bearer <idToken>` |
+| **Yerel** (fallback) | hiçbir kaynakta anahtar yoksa | cihazda PBKDF2-SHA256 hash, belgede `verifier/salt/iterations` | anonim |
 
-İstersen anahtarı vermeden başlayabilirsin; sonra tek satırla Auth'a geçersin
-(aşağıda **2b**). İki modda da çalışma anında Firestore belgesindeki veri aynıdır.
+Anahtar **kullanıcıdan istenmez**: bir kez `config/firebaseApp.ts` içine yazılır ve
+commit'lenir; uygulama onu otomatik kullanır. `.env.local` yalnız geliştirici için
+opsiyonel override'dır. Anahtarsız da başlayabilirsin; sonra tek satırla Auth'a
+geçersin (aşağıda **2b**). İki modda da çalışma anında Firestore belgesindeki veri aynıdır.
 
 | Dosya | Ne yapar |
 | --- | --- |
@@ -77,11 +79,15 @@ proje yeni kurulduysa o liste boştur ve anahtar da yoktur. Tek seferlik kayıt:
 3. “Close” ile çık. Artık **Project settings → General → Your apps** altında
    `Web app / kpss-web` ve onun `API key` satırı durur.
 
-Anahtarı iki yerden birine verebilirsin:
-- **Panel (cihaza özel, yeniden başlatma yok):** Uygulama Ayarları → Firebase Auth →
-  “Web API anahtarı” alanına yapıştır → **Kaydet**. Değer `AsyncStorage`
-  (`kpss.firebaseAuth.config.v1`) içinde durur; “Kaldır” ile env değerine dönülür.
-- **`.env.local` (kalıcı, tüm cihazlar/üretim):** aşağıdaki **2** adımı.
+Anahtarın **tek kalıcı yeri depodur**: `config/firebaseApp.ts` içindeki
+`FIREBASE_WEB_CONFIG.apiKey` satırı. Yaz → commit'le → `npx expo start --clear`.
+Uygulamada/panelde hiçbir yere anahtar yapıştırılmaz (panelde giriş alanı yok).
+- **Komutla yazdırmak istersen:** `npm run setup:firestore -- <proje> --root . --api-key <ANAHTAR>`
+  hem `config/firebaseApp.ts` hem `.env.local` günceller.
+- **`.env.local` (yalnızca override):** aşağıdaki **2** adımı; değeri varsa config'i gölgede bırakır.
+- **Eski kurulumlar:** bir zamanlar panele girilmiş cihaz anahtarı (`AsyncStorage`,
+  `kpss.firebaseAuth.config.v1`) hâlâ önceliklidir; Admin → Ayarlar → “Kaldır” ile
+  silinir ve depodaki değer devreye girer.
 
 ## 2) Uygulamayı yeni projeye bağla (adım adım)
 Öncelik sırası: **env → app.json → repo varsayılanı**. Üç yoldan birini seç.
@@ -165,15 +171,21 @@ Tek projeyle uzun vadeli çalışacaksan en basiti: varsayılanı kendi projen y
 `.env` ile uğraşma.
 
 ### D) Firebase Auth’a geçiş için hazırlık
-Ayrıntılı sıra yukarıda **2b)** bölümünde; özetle `.env.local`'a şu dört satır eklenir
-(değerler Console → Project settings → Your apps → SDK config):
-```bash
-EXPO_PUBLIC_FIREBASE_API_KEY=...
-EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=kpssasistani-01.firebaseapp.com
-EXPO_PUBLIC_FIREBASE_PROJECT_ID=kpssasistani-01
-EXPO_PUBLIC_FIREBASE_APP_ID=1:...:web:...
+Ayrıntılı sıra yukarıda **2b)** bölümünde. Kalıcı yer **`config/firebaseApp.ts`** —
+depoğa yaz, commit'le, uygulama kendiliğinden Firebase Auth'a geçer; panele/ekrana
+hiçbir şey yapıştırılmaz:
+```ts
+export const FIREBASE_WEB_CONFIG: FirebaseWebConfig = {
+  apiKey: 'AIza...',                                   // Console → Your apps → SDK config
+  projectId: 'kpssasistani-01',
+  authDomain: '',                                      // boşsa <projectId>.firebaseapp.com türetilir
+  appId: '',                                           // opsiyonel
+};
 ```
-Bunlar public web yapılandırmasıdır (pakete gömülür, gizli değil).
+Aynı değerleri `.env.local` ile geçici olarak gölgede bırakabilirsin
+(`EXPO_PUBLIC_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_APP_ID`) —
+geliştirici akışı için, şart değil. Bunlar public web yapılandırmasıdır
+(pakete gömülür, gizli değil; asıl koruma `firestore.rules`).
 **Servis hesabı JSON’ı / OAuth token’ı `.env`e yazılmaz ve panele/repo'ya
 konulmaz** — o yalnızca Admin SDK script'leri içindir.
 
@@ -193,13 +205,14 @@ değerlerini Production/Preview değişkeni olarak ekle
    `apiKey` değerini kopyala (public web anahtarı; servis hesabı JSON'u **değil**).
 3. Tek komutla yazdır:
 ```bash
-npm run setup:firestore -- kpssasistani-01 --root . --api-key AIza...
+npm run setup:firestore -- kpssasistani-01 --root . --api-key AIza...   # config/firebaseApp.ts + .env.local
 npm run deploy:rules
 npx expo start --clear
 npm run check:firestore     # "Firebase Auth testi: API anahtarı geçerli ve sağlayıcı açık"
 ```
 4. Panelde **Uygulama Ayarları → Firebase Auth (kimlik doğrulama) → Test et**:
-   mod rozeti `firebase-auth` olmalı; kart, bu cihazdaki oturumu da gösterir.
+   mod rozeti `firebase-auth` ve “Kaynak: depoya gömülü config” satırı görünmeli;
+   kart, bu cihazdaki oturumu da gösterir. Anahtar giriş alanı yoktur — gerekmez.
 
 Ne değişir:
 - Üyelik belgesine parola hash'i **yazılmaz**; `lib/crypto.ts` yalnızca yerel modda kullanılır.
@@ -298,14 +311,14 @@ işlediğini doğrula.
 # 1) Console: Add app → Web → Register app → apiKey kopyala (1c)
 # 2) Console: Authentication → Sign-in method → Email/Password → Enable
 # 3) Terminal (repo kökünde, bir kez):
-npm run setup:firestore -- kpssasistani-01 --root . --api-key <ANAHTAR>
+npm run setup:firestore -- kpssasistani-01 --root . --api-key <ANAHTAR>   # anahtar depoya yazılır
 npm run deploy:rules
 npm run migrate:content            # eski projeden soru bankası + hap bilgiler
 npm run check:firestore            # hepsi yeşil mi
 npx expo start --clear
 ```
-Anahtarı terminale yazmak istemiyorsan 3. adımdaki `--api-key` yerine paneldeki
-“Web API anahtarı” alanını kullan (bkz. 1c). `deploy:rules` yerine Console →
+Anahtar 3. adımda `config/firebaseApp.ts` içine yazılır; uygulamanın içinde hiçbir
+yerden anahtar istenmez (bkz. 1c). `deploy:rules` yerine Console →
 Firestore → Rules → yapıştır → Publish da olur.
 Soru bankası boşsa uygulama repodaki seed verisine düşer (`lib/seedData.ts`:
 `INITIAL_TOPIC_CATALOG`, `FALLBACK_QUESTIONS`, `INITIAL_DAILY_TIPS`) — uygulama açılır,

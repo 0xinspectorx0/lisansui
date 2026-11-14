@@ -249,8 +249,11 @@ ok(/missingDoc && created\.reason === 'denied'/.test(ctx), 'okuma+yazma reddedil
 ok(!/function selfCreateOk[\s\S]{0,200}?[^.]resource\.data\./.test(rules), 'selfCreateOk eksik belgeye bakmıyor → okuma yasağı ilk girişte yazmayı engellemiyor');
 ok((ctx.match(/await auth\.ensureAuthConfigLoaded\(\);/g) || []).length >= 4, 'kayıt/giriş/parola akışları da yüklenmeyi bekliyor');
 const panelSrc = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
-ok(/setDeviceApiKey/.test(panelSrc) && /clearDeviceApiKey/.test(panelSrc), 'panel anahtarı kaydet/kaldır kullanıyor');
-ok(/authConfigSource\(\) === 'device'/.test(panelSrc), 'panel anahtarın kaynağını gösteriyor');
+ok(/clearDeviceApiKey/.test(panelSrc) && !/setDeviceApiKey\(/.test(panelSrc), 'panel yalnız eski cihaz kaydını kaldırıyor, anahtar yapıştırmıyor');
+ok(!/label="Web API anahtarı \(apiKey\)"/.test(panelSrc), 'panelde apiKey giriş alanı yok (kullanıcıdan anahtar istenmiyor)');
+ok(/config\/firebaseApp\.ts/.test(panelSrc), 'panel anahtarın depodan geldiğini söylüyor');
+ok(/authConfigSource\(\) === 'device'/.test(panelSrc) && /authConfigSource\(\) === 'repo'/.test(panelSrc), 'panel anahtarın kaynağını (cihaz/env/repo) gösteriyor');
+ok(/hasRepoApiKey\(\)/.test(panelSrc), 'panel depoda anahtar olup olmadığını sorguluyor');
 const apiSrc = fs.readFileSync('lib/firestoreApi.ts', 'utf8');
 ok(/export const ADMINS_DOC_PATH = collectionPath\('meta\/admins'\);/.test(apiSrc), 'ADMINS_DOC_PATH target kökünden türetiliyor');
 ok(/export const MEMBERSHIP_LOCKDOWN_DOC_PATH = collectionPath\('meta\/membership_lockdown'\);/.test(apiSrc), 'kilit belgesi yolu da target’tan');
@@ -260,6 +263,61 @@ ok(/return \{ ok: true, data: exists \};/.test(apiSrc), 'readMembershipLockdown 
 const panel = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
 ok(/addAdminEmail,[\s\S]*readAdminList,[\s\S]*readMembershipLockdown/.test(panel), 'panel meta/admins + kilit okuyucularını kullanıyor');
 ok(/Kilidi açmak yalnız Console işidir/.test(panel), 'panel, kilidin yalnız Console’tan çevrildiğini söylüyor');
+
+
+console.log('\x1b[1m[12] depoya gömülü config — anahtar kullanıcıdan istenmiyor\x1b[0m');
+const repoSrc = fs.readFileSync('config/firebaseApp.ts', 'utf8');
+const repoMatch = repoSrc.match(/apiKey:\s*'([^']*)'/);
+const repoKey = (repoMatch?.[1] || '').trim();
+ok(/export const FIREBASE_WEB_CONFIG/.test(repoSrc) && !!repoMatch, 'config/firebaseApp.ts apiKey alanını export ediyor');
+ok(!repoKey || /^[A-Za-z0-9_-]{20,}$/.test(repoKey), 'depodaki anahtar beklenen biçimde (boşsa yerel mod sürer)', repoKey ? A.maskKey(repoKey) : '(boş)');
+ok(/deviceOverride \?\? fromEnv\(\) \?\? repoAuthConfig\(\)/.test(fs.readFileSync('lib/authClient.ts', 'utf8')), 'çözümleme sırası: cihaz → env → repo config');
+const built = A.buildAuthConfig({ apiKey: 'AIzaREPO-DUMMY_0123456789ab' }, 'repo');
+ok(built?.source === 'repo', 'buildAuthConfig kaynak etiketini taşıyor');
+ok(built?.authDomain === `${built.projectId}.firebaseapp.com`, 'eksik authDomain projeden türedi (repo config)');
+ok(built?.projectId === 'kpssasistani-01', 'projectId Firestore hedefinden tamamlandı');
+ok(A.buildAuthConfig({ apiKey: '   ' }, 'repo') === null, 'boş apiKey → kaynak devre dışı (null)');
+ok(A.repoAuthConfig() === null || A.repoAuthConfig()?.source === 'repo', 'repoAuthConfig() depoyu okuyor');
+const A2 = await import('/tmp/authBundleNoEnv.mjs');
+ok(A2.isAuthConfigured() === (repoKey.length > 0), 'env yokken auth yalnız depodaki config’e bağlı', repoKey ? 'repo anahtarı var' : 'repo anahtarı boş');
+ok(JSON.stringify(A2.resolveAuthConfig()) === JSON.stringify(A2.repoAuthConfig()), 'env yokken çözümleme = depodaki config');
+if (repoKey) {
+  const rc = A2.resolveAuthConfig();
+  ok(rc?.source === 'repo' && rc?.apiKey === repoKey, 'repo anahtarı doğrudan kullanılıyor (kurulum yok)');
+  ok(A2.authConfigSource() === 'repo', 'authConfigSource() “repo” bildiriyor');
+} else {
+  const np = await A2.probeAuth();
+  ok(!np.ok && /config\/firebaseApp\.ts/.test(np.note), 'anahtar yoksa uyarı depoyu gösteriyor — kullanıcıya “yapıştır” denmiyor', np.note);
+  ok(/config\/firebaseApp\.ts/.test((await A2.signIn('a@b.com', 'x12345')).error || ''), 'yapılandırma eksik hata metni de depoya işaret ediyor');
+}
+ok(!/\.env\.local içine EXPO_PUBLIC_FIREBASE_API_KEY ekleyip/.test(ctx), 'MembershipContext kullanıcıya .env.local düzenletmiyor');
+ok(/config\/firebaseApp\.ts/.test(ctx), 'MembershipContext uyarıları repo config’e işaret ediyor');
+const setupSrc = fs.readFileSync('scripts/setup-firestore.mjs', 'utf8');
+ok(/writeRepoFirebaseConfig/.test(setupSrc) && /config', 'firebaseApp\.ts'/.test(setupSrc), 'setup-firestore --api-key anahtarı depoya da yazıyor');
+
+console.log('\x1b[1m[13] setup-firestore --api-key (gerçek yazma, geçici dizinde)\x1b[0m');
+const os = await import('node:os');
+const nodePath = await import('node:path');
+const cp = await import('node:child_process');
+const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'lisansui-setup-'));
+try {
+  fs.mkdirSync(nodePath.join(tmp, 'config'), { recursive: true });
+  fs.copyFileSync('config/firebaseApp.ts', nodePath.join(tmp, 'config', 'firebaseApp.ts'));
+  const out = cp.execFileSync(
+    process.execPath,
+    ['scripts/setup-firestore.mjs', 'kpssasistani-01', '--root', '.', '--api-key', 'AIzaSETUP-KEY_0123456789ab', '--dir', tmp],
+    { encoding: 'utf8' }
+  );
+  const written = fs.readFileSync(nodePath.join(tmp, 'config', 'firebaseApp.ts'), 'utf8');
+  ok(/apiKey: 'AIzaSETUP-KEY_0123456789ab'/.test(written), '--api-key config/firebaseApp.ts içine yazdı');
+  ok(/projectId: 'kpssasistani-01'/.test(written), 'projectId de config’e yazıldı');
+  ok(/export function hasRepoApiKey/.test(written) && /AMAÇ:/.test(written), 'dosyanın yorum satırları ve export’ları korundu');
+  ok(/\n  projectId: 'kpssasistani-01',\n  authDomain: '',\n  appId: '',/.test(written), 'diğer alanlar korundu (yalnız hedef satırlar değişti)');
+  ok(/EXPO_PUBLIC_FIREBASE_API_KEY=AIzaSETUP-KEY_0123456789ab/.test(fs.readFileSync(nodePath.join(tmp, '.env.local'), 'utf8')), '--api-key .env.local’a da yazıldı (override)');
+  ok(/config\/firebaseApp\.ts/.test(out), 'kurulum çıktısı repo config’ten söz ediyor');
+} finally {
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
 
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);
 process.exit(fail ? 1 : 0);

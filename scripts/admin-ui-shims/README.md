@@ -12,3 +12,11 @@ dosyalar yalnızca o test içindir ve uygulamada kullanılmaz:
 | `async-storage.js` | bellek içi AsyncStorage (firebase/ekosistem yok) |
 | `admin-context.js` | `useAdmin()` — sabit 5 soruluk konu + çağıran kaydedici mutasyonlar |
 | `admin-gate.js` | PIN kapısı açılır (çocuklar render edilir) |
+| `plain.js` | iç içe Proxy stub — Ayarlar ekranının bağladığı onlarca alan (`settings.*`, `planCopy()`, `readAdminList()` …) undefined'a çarpmadan render edilir |
+| `secure-store.js` | `expo-secure-store` yerine bellek içi depolama (node'da native modül yok) |
+
+[5] bölümü `screens/AdminSettingsScreen.tsx` için gölge üretirken stub modülleri
+`TMP/stubs/` içinde otomatik yazıyor: ekranda import edilen her isim `plain.js`
+(veya `use*` ise `neutralHook`) export'una bağlanıyor. Amaç: panelde Firebase
+anahtar giriş alanı kalmadığını, kaynak satırının (`config/firebaseApp.ts`) doğru
+görüntülendiğini gerçek render üzerinden kanıtlamak.

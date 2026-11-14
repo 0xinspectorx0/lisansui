@@ -61,7 +61,7 @@ interface MembershipContextValue {
   cloudStatus: CloudStatus;
   cloudMessage: string | null;
 
-  /** true ise kimlik doğrulama Firebase Auth üzerinden yapılır (API anahtarı tanımlı). */
+  /** true ise kimlik doğrulama Firebase Auth üzerinden yapılır (anahtar depoda/.env’de tanımlı). */
   authMode: boolean;
   /** Firebase Auth açıkken “şifremi unuttum” e-postası. */
   sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
@@ -206,7 +206,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     let cancelled = false;
     (async () => {
       try {
-        // Panelde girilen Firebase Auth anahtarı (cihaza özel) ve kalıcı oturum:
+        // Depoya gömülü config (+ eski kurulumlarda cihaz anahtarı) ve kalıcı oturum:
         // ilk Firestore isteğinin Authorization başlığıyla gitmesi için önce yükle.
         await auth.ensureAuthConfigLoaded();
         await auth.currentIdToken().catch(() => null);
@@ -473,7 +473,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!authMode) {
           if (isFirebaseAuthBundle(doc.password)) {
             setError(
-              'Bu hesap Firebase Auth ile oluşturulmuş. `.env.local` içine EXPO_PUBLIC_FIREBASE_API_KEY ekleyip Metro’yu `--clear` ile yeniden başlat.'
+              'Bu hesap Firebase Auth ile oluşturulmuş. Anahtar `config/firebaseApp.ts` içine yazılınca (geliştirici işi) giriş kendiliğinden çalışır — senden bir şey girmen istenmiyor.'
             );
             return { ok: false, reason: 'authmode' };
           }
@@ -522,7 +522,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const sendPasswordReset = useCallback<MembershipContextValue['sendPasswordReset']>(
     async email => {
       if (!auth.isAuthConfigured())
-        return { ok: false, error: 'Parola sıfırlama için Firebase Auth gerekiyor (EXPO_PUBLIC_FIREBASE_API_KEY).' };
+        return { ok: false, error: 'Parola sıfırlama için Firebase Auth gerekiyor (anahtar config/firebaseApp.ts içinde tanımlı olmalı).' };
       const res = await auth.sendPasswordResetEmail(normalizeEmail(email));
       if (!res.ok) {
         setError(res.error || 'Sıfırlama e-postası gönderilemedi.');

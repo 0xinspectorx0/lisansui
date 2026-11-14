@@ -15,7 +15,8 @@
  *   --root <önec>   kök yolu; '.' = koleksiyonlar veritabanı kökünde (varsayılan '.')
  *   --dir <yol>     repo kökü (varsayılan: cwd)
  *   --dry-run       hiçbir şeye dokunma, sadece ne yapacağını göster
- *   --api-key <K>   Firebase Auth API anahtarını da .env.local'a yaz (EXPO_PUBLIC_FIREBASE_API_KEY)
+ *   --api-key <K>   Firebase Auth API anahtarını hem .env.local'a hem depoya gömülü
+ *                   config/firebaseApp.ts'e yazar → uygulama kimseye anahtar sormaz
  *   --check         yapılandırmayı doğrula (ağ gerekir; Auth anahtarı varsa onu da dener)
  *   --deploy        kuralları yayınla (firebase login gerekir)
  *   --keep-note     mevcut .env.local alanlarını üzerine yazma, sadece ekle/güncelle (varsayılan)
@@ -56,6 +57,7 @@ const envPath = path.join(dir, '.env.local');
 const rcPath = path.join(dir, '.firebaserc');
 const appJsonPath = path.join(dir, 'app.json');
 const rulesPath = path.join(dir, 'firestore.rules');
+const repoFirebasePath = path.join(dir, 'config', 'firebaseApp.ts');
 const rootArg = opt('root') ?? '.';
 const rootValue = ['.', './', '', 'root', '(root)', 'kök', 'none'].includes(String(rootArg).trim())
   ? ''
@@ -98,6 +100,37 @@ function writeEnvFile(file, updates) {
 }
 
 /** .env.local / .env dosyasından tek değer oku (yorum satırlarını saymaz). */
+/**
+ * config/firebaseApp.ts içindeki FIREBASE_WEB_CONFIG alanlarını günceller
+ * (yalnızca `apiKey: '...'` / `projectId:` / `appId:` satırlarına dokunur).
+ * Anahtar depoya girince uygulama hiçbir ekranda artık anahtar sormaz.
+ */
+function writeRepoFirebaseConfig(file, updates) {
+  if (!fs.existsSync(file)) {
+    console.log(c.warn('  ! config/firebaseApp.ts bulunamadı — repo config güncellenmedi'));
+    return false;
+  }
+  let text = fs.readFileSync(file, 'utf8');
+  let touched = 0;
+  for (const [key, value] of Object.entries(updates)) {
+    const re = new RegExp(`(^\\s*${key}:\\s*)'[^']*'`, 'm');
+    if (re.test(text)) {
+      text = text.replace(re, `$1'${String(value).replace(/'/g, '')}'`);
+      touched++;
+    }
+  }
+  if (!touched) {
+    console.log(c.warn('  ! config/firebaseApp.ts beklenmeyen biçimde — elle apiKey satırını güncelle'));
+    return false;
+  }
+  if (DRY) {
+    console.log(c.dim('  [dry-run] config/firebaseApp.ts dokunulmadı; yazılacak: ') + JSON.stringify(updates));
+    return true;
+  }
+  fs.writeFileSync(file, text);
+  return true;
+}
+
 function readEnvValue(file, name) {
   for (const f of [file, path.join(path.dirname(file), '.env')]) {
     if (!fs.existsSync(f)) continue;
@@ -342,6 +375,16 @@ async function main() {
     writeEnvFile(envPath, updates);
     if (!DRY) console.log(c.ok('  ✔') + ` .env.local güncellendi (${envPath})`);
 
+    // 1b) API anahtarı varsa asıl kalıcı yeri: depoya gömülü config (kullanıcıya sorulmaz)
+    if (apiKeyArg) {
+      const written = writeRepoFirebaseConfig(repoFirebasePath, {
+        apiKey: apiKeyArg.trim(),
+        projectId,
+      });
+      if (written && !DRY)
+        console.log(c.ok('  ✔') + ' config/firebaseApp.ts güncellendi — uygulama artık anahtarı kendiliğinden kullanır');
+    }
+
     // 2) .firebaserc
     const rc = readJsonSafe(rcPath) || {};
     rc.projects = { ...(rc.projects || {}), default: projectId };
@@ -383,8 +426,9 @@ async function main() {
         '  5) Uygulama: “Firestore klasörlerini oluştur (tohumlama)” → Planı çıkar → Firestore’a yaz',
         '  6) Console’da meta/content_lock (note=kilitli) oluştur → içerik yazma penceresi kapanır',
         '  7) Firebase Auth (önerilen): Console → Authentication → Sign-in method → Email/Password → Enable,',
-        '     sonra `npm run setup:firestore -- <proje> --root . --api-key <ANAHTAR>` ve',
-        '     `deploy:rules`. Anahtar tanımlıysa uygulama kimlik doğrulamayı Firebase üzerinden yapar.',
+        '     sonra `npm run setup:firestore -- <proje> --root . --api-key <ANAHTAR>` ve `deploy:rules`.',
+        '     Bu komut anahtarı config/firebaseApp.ts’e de yazar → uygulama anahtarı kendiliğinden kullanır,',
+        '     Admin → Ayarlar ekranına hiçbir şey yapıştırılması gerekmez.',
         '  8) Katı mod: Console\'da meta/membership_lockdown belgesi oluştur → kimliksiz üyelik yazma/okuma kapanır',
         '     (geri almak = belgeyi silmek; kuralı yeniden yayımlamak gerekmez). Yönetici listesi: meta/admins.',
         '  9) Eski projeden soru bankasını taşımak için: npm run migrate:content -- --limit 2 --dry-run',
@@ -425,9 +469,10 @@ async function main() {
     console.log(c.b('  Firebase Auth testi'));
     if (!key) {
       console.log(
-        c.dim('  ○ EXPO_PUBLIC_FIREBASE_API_KEY tanımlı değil → uygulama yerel PBKDF2 modunda çalışıyor.')
+        c.dim('  ○ API anahtarı yok (ne .env.local ne config/firebaseApp.ts) → uygulama yerel PBKDF2 modunda çalışıyor.')
       );
-      console.log(c.dim('  İstersen: npm run setup:firestore -- ' + projectId + ' --root . --api-key <ANAHTAR>'));
+      console.log(c.dim('  Kalıcı çözüm (kullanıcıya bir daha sorulmaz):'));
+      console.log(c.dim('    npm run setup:firestore -- ' + projectId + ' --root . --api-key <ANAHTAR>'))
     } else {
       const a = await probeIdentity(key);
       console.log(`  ${a.verdict.ok ? c.ok('✔') : c.bad('✗')} ${a.verdict.note}${a.verdict.extra ? c.dim(' ' + a.verdict.extra) : ''}`);
