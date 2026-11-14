@@ -53,6 +53,7 @@ import {
 import { AdminGate } from '../components/admin/AdminGate';
 import {
   addAdminEmail,
+  probeMembershipWrite,
   readAdminList,
   readMembershipLockdown,
   ADMINS_DOC_PATH,
@@ -153,6 +154,12 @@ export const AdminSettingsScreen: React.FC = () => {
     busy: false,
     data: null,
   });
+  const [diagEmail, setDiagEmail] = useState(() => membership.member?.email || '');
+  const [writeProbe, setWriteProbe] = useState<{
+    busy: boolean;
+    text: string;
+    tone: 'info' | 'success' | 'danger';
+  }>({ busy: false, text: 'Henüz denenmedi', tone: 'info' });
   const [rulesCopied, setRulesCopied] = useState<string | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
 
@@ -167,12 +174,58 @@ export const AdminSettingsScreen: React.FC = () => {
       resetAuthConfigCache();
       await ensureAuthConfigLoaded();
       if (healed.healed) setRulesCopied(healed.note || 'Cihazdaki yabancı projeli anahtar kaydı temizlendi.');
-      const data = await diagnoseMembershipAccess();
+      const data = await diagnoseMembershipAccess(diagKey || undefined);
       setDiag({ busy: false, data });
+      // Okuma tarafı temizse tek kanıt deneme yazmasıdır: düğümü aramadan kendimiz deneriz.
+      if (data.cause === 'write-needs-probe' && diagKey.includes('@')) await runWriteProbe();
     } catch (e) {
       setDiag({ busy: false, data: null });
       setRulesCopied(`Tanı yapılamadı: ${String(e)}`);
     }
+  };
+
+  const diagKey = String(diagEmail || '').trim().toLowerCase();
+
+  /**
+   * Okuma tarafı temizse yazmanın durumu ancak DENEME YAZMASIYLA bilinir.
+   * `probeMembershipWrite` yalnızca o e-postanın KENDİ belgesine dokunur
+   * (lastLoginAt / tam biçimle create) ve hak alanlarına değmez.
+   */
+  const runWriteProbe = async () => {
+    if (!diagKey.includes('@')) {
+      setWriteProbe({
+        busy: false,
+        text: 'Önce yukarıya e-postanı yaz — deneme yalnız kendi belgene yazılır.',
+        tone: 'danger',
+      });
+      return;
+    }
+    setWriteProbe({ busy: true, text: 'Kendi belgene yazma deneniyor…', tone: 'info' });
+    try {
+      const res = await probeMembershipWrite(diagKey);
+      setWriteProbe({
+        busy: false,
+        tone: res.ok ? 'success' : 'danger',
+        text: res.ok
+          ? res.created
+            ? `Yazma serbest — ${res.email} belgesi yoktu, kurala tam uygun biçimde oluşturuldu.`
+            : `Yazma serbest — ${res.email} belgesi güncellendi (yalnız lastLoginAt).`
+          : `Yazma engellendi (${res.cause || 'bilinmiyor'}): ${res.error || 'neden ölçülemedi'}`,
+      });
+    } catch (e) {
+      setWriteProbe({ busy: false, tone: 'danger', text: `Sınama yapılamadı: ${String(e)}`, });
+    }
+  };
+
+  const copyLockdownPath = async () => {
+    const path = diag.data?.detail.lockdownPath;
+    if (!path) return;
+    const res = await copyText(path);
+    setRulesCopied(
+      res === 'copied'
+        ? `${path} yolu kopyalandı — Console → Firestore → Documents → bu belgeyi sil, kilit kapanır.`
+        : `Bu belgeyi sil: Console → Firestore → Documents → ${path}`
+    );
   };
 
   const copyRulesText = async () => {
@@ -647,9 +700,18 @@ export const AdminSettingsScreen: React.FC = () => {
         {/* Erişim tanısı + kuralları yayınla */}
         <AdminSectionTitle
           label="Erişim tanısı ve kurallar"
-          hint="Üyelik okuma/yazma reddedilirse nedeni burada ölçülür: kural yayınlanmamış mı, bayat mı, kimlik başka projeden mi, kilit mi açık. Hiçbir şey yazılmaz, yalnızca üç okuma yapılır."
+          hint="Üyelik okuma/yazma reddedilirse nedeni burada ölçülür: kural yayınlanmamış mı, bayat mı, kimlik başka projeden mi, kilit mi açık (kök ve legacy yolu da dahil). “Tanı” hiçbir şey yazmaz; yazmanın gerçekten çalışıp çalışmadığını “Yazma sınaması” ölçer — o da yalnızca kendi belgene dokunur."
         />
         <AdminCard>
+          <AdminField
+            label="E-posta (isteğe bağlı — kesin tanı için)"
+            value={diagEmail}
+            onChangeText={setDiagEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            maxLength={180}
+            hint="Tanı ve yazma sınaması bu e-postanın KENDİ belgesi üzerinden ölçülür; üyelik belgesi e-posta ile adlandırılır."
+          />
           <AdminRow
             icon="medkit-outline"
             title="Neden engellendi?"
@@ -664,7 +726,7 @@ export const AdminSettingsScreen: React.FC = () => {
               <AdminButton
                 small
                 tone={
-                  !diag.data || diag.data.cause === 'ok'
+                  !diag.data || diag.data.cause === 'ok' || diag.data.cause === 'write-needs-probe'
                     ? 'primary'
                     : diag.data.cause === 'offline'
                       ? 'neutral'
@@ -684,14 +746,61 @@ export const AdminSettingsScreen: React.FC = () => {
                 </Text>
               ))}
               <Text style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 15 }}>
-                {`proje ${diag.data.detail.projectId} • db ${diag.data.detail.databaseId} • ${diag.data.detail.membershipsPath} • içerik ${diag.data.detail.contentStatus} • üyelik ${diag.data.detail.membershipStatus} • kilit ${diag.data.detail.lockdown}`}
+                {`proje ${diag.data.detail.projectId} • db ${diag.data.detail.databaseId} • ${diag.data.detail.membershipsPath} • içerik ${diag.data.detail.contentStatus} • üyelik ${diag.data.detail.membershipStatus}${diag.data.detail.membershipEmpty ? ' (boş)' : ''} • kilit ${diag.data.detail.lockdown}${diag.data.detail.lockdownPath ? ` @${diag.data.detail.lockdownPath}` : ''}${diag.data.detail.shapeProblems ? ` • biçim: ${diag.data.detail.shapeProblems}` : ''}`}
               </Text>
             </View>
           ) : null}
           {diag.data && diag.data.cause === 'ok' ? (
             <Text style={{ fontSize: 11, color: colors.success, lineHeight: 16, marginBottom: 6 }}>
-              Okuma/yazma yolu açık görünüyor.
+              {diag.data.detail.selfMatch
+                ? 'Oturumun e-postası bu üyelik belgesiyle eşleşiyor: kendi kaydına okuma/yazma açık.'
+                : 'Okuma/yazma yolu açık görünüyor.'}
             </Text>
+          ) : null}
+          <AdminRow
+            icon="pulse-outline"
+            title="Yazma sınaması (kendi belgen)"
+            subtitle={
+              writeProbe.busy
+                ? 'Deneme yazılıyor…'
+                : 'Okuma izinleri yazma iznini kanıtlamaz. Bu, yalnızca yazdığın e-postanın belgesine dokunur: belge yoksa kurala tam uygun biçimde oluşturulur, varsa sadece lastLoginAt yenilenir. VIP/rol/durum alanlarına dokunulmaz.'
+            }
+            right={
+              <AdminButton
+                small
+                tone={writeProbe.tone === 'success' ? 'success' : writeProbe.tone === 'danger' ? 'danger' : 'primary'}
+                label={writeProbe.busy ? 'Deneniyor' : 'Sına'}
+                disabled={writeProbe.busy}
+                onPress={() => void runWriteProbe()}
+              />
+            }
+          />
+          {writeProbe.text !== 'Henüz denenmedi' ? (
+            <Text
+              style={{
+                fontSize: 11,
+                lineHeight: 16,
+                marginBottom: 6,
+                color:
+                  writeProbe.tone === 'success'
+                    ? colors.success
+                    : writeProbe.tone === 'danger'
+                      ? colors.danger
+                      : colors.textSecondary,
+              }}
+            >
+              {writeProbe.text}
+            </Text>
+          ) : null}
+          {diag.data?.detail.lockdownPath ? (
+            <AdminRow
+              icon="copy-outline"
+              title="Kilit belge yolunu kopyala"
+              subtitle={`${diag.data.detail.lockdownPath} silinince üyelik kilidi kapanır — kuralı yeniden yayınlamanın gerekmez.`}
+              right={
+                <AdminButton small tone="neutral" label="Yol" onPress={() => void copyLockdownPath()} />
+              }
+            />
           ) : null}
           <AdminRow
             icon="copy-outline"

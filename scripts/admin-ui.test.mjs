@@ -318,6 +318,11 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
   ok(vis.includes('Kural metnini göster'), 'kural metni gizli-göster satırı var');
   ok(!vis.includes('rules_version'), 'kural metni varsayılan olarak basılmıyor (sadece “Göster” deyince)');
   ok(!vis.includes('API anahtarını'), 'tanı bölümü kullanıcıdan anahtar istemiyor');
+  ok(vis.includes('Yazma sınaması (kendi belgen)'), 'yazma sınaması satırı görünüyor');
+  ok(vis.includes('Sına'), 'sınama düğmesi basılabilir durumda');
+  ok(vis.includes('VIP/rol/durum alanlarına dokunulmaz'), 'sınamanın zararsız olduğu yazıyor');
+  ok(vis.includes('E-posta (isteğe bağlı — kesin tanı için)'), 'tanı için e-posta alanı var');
+  ok(!vis.includes('Henüz denenmedi'), 'sınama sonucu preslenmeden boş mesaj basılmıyor');
 }
 
 cleanup();

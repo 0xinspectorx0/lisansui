@@ -23,6 +23,21 @@ export const FIRESTORE_RULES_TEXT = `rules_version = '2';
  * Bu dosyanın bir kopyası uygulamada durur (config/firestoreRulesCopy.ts) ki panel
  * “Kuralları kopyala” ile tek dokunuşta Console'a yapıştırabilsin:
  *   güncellemek için  →  npm run sync:rules   (test:auth bayat kopyayı yakalar).
+ *
+ * memberships yazma sözleşmesi (istemci aynası: lib/memberShape.ts — test:auth §16
+ * iki tarafı satır satır karşılaştırır):
+ *   • create gövdesi memberShapeOk'un ZORUNLU OLDUĞU tüm alanları taşımak zorunda;
+ *     Firestore REST'te PATCH, belge YOKSA create sayılır → kısmi gövde reddedilir.
+ *     Uygulama bunu kademeli yazmayla çözer (lib/firestoreApi.ts → writeMemberDoc).
+ *   • update gövdesi tek bir change-set listesinde kalmalı: usageOnlyChange (kendi
+ *     kendine) VEYA entitlementChange (panel). authUid yalnız ilkinde,
+ *     vip/vipPlan/vipExpiresAt/status yalnız ikincisinde → ikisi AYNI PATCH'te
+ *     yazılmaz; uygulama iki istek atar.
+ *   • id, email, createdAt, schemaVersion, role PATCH'lenmez (listelerin dışında);
+ *     e-posta belge kimliğidir.
+ *   • Boş/bozuk verifier/salt/iterations üçlüsü algo: 'pbkdf2-sha256' ile
+ *     gönderilirse red yer; uygulama böyle bir üçlüyü firebase-auth işaretine
+ *     çevirir (parola zaten Firebase'de).
  *   • Yerel mod (anahtar yoksa): üyelikler \`memberships/{e-posta}\` belgesinde,
  *     parola cihazda PBKDF2-SHA256 ile hash'lenir (lib/crypto.ts).
  *
@@ -414,4 +429,4 @@ service cloud.firestore {
 `;
 
 /** Kopya kaç satırlık bir metin taşıyor (panel özeti için). */
-export const FIRESTORE_RULES_LINES = 405;
+export const FIRESTORE_RULES_LINES = 420;

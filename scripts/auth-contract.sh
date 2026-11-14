@@ -33,6 +33,12 @@ bundle lib/authClient.ts /tmp/authBundleNoEnv.mjs '""'
 bundle lib/accessDiag.ts /tmp/accessDiagBundle.mjs '""'
 bundle lib/firestoreApi.ts /tmp/firestoreApiBundle.mjs '""'
 
+# 3b) Kural aynası + belge kodlayıcısı (yazmadan önce biçim denetimi).
+npx esbuild lib/memberShape.ts --bundle --format=esm --platform=neutral \
+  --outfile=/tmp/memberShapeBundle.mjs --log-level=warning
+npx esbuild lib/membership.ts --bundle --format=esm --platform=neutral \
+  --outfile=/tmp/membershipBundle.mjs --log-level=warning
+
 # 4) firestore.rules kopyası (paneldeki “Kuralları kopyala” düğmesinin kaynağı).
 npx esbuild config/firestoreRulesCopy.ts --bundle --format=esm --platform=neutral \
   --outfile=/tmp/rulesCopyBundle.mjs --log-level=warning

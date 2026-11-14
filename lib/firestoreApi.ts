@@ -10,6 +10,11 @@
  * (see firestore.rules at the repo root).
  */
 import {
+  checkMemberFields,
+  coerceMemberFields,
+  shapeProblemText,
+} from './memberShape';
+import {
   MemberDoc,
   MembershipStatus,
   VipPlanId,
@@ -99,11 +104,16 @@ async function request(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
-export type CloudOutcome<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: string; code?: number; reason: 'denied' | 'offline' | 'notfound' | 'error' };
+export type CloudFailure = {
+  ok: false;
+  error: string;
+  code?: number;
+  reason: 'denied' | 'offline' | 'notfound' | 'error';
+};
 
-function classify(err: unknown, res?: Response): CloudOutcome<never> {
+export type CloudOutcome<T> = { ok: true; data: T } | CloudFailure;
+
+function classify(err: unknown, res?: Response): CloudFailure {
   const msg = err instanceof Error ? err.message : String(err);
   if (res) {
     if (res.status === 404) return { ok: false, error: 'Kayıt bulunamadı', code: 404, reason: 'notfound' };
@@ -112,8 +122,12 @@ function classify(err: unknown, res?: Response): CloudOutcome<never> {
         ok: false,
         code: res.status,
         reason: 'denied',
+        // Nedeni UYGULAMA ölçüyor (lib/accessDiag.ts); burada hüküm vermek yerine
+        // ölçüme devrediyoruz. Çağrı tarafı `denied` görürse tanının cümlesini gösterir.
         error:
-          'Firestore kurallı yazmayı reddetti. firestore.rules dosyasındaki örneği konsoldan yayınla (memberships izni).',
+          res.status === 401
+            ? 'Oturum token’ı kabul edilmedi (HTTP 401).'
+            : 'Firestore bu işlemi kural yüzünden gerçekleştirmedi (HTTP 403).',
       };
     return {
       ok: false,
@@ -223,27 +237,162 @@ export async function listMembers(): Promise<MemberListResult> {
   }
 }
 
-/** Create a membership document (fails if the id already exists). */
-export async function createMemberDoc(member: MemberDoc): Promise<CloudOutcome<MemberDoc>> {
-  const body = JSON.stringify({
-    fields: memberToFields(member),
-  });
+/* ------------------------------------------- üyelik yazmaları (kural aynalı) */
+
+/**
+ * memberships yazmalarının tek kapısı. Gövde, `firestore.rules` içindeki
+ * `memberShapeOk` denetiminin TypeScript aynasından (`lib/memberShape.ts`) geçer:
+ *   • düzeltilebilen sapmalar (bozuk/boş şifre demeti, 80 karakteri aşan ad,
+ *     12'den çok kullanım girdisi, ondalık sayaç) YAZMADAN ÖNCE düzeltilir;
+ *   • düzeltilemeyenden `create` reddedilir ve hangi ALANIN neden engellediği
+ *     söylenir — "kural engelledi" bilmece olarak kalmaz.
+ * `update` (PATCH) kısmi gövde olduğu için zorunlu alan listesi denetlenmez.
+ */
+function prepareMemberWrite(
+  fields: Record<string, FbValue>,
+  memberId: string,
+  mode: 'create' | 'update'
+): { ok: true; fields: Record<string, FbValue> } | { ok: false; error: string } {
+  if (mode === 'update') {
+    const patched = coerceMemberFields(fields, { memberId });
+    const uid = patched.authUid?.stringValue;
+    if ('authUid' in patched && (typeof uid !== 'string' || uid.length < 8))
+      return { ok: false, error: 'Belge gönderilmedi — authUid: en az 8 karakter olmalı.' };
+    return { ok: true, fields: patched };
+  }
+  const prepared = coerceMemberFields(fields, { memberId, fill: true });
+  const problems = checkMemberFields(prepared, 'create', memberId);
+  if (problems.length)
+    return { ok: false, error: `Belge gönderilmedi — ${shapeProblemText(problems)}.` };
+  return { ok: true, fields: prepared };
+}
+
+/** Kendi belgesine yazabilecek alanlar (rules: `usageOnlyChange`). */
+const SELF_WRITABLE_KEYS = [
+  'displayName',
+  'city',
+  'exam',
+  'note',
+  'testsCompleted',
+  'questionsSolved',
+  'netSum',
+  'courseUsage',
+  'lastLoginAt',
+  'verifier',
+  'salt',
+  'iterations',
+  'algo',
+  'authUid',
+] as const;
+
+/** `memberToFields` çıktısından kısmi güncellemeye çevir (createdAt/e-posta yok). */
+function selfPatchFromDraft(member: MemberDoc): Partial<MemberDoc> {
+  const out: Record<string, unknown> = {};
+  for (const key of SELF_WRITABLE_KEYS) {
+    const value = (member as unknown as Record<string, unknown>)[key];
+    if (value !== undefined) out[key] = value;
+  }
+  const bundle = member.password;
+  if (bundle) {
+    out.verifier = bundle.verifier;
+    out.salt = bundle.salt;
+    out.iterations = bundle.iterations;
+    out.algo = bundle.algo;
+  }
+  return out as Partial<MemberDoc>;
+}
+
+export interface MemberWriteResult {
+  outcome: CloudOutcome<MemberDoc>;
+  /** Belge zaten vardı; kabul edilen alanlarla kısmi güncelleme yapıldı. */
+  adopted?: boolean;
+  /** Belge yoktu; tam biçimle create edilerek oluşturuldu (PATCH reddinin çözümü). */
+  created?: boolean;
+  /** create reddedildi, `usageOnlyChange` alanlarıyla yazılabildi. */
+  degraded?: boolean;
+}
+
+/**
+ * Üyelik belgesini yazmanın KADEMELİ yolu. Tek istekle başlar, reddi kendisi
+ * çözer:
+ *   1) POST ile tam biçim create
+ *   2) 409 (belge var) → `usageOnlyChange` alanlarıyla PATCH → hesap benimsenir
+ *   3) create reddi  → PATCH ile kısmi yazım (kural `hasAll`'ı create'de arar;
+ *      PATCH belge YOKSA create'e döner ve eksik alanlardan reddedilir — bu
+ *      yüzden 3. adımda önce belgenin var olup olmadığına bakılır)
+ * Kullanıcı aynı hatayı iki kez görmez; başarısızlıkta son engelin kesin cümlesi döner.
+ */
+export async function writeMemberDoc(member: MemberDoc): Promise<MemberWriteResult> {
+  const prepared = prepareMemberWrite(memberToFields(member), member.id, 'create');
+  if (!prepared.ok) return { outcome: { ok: false, error: prepared.error, reason: 'error' } };
+
+  const first = await postMemberDoc(member.id, prepared.fields);
+  if (first.ok) return { outcome: first };
+
+  // Belge zaten var → üzerine yazmak yerine kabul edilen alanları güncelle.
+  if (first.code === 409) {
+    const adopt = await patchMemberDoc(member.id, selfPatchFromDraft(member), {
+      noCreateFallback: true,
+    });
+    if (adopt.ok) return { outcome: adopt, adopted: true };
+    return { outcome: first };
+  }
+
+  // Create reddedildi: belge var mı? Varsa kısmi yazım kurala uyar (memberUpdateOk).
+  const exists = await documentExists(`${MEMBERSHIPS_COLLECTION}/${member.id}`);
+  if (exists === true) {
+    const soft = await patchMemberDoc(member.id, selfPatchFromDraft(member), {
+      noCreateFallback: true,
+    });
+    if (soft.ok) return { outcome: soft, degraded: true };
+  }
+  return { outcome: first };
+}
+
+async function postMemberDoc(
+  memberId: string,
+  fields: Record<string, FbValue>
+): Promise<CloudOutcome<MemberDoc>> {
+  const body = JSON.stringify({ fields });
   try {
-    const res = await request(`${docUrl(MEMBERSHIPS_COLLECTION)}?documentId=${encodeURIComponent(member.id)}`, {
+    const res = await request(`${docUrl(MEMBERSHIPS_COLLECTION)}?documentId=${encodeURIComponent(memberId)}`, {
       method: 'POST',
       body,
     });
-    if (res.status === 409) return classify(new Error('exists'), undefined);
+    if (res.status === 409)
+      return {
+        ok: false,
+        error: 'Bu e-posta ile kayıtlı bir üye zaten var',
+        code: 409,
+        reason: 'error',
+      };
     if (!res.ok) return classify(undefined, res);
     const json = await res.json();
-    const id = String(json?.name || '').split('/').pop() || member.id;
-    return { ok: true, data: memberFromFields(json?.fields || memberToFields(member), id) };
+    const id = String(json?.name || '').split('/').pop() || memberId;
+    return { ok: true, data: memberFromFields(json?.fields || fields, id) };
   } catch (e) {
-    const err = e instanceof Error ? e : new Error(String(e));
-    if (/exists/i.test(err.message))
-      return { ok: false, error: 'Bu e-posta ile kayıtlı bir üye zaten var', code: 409, reason: 'error' };
-    return classify(err);
+    return classify(e);
   }
+}
+
+/** Create a membership document (fails if the id already exists). */
+export async function createMemberDoc(member: MemberDoc): Promise<CloudOutcome<MemberDoc>> {
+  const prepared = prepareMemberWrite(memberToFields(member), member.id, 'create');
+  if (!prepared.ok) return { ok: false, error: prepared.error, reason: 'error' };
+  return postMemberDoc(member.id, prepared.fields);
+}
+
+/**
+ * Üyelik yazmasının akış katmanı için kısayol: create reddilirse kendisi dener,
+ * yine olmazsa tanının cümlesini taşıyan `denied` sonucu döner.
+ */
+export async function writeMembershipSelf(
+  member: MemberDoc
+): Promise<CloudOutcome<MemberDoc> & { adopted?: boolean; degraded?: boolean }> {
+  const res = await writeMemberDoc(member);
+  if (res.outcome.ok)
+    return { ...res.outcome, ...(res.adopted ? { adopted: true } : {}), ...(res.degraded ? { degraded: true } : {}) };
+  return { ...res.outcome, ...(res.degraded ? { degraded: true } : {}) };
 }
 
 /**
@@ -256,7 +405,38 @@ const DERIVED_FIELDS: Record<string, string[]> = {
   password: ['verifier', 'salt', 'iterations', 'algo'],
 };
 
+/**
+ * Kısmi güncellemede GÖNDERİLEMEYECEK alanlar:
+ *   • `createdAt` — rules `memberUpdateOk` altında `usageOnlyChange`/`entitlementChange`
+ *     listelerinde yok; gönderildiği an tüm PATCH reddedilir.
+ *   • `email`     — belge kimliğidir; değişirse `data.id == data.email.lower()`
+ *     denetimi düşer (yarı yolda belge yetimi oluşmaması için reddedilir).
+ */
+const PATCH_FORBIDDEN_KEYS = ['createdAt', 'id'];
+
+/** rules `entitlementChange()` listesi — panelin tek seferde yazabildikleri. */
+const ENTITLEMENT_KEYS = [
+  'vip',
+  'vipPlan',
+  'vipExpiresAt',
+  'status',
+  'note',
+  'displayName',
+  'city',
+  'exam',
+  'lastLoginAt',
+  'testsCompleted',
+  'questionsSolved',
+  'netSum',
+  'courseUsage',
+  'verifier',
+  'salt',
+  'iterations',
+  'algo',
+] as const;
+
 /** Gerçek kısmi güncelleme: yalnızca istenen alanlar PATCH'lenir. */
+
 export function memberPatchToFields(
   patch: Partial<MemberDoc>,
   memberId: string
@@ -264,13 +444,14 @@ export function memberPatchToFields(
   const all = memberToFields({ ...emptyMember(memberId), ...patch, id: memberId } as MemberDoc);
   const out: Record<string, FbValue> = {};
   for (const key of Object.keys(patch)) {
-    if (key === 'id') continue;
+    if (key === 'id' || PATCH_FORBIDDEN_KEYS.includes(key)) continue;
     if (patch[key as keyof MemberDoc] === undefined) continue;
     for (const field of [key, ...(DERIVED_FIELDS[key] || [])]) {
       if (field in all) out[field] = all[field];
     }
   }
-  // `email` geldiyse belge kimliğiyle tutarlılığı garanti et.
+  // `email` belge kimliğidir: kural `data.id == data.email.lower()` denetliyor,
+  // yani farklı bir e-posta yazmak belgeyi yetim bırakır. Kimlik sabit kalır.
   if (out.email) {
     out.id = str(memberId);
     out.emailNormalized = str(memberId);
@@ -283,11 +464,31 @@ function emptyFieldsFor(memberId: string): Record<string, FbValue> {
   return { id: str(memberId), email: str(memberId), emailNormalized: str(memberId) };
 }
 
-/** Merge-update of a membership document; only the given fields are touched. */
+/**
+ * Merge-update of a membership document; only the given fields are touched.
+ *
+ * Kademeli davranış: belge YOKKEN gönderilen PATCH Firestore'da create'e döner
+ * ve `memberShapeOk` yarım belgeyi reddeder. Reddi kullanıcıya yansıtmadan önce
+ * aynı veriyle tam biçimli create denenir (`created: true` ile döner).
+ */
 export async function patchMemberDoc(
   memberId: string,
-  member: Partial<MemberDoc>
+  member: Partial<MemberDoc>,
+  opts: { noCreateFallback?: boolean } = {}
 ): Promise<CloudOutcome<MemberDoc>> {
+  if (
+    typeof member.email === 'string' &&
+    member.email.trim() &&
+    normalizeEmail(member.email) !== normalizeEmail(memberId)
+  ) {
+    return {
+      ok: false,
+      error:
+        'Belgedeki e-posta güncellenmedi: üyelik kimliği e-postanın kendisidir (kural: `id == email`). E-posta değiştirmek yeni hesap açmak demek.',
+      code: 400,
+      reason: 'error',
+    };
+  }
   const fields = memberPatchToFields(member, memberId);
   if (Object.keys(fields).length === 0) {
     return { ok: false, error: 'Güncellenecek alan yok', code: 400, reason: 'error' };
@@ -298,7 +499,18 @@ export async function patchMemberDoc(
       method: 'PATCH',
       body: JSON.stringify({ fields }),
     });
-    if (!res.ok) return classify(undefined, res);
+    if (!res.ok) {
+      const denied = classify(undefined, res);
+      if (!opts.noCreateFallback && (denied.reason === 'denied' || denied.code === 404)) {
+        const full = { ...emptyMember(memberId), ...member, id: memberId } as MemberDoc;
+        const prepared = prepareMemberWrite(memberToFields(full), memberId, 'create');
+        if (prepared.ok) {
+          const created = await postMemberDoc(memberId, prepared.fields);
+          if (created.ok) return created;
+        }
+      }
+      return denied;
+    }
     const json = await res.json();
     const merged = json?.fields || {};
     return {
@@ -309,7 +521,16 @@ export async function patchMemberDoc(
       ),
     };
   } catch (e) {
-    return classify(e);
+    const denied = classify(e);
+    if (!opts.noCreateFallback && denied.reason === 'denied') {
+      const full = { ...emptyMember(memberId), ...member, id: memberId } as MemberDoc;
+      const prepared = prepareMemberWrite(memberToFields(full), memberId, 'create');
+      if (prepared.ok) {
+        const created = await postMemberDoc(memberId, prepared.fields);
+        if (created.ok) return created;
+      }
+    }
+    return denied;
   }
 }
 
@@ -318,15 +539,45 @@ export async function patchMemberDoc(
  * when the local draft was never pushed to the cloud.
  */
 export async function upsertMemberDoc(member: MemberDoc): Promise<CloudOutcome<MemberDoc>> {
-  const body = JSON.stringify({ fields: memberToFields({ ...emptyMember(member.id), ...member }) });
-  try {
-    const res = await request(membersDocUrl(member.id), { method: 'PUT', body });
-    if (!res.ok) return classify(undefined, res);
-    const json = await res.json();
-    return { ok: true, data: memberFromFields(json?.fields || {}, member.id) };
-  } catch (e) {
-    return classify(e);
+  const full = { ...emptyMember(member.id), ...member, id: member.id } as MemberDoc;
+  const exists = await documentExists(`${MEMBERSHIPS_COLLECTION}/${member.id}`);
+  if (exists !== false) {
+    // Belge var (ya da okunamadı): PUT tüm alanları yeniden yazardı ve kuralın
+    // `memberUpdateOk` değişikliği kabul etmediği alanlar için yazmayı reddeder.
+    // Yalnızca panelin dokunabildiği hak/durum alanları PATCH'lenir.
+    const patch: Partial<MemberDoc> = {};
+    for (const key of ENTITLEMENT_KEYS) {
+      const value = (full as unknown as Record<string, unknown>)[key];
+      if (value !== undefined) (patch as unknown as Record<string, unknown>)[key] = value;
+    }
+    if (full.authUid) {
+      // `authUid` yalnızca usageOnlyChange listesinde: hak alanlarıyla birlikte
+      // gönderilirse iki liste de tutmaz → o alanı ayrıca, tek PATCH'te yaz.
+      await patchMemberDoc(member.id, { authUid: full.authUid }, { noCreateFallback: true }).catch(
+        () => undefined
+      );
+    }
+    const patched = await patchMemberDoc(member.id, patch, { noCreateFallback: true });
+    if (patched.ok || Object.keys(patch).length === 0) return patched;
   }
+  const prepared = prepareMemberWrite(memberToFields(full), member.id, 'create');
+  if (!prepared.ok) return { ok: false, error: prepared.error, reason: 'error' };
+  const created = await postMemberDoc(member.id, prepared.fields);
+  return created.ok || created.code !== 409 ? created : patchedOr(created, member);
+}
+
+/** create 409 ile dönerse belge zaten vardır: kısmi yazım yine de denenir. */
+async function patchedOr(
+  failed: CloudOutcome<MemberDoc>,
+  member: MemberDoc
+): Promise<CloudOutcome<MemberDoc>> {
+  const patch: Partial<MemberDoc> = {};
+  for (const key of ENTITLEMENT_KEYS) {
+    const value = (member as unknown as Record<string, unknown>)[key];
+    if (value !== undefined) (patch as unknown as Record<string, unknown>)[key] = value;
+  }
+  const res = await patchMemberDoc(member.id, patch, { noCreateFallback: true });
+  return res.ok ? res : failed;
 }
 
 export async function deleteMemberDoc(memberId: string): Promise<CloudOutcome<true>> {
@@ -398,6 +649,110 @@ export async function readDocument(
   }
 }
 
+/** `probeMembershipWrite` sonucu — tek bakışta "yazma serbest mi" cevabı. */
+export interface WriteProbeResult {
+  email: string;
+  ok: boolean;
+  /** Belge yoktu, tam biçimle oluşturuldu. */
+  created: boolean;
+  /** Belge vardı, dokunulabilen alanlar yenilendi. */
+  updated: boolean;
+  /** Reddin gerekçesi (kullanıcıya gösterilecek cümle). */
+  error?: string;
+  cause?: 'denied' | 'offline' | 'shape' | 'unreadable';
+}
+
+/**
+ * "Yazma gerçekten çalışıyor mu?" sorusunun tek güvenilir cevabı: deneme yazması.
+ * Yalnızca `email` ile adlandırılan KENDİ üyelik belgesine dokunur —
+ *   • belge varsa `lastLoginAt` yenilenir (rules: `usageOnlyChange`),
+ *   • belge yoksa tam biçimli create ile oluşturulur.
+ * Hak alanlarına (vip / vipPlan / role / status) DOKUNMAZ, yani yetki kazandırmaz.
+ * `diagnoseMembershipAccess` okuma tarafını ölçer; bu fonksiyon yazma tarafını
+ * ölçtüğü için paneldeki "Yazma sınaması" düğmesi ikisini birleştirir.
+ */
+export async function probeMembershipWrite(email: string): Promise<WriteProbeResult> {
+  const key = normalizeEmail(String(email || '').trim());
+  const fail = (
+    error: string,
+    cause: WriteProbeResult['cause'],
+    extra: Partial<WriteProbeResult> = {}
+  ): WriteProbeResult => ({ email: key, ok: false, created: false, updated: false, error, cause, ...extra });
+
+  if (!key.includes('@')) return fail('Geçerli bir e-posta yaz (belge kimliği e-postadır).', 'shape');
+
+  // Kilit açıksa ve bu belge kimliği oturumun e-postası değilse yazma KESİN
+  // reddedilir (kural: selfUpdateOk/selfCreateOk). Boşuna istek atmak yerine
+  // nedeni hemen söylüyoruz — yönetici listesindeki oturumlar hariç.
+  const lock = await readLockdownInfo();
+  if (lock.on) {
+    const idn = await auth.sessionIdTokenInfo();
+    const sessionEmail = String(idn.email || '').toLowerCase();
+    const admins = await readAdminList();
+    const isAdmin = !!sessionEmail && admins.ok && admins.data.emails.includes(sessionEmail);
+    if (!isAdmin) {
+      if (!sessionEmail)
+        return fail(
+          `Üyelik kilidi AÇIK${lock.path ? ` (${lock.path})` : ''}: yazma ancak O e-postayla giriş yapmış cihazdan geçer. ${key} için giriş yap, sonra yeniden dene.`,
+          'denied'
+        );
+      if (sessionEmail !== key)
+        return fail(
+          `Üyelik kilidi AÇIK: yazma yalnız kendi belgen için geçerli (oturum: ${sessionEmail}), ${key} belgesine değil. ` +
+            `Ya ${key} ile giriş yap ya da kilidi kapat: Console → Firestore → Documents → ${lock.path || 'meta/membership_lockdown'} belgesini sil.`,
+          'denied'
+        );
+    }
+  }
+
+  const existing = await fetchMemberDoc(key);
+  if (existing.ok && existing.data) {
+    const res = await patchMemberDoc(key, { lastLoginAt: new Date().toISOString() }, {
+      noCreateFallback: true,
+    });
+    if (res.ok) return { email: key, ok: true, created: false, updated: true };
+    return fail(res.error, res.reason === 'offline' ? 'offline' : 'denied');
+  }
+  if (!existing.ok && existing.reason === 'offline')
+    return fail(existing.error, 'offline');
+
+  // Belge yok (ya da okunamadı): tam biçimle create dene — 409 çıkarsa belge var,
+  // o zaman kısmi yazım denenir (writeMemberDoc'un kademesi bunu halleder).
+  const nowIso = new Date().toISOString();
+  const draft: MemberDoc = {
+    ...emptyMember(key),
+    email: key,
+    emailNormalized: key,
+    displayName: key.split('@')[0] || 'Üye',
+    status: 'pending',
+    createdAt: nowIso,
+    lastLoginAt: nowIso,
+    note: 'Erişim sınaması: belge yoktu, oluşturuldu.',
+  };
+  const written = await writeMemberDoc(draft);
+  if (written.outcome.ok)
+    return { email: key, ok: true, created: !written.adopted && !written.degraded, updated: !!written.adopted || !!written.degraded };
+  const outcome = written.outcome;
+  if (outcome.reason === 'offline') return fail(outcome.error, 'offline');
+  if (outcome.code === 409)
+    return fail(
+      'Belge var ama okunamıyor: kural kendi belgeni okumana izin vermiyor (token ya da yol uyuşmuyor).',
+      'unreadable'
+    );
+  if (outcome.reason !== 'denied') return fail(outcome.error, 'shape');
+  // Gövde uygulama tarafında kural aynasından geçtiği için reddedilecek bir biçim
+  // yoktu → kalan açıklama ya kilit ya da YAYINDAKİ kuralların bayat olmasıdır.
+  if (lock.on)
+    return fail(
+      `${outcome.error} Kilit açık${lock.path ? ` (${lock.path})` : ''}: kendi belgen ya da yönetici oturumu şart.`,
+      'denied'
+    );
+  return fail(
+    'Belge biçimi uygulamanın beklediği kurallara uygun, kilit de kapalı — yine de reddediliyorsa YAYINDAKİ kurallar bu sürümden ESKİ. Admin → Ayarlar → “firestore.rules metnini kopyala” → Console → Firestore → Rules → yapıştır → Publish.',
+    'denied'
+  );
+}
+
 export async function probeCloud(): Promise<{ online: boolean; error?: string }> {
   try {
     const res = await request(`${docUrl(MEMBERSHIPS_COLLECTION)}?pageSize=1`);
@@ -414,10 +769,51 @@ export type { MembershipStatus, VipPlanId };
 
 /* -------------------------------------------------- yönetici listesi (meta) */
 
-/** `meta/admins` belgesinin yolu (kök veya legacy düzen, target'a bağlı). */
+/**
+ * Kurallar `meta` belgelerinde İKİ yolu da denetliyor:
+ *   `meta/…` (yeni, kök düzen)  ve  `artifacts/kpss-asistani/public/data/meta/…`
+ * (legacy düzen — `lockdownOn()` ve `isAdminSession()` öyle yazıldı). Eski
+ * projeden taşınan bir `membership_lockdown` belgesi yalnız legacy yolda duruyorsa
+ * TEK yol bakışı "kilit yok" der, oysa kurallar kilitli sayar → tüm üyelik
+ * yazmaları sebepsiz reddedilmiş gibi görünür. Bu yüzden istemci de iki yolu görür.
+ */
+export const LEGACY_ARTIFACTS_ROOT = 'artifacts/kpss-asistani/public/data';
+
+/** Denetlenmesi gereken tam belge yolları (sıra = öncelik). */
+export function metaDocPaths(name: string): string[] {
+  const primary = collectionPath(name);
+  const legacy = `${LEGACY_ARTIFACTS_ROOT}/${name}`;
+  return primary === legacy ? [primary] : [primary, legacy];
+}
+
+/** Panelde gösterilecek birincil yol. */
 export const ADMINS_DOC_PATH = collectionPath('meta/admins');
 /** `meta/membership_lockdown` varlığı = üyelik işlemlerinde token zorunlu. */
 export const MEMBERSHIP_LOCKDOWN_DOC_PATH = collectionPath('meta/membership_lockdown');
+
+/** Kilit durumu + HANGİ yolda durduğu (Panel + tanı bunu gösterir). */
+export interface LockdownInfo {
+  on: boolean;
+  /** Kilidi açmak için Console'dan silinmesi gereken belge yolu. */
+  path: string | null;
+  /** Kilide ulaşılıp ulaşılamadığı (kural/ağ) — `on` bilinmiyorsa true. */
+  unreadable: boolean;
+  checked: string[];
+}
+
+export async function readLockdownInfo(): Promise<LockdownInfo> {
+  const checked = metaDocPaths('meta/membership_lockdown');
+  const flags = await Promise.all(checked.map(path => documentExists(path)));
+  const index = flags.findIndex(f => f === true);
+  if (index >= 0)
+    return { on: true, path: checked[index], unreadable: false, checked };
+  return {
+    on: false,
+    path: null,
+    unreadable: flags.some(f => f === null),
+    checked,
+  };
+}
 
 function emailsOf(fields: Record<string, FbValue> | null): string[] {
   const values = (fields?.emails as any)?.arrayValue?.values;
@@ -428,11 +824,25 @@ function emailsOf(fields: Record<string, FbValue> | null): string[] {
     .map(e => e.toLowerCase());
 }
 
-/** Panel/yönetici listesi: boş dizi = belge yok. */
+/**
+ * Panel/yönetici listesi: boş dizi = belge yok. Kurallar iki yolu da okuduğu için
+ * listelerin BİRLEŞİMİ alınır (legacy yolda kalmış bir e-posta yöneticiliği boşa
+ * düşmesin); yazma her zaman birincil yola yapılır.
+ */
 export async function readAdminList(): Promise<CloudOutcome<{ emails: string[]; exists: boolean }>> {
-  const res = await readDocument(ADMINS_DOC_PATH);
-  if (!res.ok) return res;
-  return { ok: true, data: { emails: emailsOf(res.data), exists: !!res.data } };
+  const paths = metaDocPaths('meta/admins');
+  const docs = await Promise.all(paths.map(path => readDocument(path)));
+  const failed = docs.find(d => !d.ok);
+  // Tamamı okunamadıysa hatayı ilet; bir kısmı okunabildiyse elimizdekiyle devam.
+  if (failed && !docs.some(d => d.ok)) return failed;
+  const emails: string[] = [];
+  let exists = false;
+  for (const d of docs) {
+    if (!d.ok || !d.data) continue;
+    exists = true;
+    for (const e of emailsOf(d.data)) if (!emails.includes(e)) emails.push(e);
+  }
+  return { ok: true, data: { emails, exists } };
 }
 
 /**
@@ -457,17 +867,27 @@ export async function addAdminEmail(
     updatedAt: str(new Date().toISOString()),
     schemaVersion: int(1),
   });
-  if (!res.ok) return res;
+  if (!res.ok) {
+    // Kilit açıksa bu yazmaya hiçbir kural izin vermez: silinecek belgeyi söyle.
+    const lock = await readLockdownInfo();
+    if (lock.on && lock.path)
+      return {
+        ok: false,
+        reason: 'denied',
+        error: `Yönetici listesi yazılamadı: üyelik kilidi AÇIK (${lock.path} belgesi var). Önce Console → Firestore → Documents → ${lock.path} belgesini sil, listeyi güncelle, sonra istersen kilidi tekrar aç.`,
+      };
+    return res;
+  }
   return { ok: true, data: emails };
 }
 
 /** Üyelik kilidi açık mı? (true → kimliksiz istemciler üyelik yazamaz) */
 export async function readMembershipLockdown(): Promise<CloudOutcome<boolean>> {
   try {
-    const exists = await documentExists(MEMBERSHIP_LOCKDOWN_DOC_PATH);
-    if (exists === null)
+    const info = await readLockdownInfo();
+    if (info.unreadable)
       return { ok: false, error: 'Kilit durumu okunamadı (ağ/kural).', reason: 'offline' };
-    return { ok: true, data: exists };
+    return { ok: true, data: info.on };
   } catch (e) {
     return classify(e);
   }

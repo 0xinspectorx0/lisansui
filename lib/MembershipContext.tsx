@@ -34,16 +34,17 @@ import {
 } from './membership';
 import { AUTH_PASSWORD_BUNDLE, hashPassword, isFirebaseAuthBundle, verifyPassword } from './crypto';
 import { diagnoseMembershipAccess } from './accessDiag';
+import { probeMembershipWrite } from './firestoreApi';
 import * as auth from './authClient';
 import {
   CloudOutcome,
-  createMemberDoc,
   deleteMemberDoc,
   fetchMemberByEmail,
   fetchMemberDoc,
   listMembers,
   patchMemberDoc,
   upsertMemberDoc,
+  writeMembershipSelf,
 } from './firestoreApi';
 import { setTestCompletionListener, useApp } from './AppContext';
 import { useAdmin } from './AdminContext';
@@ -317,9 +318,20 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     try {
       const diag = await diagnoseMembershipAccess(email);
       const step = diag.steps?.[0] ? ` ${diag.steps[0]}` : '';
+      // Okuma tarafı temizse tek kesin cevap deneme yazmasıdır. Belge yoksa
+      // oluşturulur, varsa lastLoginAt yenilenir — yani çoğu zaman hata kendiliğinden çözülür.
+      if (diag.cause === 'write-needs-probe' && email) {
+        const probe = await probeMembershipWrite(email);
+        if (probe.ok)
+          return probe.created
+            ? 'Üyelik belgen yoktu; kuralın beklediği tam biçimde oluşturuldu. İşlemi bir kez daha dene.'
+            : 'Yazma aslında çalışıyor (deneme yazısı kabul edildi). İşlemi bir kez daha dene.';
+        const pstep = diag.steps?.[1] ? ` ${diag.steps[1]}` : '';
+        return `Yazma reddedildi${probe.cause ? ` (${probe.cause})` : ''}: ${probe.error || diag.headline}.${pstep}`;
+      }
       return `${diag.headline}${step}`;
     } catch {
-      return 'Firestore yazma kuralı izin vermedi: firestore.rules yayınlanmamış ya da bayat olabilir (npm run deploy:rules → Console → Rules → Publish).';
+      return 'Üyelik yazması Firestore tarafından reddedildi ve nedeni o an ölçülemedi. Admin → Ayarlar → “Erişim tanısı ve kurallar” satırından Tanı + Yazma sınaması çalıştır (gerekirse kural metnini bir kez daha yayınla).';
     }
   }, []);
 
@@ -409,7 +421,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           lastLoginAt: now,
           note: trial > 0 ? `${trial} gün deneme VIP verildi.` : '',
         };
-        const created = await createMemberDoc(draft);
+        // Kademeli yazma: tam biçim create → belge zaten varsa benimseniyor →
+        // create reddedilirse kuralın kabul ettiği alanlarla kısmi yazım.
+        const created = await writeMembershipSelf(draft);
         if (!created.ok) {
           // Belge yazılamadıysa Firebase hesabını da geri al (tekrarda EMAIL_EXISTS olmasın).
           if (authMode) await auth.deleteAccount();
@@ -420,6 +434,12 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             setError(created.error);
           }
           return { ok: false, reason: 'write' };
+        }
+        if (created.adopted || created.degraded) {
+          // Belge zaten varmış: yazma kabul edilen alanlarla güncellendi, hesap bağlandı.
+          setCloudMessage(
+            'Bu e-postada üyelik belgesi zaten vardı; hesabın Firebase Auth’a bağlandı ve belge güncellendi.'
+          );
         }
         applyMember(created.data);
         await sessionStore.set(SESSION_KEY, created.data.id);
@@ -501,7 +521,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             lastLoginAt: nowIso,
             note: 'Firebase Auth hesabıyla ilk girişte oluşturuldu.',
           };
-          const created = await createMemberDoc(draft);
+          const created = await writeMembershipSelf(draft);
           if (!created.ok) {
             noteCloud(created);
             setError(
