@@ -34,6 +34,7 @@ async function resolveWebApiKey(): Promise<string> {
   }
 }
 import { MEMBER_EMAIL_RE } from './memberShape';
+import { MEMBERSHIP_BUILD_TAG } from './buildTag';
 
 export type AccessDiagCause =
   | 'ok'
@@ -227,6 +228,9 @@ export function accessDiagReportText(
   if (extra.probe) lines.push(`yazma sınaması: ${extra.probe}`);
   if (extra.authProbe) lines.push(`e-posta/parola girişi: ${extra.authProbe}`);
   if (extra.appLabel) lines.push(`etiket: ${extra.appLabel}`);
+  // Damga: cihazdaki derlemenin hangisi olduğu tek bakışla anlaşılsın (eski paket
+  // yeni düzeltmeyi yapmaz ve kural reddiyle BİREBİR aynı hatayı üretir).
+  lines.push(`derleme: ${MEMBERSHIP_BUILD_TAG}`);
   lines.push(`düz: ${new Date().toISOString()}`);
   return lines.join('\n');
 }

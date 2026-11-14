@@ -1,0 +1,20 @@
+/**
+ * Üyelik/erişim kodunun derleme damgası.
+ *
+ * Neden var: “üyelik olmuyor” ihbarlarında en sık karşılaşılan ikinci durum,
+ * cihazda ESKİ bir derlemenin çalışıyor olmasıdır (web çıktısı yenilenmemiş,
+ * telefon önbelleği tutmuş). Eski kod yeni düzeltmeyi yapmaz ve bu, kural
+ * reddiyle aynı hatayı üretir — ayırt etmenin tek dürüst yolu kodun kendisinin
+ * hangi derleme olduğunu söylemesidir.
+ *
+ * Kural: `lib/accessDiag.ts`, `lib/firestoreApi.ts`, `lib/authClient.ts`,
+ * `lib/memberShape.ts`, `lib/membership.ts` veya `firestore.rules` dosyalarına
+ * dokunan Her değişiklikte son harf ilerletilir (`…a` → `…b`). Damga yalnızca
+ * tanılama amaçlıdır; davranıştan bağımsızdır, bu yüzden hiçbir akışı kırmaz.
+ */
+export const MEMBERSHIP_BUILD_TAG = 'member-2026-11-14a';
+
+/** Rapor satırı/panel etiketi için tek biçimli metin. */
+export function membershipBuildLabel(): string {
+  return MEMBERSHIP_BUILD_TAG;
+}

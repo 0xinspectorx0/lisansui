@@ -977,6 +977,15 @@ console.log('\n\x1b[1m[18] API anahtarı yoklaması, ham sunucu yanıtları ve k
   ok(/^e-posta\/parola giri.*OPERATION_NOT_ALLOWED/im.test(report3), 'rapor sağlayıcı ölçümünü de taşıyor');
   ok(!/e-posta\/parola girişi: undefined/.test(report3), 'ölçülmemiş satır rapora “undefined” olarak sızmıyor');
 
+  const diagSrc18 = fs.readFileSync('lib/accessDiag.ts', 'utf8');
+  // E) derleme damgası: eski paketin yeni kod sanılmasını tek satırla engeller
+  const BT = await import(`/tmp/buildTagBundle.mjs?v=${Date.now()}-${Math.random()}`);
+  ok(/^member-\d{4}-\d{2}-\d{2}[a-z]$/.test(BT.MEMBERSHIP_BUILD_TAG), 'damga biçimi sabit: member-YIL-AY-GÜNharf', BT.MEMBERSHIP_BUILD_TAG);
+  ok(BT.membershipBuildLabel() === BT.MEMBERSHIP_BUILD_TAG, 'damga tek kaynaktan okunuyor');
+  ok(/^derleme: member-\d{4}-\d{2}-\d{2}[a-z]$/im.test(text), 'rapor cihazdaki derlemeyi de taşıyor');
+  ok(/^derleme: /m.test(text) && /^düz: /m.test(text) && text.indexOf('derleme:') < text.indexOf('düz:'), 'damga zaman damgasından hemen önce geliyor');
+  ok(/MEMBERSHIP_BUILD_TAG/.test(diagSrc18), 'tanı modülü damgayı gerçekten içe aktarıyor');
+
   // E) kaynak bağları: panel raporu gösteriyor, context bildirimi duyuyor
   const panel3 = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
   ok(/accessDiagReportText\(data,/.test(panel3), 'panel: tanı sonrası rapor otomatik kuruluyor');
@@ -984,6 +993,7 @@ console.log('\n\x1b[1m[18] API anahtarı yoklaması, ham sunucu yanıtları ve k
   ok(/authClient\.probeAuth\(\)\.catch\(\(\) => null\)/.test(panel3), 'panel: sağlayıcı ölçümü rapor için gerçekten alınıyor');
   ok(/authProbe: ap\?\.note/.test(panel3) && /authProbe: authProbeNote \|\| undefined/.test(panel3), 'panel: rapora yalnız ölçülen sağlayıcı notu yazılıyor');
   ok(!/ekran fotoğrafı at|ekran görüntüsü at|fotoğraf at/.test(panel3), 'panel: kullanıcıdan ekran görüntüsü istenmiyor');
+  ok(/membershipBuildLabel\(\)/.test(panel3), 'panel damgayı ekranda da gösteriyor (kopyalamadan da okunabilir)');
   const ctx3 = fs.readFileSync('lib/MembershipContext.tsx', 'utf8');
   ok(/consumeApiKeyParamNotice\(\)/.test(ctx3), 'context: anahtar parametresi iyileşmesi kullanıcıya bildiriliyor');
   ok(/auth\.consumeForeignTokenNotice\(\)/.test(ctx3), 'context: yabancı anahtar iyileşmesi de bildiriliyor');

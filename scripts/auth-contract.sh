@@ -33,6 +33,9 @@ bundle lib/authClient.ts /tmp/authBundleNoEnv.mjs '""'
 bundle lib/accessDiag.ts /tmp/accessDiagBundle.mjs '""'
 bundle lib/firestoreApi.ts /tmp/firestoreApiBundle.mjs '""'
 
+# 3c) Derleme damgası (eski paketın yeni kod sanılmasını engelleyen tek satır).
+bundle lib/buildTag.ts /tmp/buildTagBundle.mjs '""'
+
 # 3b) Kural aynası + belge kodlayıcısı (yazmadan önce biçim denetimi).
 npx esbuild lib/memberShape.ts --bundle --format=esm --platform=neutral \
   --outfile=/tmp/memberShapeBundle.mjs --log-level=warning
