@@ -386,6 +386,8 @@ isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
 | **Yazma sınaması (kendi belgen)** | Yalnızca yazdığın e-postanın belgesine dokunur: belge yoksa kurala tam uygun biçimde oluşturulur, varsa sadece `lastLoginAt` yenilenir. VIP/rol/durum alanlarına dokunmaz — yetki kazandırmaz. Okuma izinleri yazma iznini kanıtlamadığı için tek kesin cevap budur. |
 | **firestore.rules metnini kopyala** | Uygulamanın beklediği kural metninin tamamını panoya kopyalar → Console → Rules → yapıştır → Publish. |
 | **Kilit belge yolunu kopyala** | Kilit hangi yolda duruyorsa (kök ya da legacy) o belge yolunu kopyalar; Console'dan silmek kilidi kapatır, kuralı yeniden yayınlamak gerekmez. |
+| **Tanı raporunu kopyala** | Tanı + yazma sınaması + e-posta/parola sağlayıcı ölçümünü **tek blok metin** olarak panoya kopyalar (`neden / adım / hedef / okuma / kimlik / eşleşme / biçim / ham yanıt / derleme / düz`). Geliştiriciyle ekran fotoğrafı ya da tahmin cümlesi paylaşmak gerekmez. |
+| **Raporu göster** | Aynı metni ekranda monospace blok olarak açar; panoya kopyalanamazsa uzun basıp seçilebilir. Okuma kuşkuluysa yazma sınaması ve `probeAuth()` kendiliğinden koşulur; ölçülemeyen satır rapora hiç yazılmaz. |
 
 ## 8) Sık karşılaşılan hatalar
 | Belirti | Sebep / çözüm |
@@ -399,6 +401,9 @@ isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
 | Panel üyeye VIP verirken yazma reddedildi | `memberUpdateOk` tek PATCH'te **ya** `usageOnlyChange` **ya** `entitlementChange` listesinde kalmayı istiyor. `authUid` yalnız birinci, `vip/vipPlan/vipExpiresAt/status` yalnız ikinci listede → `upsertMemberDoc` bunları **iki ayrı PATCH**'te yazar; `createdAt/id/email/role` hiç PATCH'lenmez. |
 | Kilit "yok" görünüyor ama yazmalar engelli | `meta/membership_lockdown` belgesi **legacy yolda** (`artifacts/kpss-asistani/public/data/...`) duruyor olabilir; kurallar iki yolu da denetliyor. İstemci de öyle: `readLockdownInfo()` / `metaDocPaths()` iki yolu birden yoklar ve panel **silinecek belgenin tam yolunu** söyler (kopyalanabilir). |
 | Kayıt olurken “hesap açılamadı / başka proje” | Firebase anahtarı ile Firestore hedefi farklı projeleri gösteriyor. `config/firebaseApp.ts` içindeki `projectId` ile `app.json → expo.extra.firestore.projectId` (veya `EXPO_PUBLIC_FIRESTORE_PROJECT`) eşit olmalı. |
+| Rapor `derleme: member-…` satırında **bayat bir tarih** taşıyor | Cihazdaki paket bu düzeltmeleri içermiyor — eski kod, kural reddiyle birebir aynı hatayı üretir. Web'de: `npx expo start --clear` + tarayıcıyı tam yenile (Ctrl/Cmd+Shift+R). Vercel'e çıkan sürüm kullanıyorsan **yeniden deploy** şart: depoda CI yok, `git push` ne `firestore.rules` yayınlar ne `dist` üretir. |
+| Rapor `e-posta/parola girişi: … OPERATION_NOT_ALLOWED` | Firebase Anahtarı doğru ama sağlayıcı kapalı: Console → Authentication → Sign-in method → **Email/Password → Enable**. Bu açık olmadan üyelik hiçbir kural yayınlamayla açılmaz. |
+| Rapor `eşleşme: … anahtar parametresi gerekli` diyor, başka sorun yok | Proje anahtarsız istekleri reddediyor; uygulama `?key=<web API anahtarı>` eklemeyi **kendi kendine** öğrendi (aynı oturumdaki tüm istekler anahtarlı gider). Yapılacak bir şey yok — kuralı yeniden yayınlamak bu satırı değiştirmez. |
 | Env değişikliği etkili olmadı | `.env.local` repo kökünde mi, ad `EXPO_PUBLIC_` ile mi başlıyor, ve Metro'yu `npx expo start --clear` ile yeniden başlattın mı? |
 | Panel “root hâlâ legacy” uyarısı veriyor | Sadece proje kimliğini verdin; `EXPO_PUBLIC_FIRESTORE_ROOT=.` satırını ekle (B seçeneğinde `root: "."`). |
 | İçerik Console'da var, app boş gösteriyor | Koleksiyon/yol birebir `courses/{courseId}/topics/{docId}` olmalı; `questions` bir **array of map**. |

@@ -77,6 +77,7 @@ import {
 import { hasRepoApiKey } from '../config/firebaseApp';
 import { FIRESTORE_RULES_LINES, FIRESTORE_RULES_TEXT } from '../config/firestoreRulesCopy';
 import { accessDiagReportText, diagnoseMembershipAccess, type AccessDiag } from '../lib/accessDiag';
+import { membershipBuildLabel } from '../lib/buildTag';
 import * as authClient from '../lib/authClient';
 import { copyText } from '../lib/clipboard';
 
@@ -259,7 +260,7 @@ export const AdminSettingsScreen: React.FC = () => {
     const res = await copyText(text);
     setReportCopied(
       res === 'copied'
-        ? 'Rapor kopyalandı — geliştiriciye yapıştırman yeterli (ekran fotoğrafı gerekmez).'
+        ? `Rapor kopyalandı (kod ${membershipBuildLabel()}) — geliştiriciye yapıştırman yeterli; ekran fotoğrafı gerekmez.`
         : 'Panoya kopyalanamadı: aşağıdaki metni uzun basıp seç, sonra kopyala.'
     );
   };
@@ -848,7 +849,9 @@ export const AdminSettingsScreen: React.FC = () => {
           <AdminRow
             icon="document-text-outline"
             title="Raporu göster"
-            subtitle={report ? `${report.split('\n').length} satırlık ölçüm — uzun basıp seçebilirsin` : 'Önce “Tanı” çalıştır; ölçüm burada görünür.'}
+            subtitle={report
+                  ? `${report.split('\n').length} satırlık ölçüm • kod ${membershipBuildLabel()} — uzun basıp seçebilirsin`
+                  : `Önce “Tanı” çalıştır; ölçüm burada görünür (bu cihazdaki üyelik kodu: ${membershipBuildLabel()}).`}
             right={
               <AdminButton
                 small
