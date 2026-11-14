@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -7,6 +7,7 @@ import { useAppTheme } from '../lib/theme';
 import { useAdmin } from '../lib/AdminContext';
 import { AdminRole, AdminUser, UserStatus, VipPlan } from '../lib/adminStore';
 import { useMembership } from '../lib/MembershipContext';
+import { useMemberListRefresh } from '../lib/useMemberListRefresh';
 import { normalizeEmail, type MemberDoc } from '../lib/membership';
 import {
   AdminButton,
@@ -125,9 +126,7 @@ export const AdminUsersScreen: React.FC = () => {
 
   const [vipDays, setVipDays] = useState(30);
 
-  useEffect(() => {
-    void membership.adminListMembers();
-  }, [membership.membersVersion]);
+  useMemberListRefresh(() => membership.adminListMembers(), membership.membersVersion);
 
   /** Supabase is the source of truth: a row that mirrors a member document is
    *  written back to `memberships/{id}` instead of only living in the panel. */
