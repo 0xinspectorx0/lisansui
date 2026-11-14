@@ -48,10 +48,20 @@ export const AuthScreen: React.FC = () => {
   const [localError, setLocalError] = useState<string | null>(null);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
+  const [cooldownSec, setCooldownSec] = useState(0);
+  const [awaitingEmailConfirm, setAwaitingEmailConfirm] = useState(false);
 
   const error = localError || membership.error;
   const busy = membership.busy || resetBusy;
   const canSignUp = settings.registrationOpen;
+
+  useEffect(() => {
+    if (cooldownSec <= 0) return;
+    const t = setInterval(() => {
+      setCooldownSec(prev => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [cooldownSec]);
 
   const goHomeOrBack = useCallback(() => {
     if (navigation.canGoBack?.()) {
@@ -110,6 +120,7 @@ export const AuthScreen: React.FC = () => {
   }, [membership]);
 
   const doResetRequest = useCallback(async () => {
+    if (cooldownSec > 0) return;
     setResetBusy(true);
     setLocalError(null);
     setLocalNotice(null);
@@ -117,11 +128,28 @@ export const AuthScreen: React.FC = () => {
     const res = await membership.sendPasswordReset(email);
     setResetBusy(false);
     if (res.ok) {
+      setCooldownSec(60);
       setLocalNotice(
-        `Şifre sıfırlama bağlantısı ${email.trim()} adresine gönderildi! Lütfen mail kutunuzu (ve spam klasörünü) kontrol edin; gelen bağlantıya tıkladığınızda yeni şifre belirleme ekranı açılacaktır.`
+        `Şifre sıfırlama bağlantısı ${email.trim()} adresine gönderildi! Mailin ulaşması 1-2 dakika sürebilir; lütfen gelen kutunuzu ve Spam (Gereksiz) klasörünü kontrol edin.`
       );
     }
-  }, [email, membership]);
+  }, [cooldownSec, email, membership]);
+
+  const doResendConfirm = useCallback(async () => {
+    if (cooldownSec > 0) return;
+    setResetBusy(true);
+    setLocalError(null);
+    setLocalNotice(null);
+    membership.clearError();
+    const res = await membership.resendConfirmation(email);
+    setResetBusy(false);
+    if (res.ok) {
+      setCooldownSec(60);
+      setLocalNotice(
+        `Onay bağlantısı ${email.trim()} adresine tekrar gönderildi! Mailin ulaşması 1-2 dakika sürebilir; lütfen Spam (Gereksiz) klasörünü de kontrol edin.`
+      );
+    }
+  }, [cooldownSec, email, membership]);
 
   const doCompleteRecovery = useCallback(async () => {
     setLocalError(null);
@@ -169,9 +197,11 @@ export const AuthScreen: React.FC = () => {
     const res = await membership.signUp({ email, password, displayName: name, city, exam });
     if (res.ok) {
       setPassword('');
+      setCooldownSec(60);
+      setAwaitingEmailConfirm(true);
       switchMode(
         'signin',
-        'Kaydınız alındı! Lütfen e-posta kutunuzu (ve spam klasörünü) kontrol edin. Gelen onay mailindeki bağlantıya tıkladıktan sonra giriş yapabilirsiniz.'
+        'Kaydınız alındı! Onay maili gönderildi (ulaşması 1-2 dakika sürebilir). Lütfen e-posta kutunuzu ve Spam (Gereksiz) klasörünü kontrol edin; gelen bağlantıya tıkladıktan sonra giriş yapabilirsiniz.'
       );
     }
   }, [city, doCompleteRecovery, doResetRequest, email, exam, goHomeOrBack, membership, mode, name, password, switchMode]);
@@ -307,10 +337,16 @@ export const AuthScreen: React.FC = () => {
                   hint="Bu adrese yeni şifre belirleme bağlantısı içeren bir e-posta gönderilecektir."
                 />
                 <AdminButton
-                  label={busy ? 'Gönderiliyor…' : 'Sıfırlama bağlantısı gönder'}
+                  label={
+                    busy
+                      ? 'Gönderiliyor…'
+                      : cooldownSec > 0
+                      ? `Tekrar göndermek için bekleyin (${cooldownSec} sn)`
+                      : 'Sıfırlama bağlantısı gönder'
+                  }
                   icon="mail-outline"
                   onPress={submit}
-                  disabled={busy}
+                  disabled={busy || cooldownSec > 0}
                   style={{ alignSelf: 'stretch', marginTop: 4 }}
                 />
                 <AdminButton
@@ -376,12 +412,38 @@ export const AuthScreen: React.FC = () => {
                 )}
 
                 <AdminButton
-                  label={busy ? 'İşleniyor…' : mode === 'signin' ? 'Giriş yap' : 'Hesabımı oluştur'}
+                  label={
+                    busy
+                      ? 'İşleniyor…'
+                      : mode === 'signin'
+                      ? 'Giriş yap'
+                      : cooldownSec > 0
+                      ? `Lütfen bekleyin (${cooldownSec} sn)`
+                      : 'Hesabımı oluştur'
+                  }
                   icon={mode === 'signin' ? 'log-in-outline' : 'person-add-outline'}
                   onPress={submit}
-                  disabled={busy}
+                  disabled={busy || (mode === 'signup' && cooldownSec > 0)}
                   style={{ alignSelf: 'stretch', marginTop: 4 }}
                 />
+
+                {mode === 'signin' &&
+                membership.authMode &&
+                (awaitingEmailConfirm || /onaylanmamış|doğrulanmamış/i.test(error || '')) ? (
+                  <AdminButton
+                    small
+                    tone="neutral"
+                    icon="mail-unread-outline"
+                    label={
+                      cooldownSec > 0
+                        ? `Onay mailini tekrar gönder (${cooldownSec} sn)`
+                        : 'Onay mailini tekrar gönder'
+                    }
+                    disabled={busy || cooldownSec > 0 || !email.includes('@')}
+                    onPress={() => void doResendConfirm()}
+                    style={{ alignSelf: 'stretch', marginTop: 8 }}
+                  />
+                ) : null}
 
                 {mode === 'signin' && membership.authMode ? (
                   <AdminButton

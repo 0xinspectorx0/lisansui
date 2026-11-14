@@ -86,6 +86,8 @@ interface MembershipContextValue {
   authMode: boolean;
   /** Supabase Auth açıkken “şifremi unuttum” e-postası. */
   sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
+  /** E-posta doğrulama mailini tekrar gönderir. */
+  resendConfirmation: (email: string) => Promise<{ ok: boolean; error?: string }>;
   /** Şifre sıfırlama bağlantısından gelindiğinde yeni şifreyi kaydeder. */
   completePasswordRecovery: (newPassword: string) => Promise<{ ok: boolean; email?: string; error?: string }>;
 
@@ -680,6 +682,27 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     []
   );
 
+  const resendConfirmation = useCallback<MembershipContextValue['resendConfirmation']>(
+    async email => {
+      if (!auth.isAuthConfigured())
+        return { ok: false, error: 'E-posta doğrulama için Supabase Auth gerekiyor.' };
+      const clean = normalizeEmail(email);
+      if (!emailPattern.test(clean)) {
+        const msg = 'Lütfen geçerli bir e-posta adresi girin.';
+        setError(msg);
+        return { ok: false, error: msg };
+      }
+      const res = await auth.resendConfirmationEmail(clean);
+      if (!res.ok) {
+        setError(res.error || 'Onay e-postası gönderilemedi.');
+        return { ok: false, error: res.error };
+      }
+      setError(null);
+      return { ok: true };
+    },
+    []
+  );
+
   const completePasswordRecovery = useCallback<MembershipContextValue['completePasswordRecovery']>(
     async newPassword => {
       setError(null);
@@ -1127,6 +1150,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       cloudMessage,
       authMode: auth.isAuthConfigured(),
       sendPasswordReset,
+      resendConfirmation,
       completePasswordRecovery,
       quota,
       isVip,
@@ -1163,6 +1187,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       cloudStatus,
       cloudMessage,
       sendPasswordReset,
+      resendConfirmation,
       completePasswordRecovery,
       quota,
       isVip,
