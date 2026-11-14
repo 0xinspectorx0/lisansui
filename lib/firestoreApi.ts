@@ -73,9 +73,26 @@ export const fbMap = (fields: Record<string, FbValue>): FbValue => ({ mapValue: 
  * böylece firestore.rules üyelik belgelerini `request.auth.uid` ile koruyabilir.
  * Token alınamazsa istek kimliksiz gider (eski davranış) ve kurallar izin verirse çalışır.
  */
-async function authHeaders(): Promise<Record<string, string>> {
+/**
+ * Oturum token'ı sorununa işaret eden yanıt metinleri. Bunlar KURAL reddinden
+ * farklıdır: token bayatladıysa aynı istek taze token'la geçer. Üyelik yazmasını
+ * "kural engelledi" saymadan önce bunu bir kez kendimiz deniyoruz — kalıcı çözüm
+ * burada, çünkü bayat token cihazda sessizce birikiyor ve tek belirtisi 403.
+ */
+const TOKEN_STALE_HINT =
+  /TOKEN_EXPIRED|AUTHENTICATION_FAILED|INVALID_CREDENTIAL|Invalid Credential|INVALID_LOGIN_TOKEN|auth failure|Bad Request: Token/i;
+
+/** Token yenileyip yeniden denedi mi? (bir kez bildirilir, sonra sıfırlanır.) */
+let tokenRefreshNotice = false;
+export function consumeTokenRefreshNotice(): boolean {
+  const v = tokenRefreshNotice;
+  tokenRefreshNotice = false;
+  return v;
+}
+
+async function authHeaders(opts: { forceRefresh?: boolean } = {}): Promise<Record<string, string>> {
   try {
-    const token = await auth.currentIdToken();
+    const token = await auth.currentIdToken(opts);
     if (!token) return {};
     // Token Firestore hedefinin projesinden değilse (cihazda kalmış eski anahtar)
     // HİÇ göndermeyiz: yanlış token her isteği 401'e çevirirken, kimliksiz istek
@@ -103,6 +120,26 @@ async function request(url: string, init?: RequestInit): Promise<Response> {
   const withKey = (u: string) => `${u}${u.includes('?') ? '&' : '?'}key=${encodeURIComponent(key)}`;
   if (key && useApiKeyParam) return fetch(withKey(url), { ...init, headers });
   const res = await fetch(url, { ...init, headers });
+  // Bayat oturum token'ı 403 üretir ve “kural engelledi” gibi görünür: token'ı
+  // ZORLA tazeleyip aynı isteği bir kez daha gönderiyoruz. Yazma bu yüzden
+  // kullanıcıya hiç düşmüyor — kendi kendine geçen tek sınıf budur.
+  if (!res.ok && (await isTokenStale(res))) {
+    try {
+      const fresh = await authHeaders({ forceRefresh: true });
+      if (fresh.Authorization) {
+        const retry = await fetch(useApiKeyParam && key ? withKey(url) : url, {
+          ...init,
+          headers: { ...headers, ...fresh },
+        });
+        if (retry.ok) {
+          tokenRefreshNotice = true;
+          return retry;
+        }
+      }
+    } catch {
+      /* ilk yanıtı döndürürüz */
+    }
+  }
   // Kimliksiz istekler bazı kurulumlarda API geçidinden geçmez (`403/401`) — kuralla
   // karışır ve kullanıcı boşuna “kural engelledi” görür. Varsaymak yerine DENERİZ:
   // red alırsak anahtarlı yeniden dener, çalışırsa artık hep anahtarla gideriz.
@@ -127,15 +164,25 @@ async function request(url: string, init?: RequestInit): Promise<Response> {
  * gidiş-dönüş yapmayız). Gövdeyi okumak için `clone()` kullanılır: yanıt gövdesi
  * çağıran tarafa dokunulmadan kalır.
  */
-async function isRulesDenial(res: Response): Promise<boolean> {
+async function responseText(res: Response): Promise<string> {
   try {
     const clone = typeof (res as any)?.clone === 'function' ? (res as any).clone() : null;
-    if (!clone) return false;
-    const text = String(await clone.text());
-    return /Missing or insufficient permissions/i.test(text);
+    if (!clone) return '';
+    return String(await clone.text());
   } catch {
-    return false;
+    return '';
   }
+}
+
+/** Kuralla ilgili red mi (anahtar/token sorunu değil)? */
+async function isRulesDenial(res: Response): Promise<boolean> {
+  return /Missing or insufficient permissions/i.test(await responseText(res));
+}
+
+/** Yanıt bayat/bad id token'a mı işaret ediyor? */
+async function isTokenStale(res: Response): Promise<boolean> {
+  if (res.status !== 401 && res.status !== 403) return false;
+  return TOKEN_STALE_HINT.test(await responseText(res));
 }
 
 let useApiKeyParam = false;

@@ -376,28 +376,36 @@ Nasıl çalışır:
 Sonrası: Console → `meta/content_lock` oluştur (içerik yazma penceresi kapanır) ve
 isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
 
-## 7b) Yazma reddedilirse ne olur (tanı ekranı YOK, kendini onaran kuyruk var)
+## 7b) Üyelik verisi cihazda BEKLETİLMEZ — her yazma anında Firestore’a
 
-Panelde “tanı / yazma sınaması / rapor kopyala” satırları kaldırıldı — kullanıcıya
-yaptırılacak bir iş bırakmamak için. Yerine tek şey var: **bulut kuyruğu**.
+Kasıtlı tasarım: `memberships/*` için tek kaynak Firestore. Uygulama reddedilen bir
+yazmayı cihazda kuyruğa almaz, yerel hesap/profil oluşturmaz; yazma ya gider ya da
+işlem net bir nedenle döner (ve açılan Firebase hesabı geri alınır ki tekrar deneme
+`EMAIL_EXISTS`e dönmesin). Sayaçlar da bekletilmez: test biter bitmez
+`patchMemberDoc` ile anında yazılır.
 
-| Durum | Ne olur |
+Bunun çalışması için kurallar **kimlik doğrulama olmadan da kendi belgesini
+oluşturmaya** izin verir (`firestore.rules → selfCreateOk`):
+
+| Koşul | Neden |
 | --- | --- |
-| `firestore.rules` yayınlanmamış/bayat, veritabanı yok, kilit açık — yani **kendi üyelik belgen yazılamıyor** | Üyelik **bloke edilmez**: belge cihazda bekletilir (`lib/memberPending.ts`), oturum açılır, VIP/kota/hepsi çalışır. Firebase hesabı geri ALINMAZ (tekrar denemede `EMAIL_EXISTS` olmaz). |
-| Kuyruk nasıl boşalır | Uygulama açılışında, odaklanmada, `online` olayında ve kuyruk dolu olduğu sürece dakikada bir yazmayı yeniden dener (üstel geri çekilme: 0s → 20s → 1dk → 3dk → 10dk → 30dk → 6s). Engel kalktığı anda **kimseye haber vermeden** buluta geçer ve “Üyeliğin buluta aktarıldı” der. |
-| Kuyrukta bekleyen belge düzenlenirse | Profil/parola değişimi kuyruktaki belgeye de işlenir (`refreshPendingDoc`); sırası gelince güncel sürüm yazılır. |
-| Silinen hesap | Buluttan silinemeyen belge **silme olarak** kuyruğa alınır; kural yayınınca o da uygulanır (“sildim” denen hesap geri gelmez). |
-| Panel nerede? | Yönetim → Ayarlar → **“Bulut kuyruğu”**: kaç yazma bekliyor + “Şimdi dene”. Kartın başlığında cihazdaki **üyelik kodu** (`member-YYYY-AA-GG<harf>`) yazar — bayat paket ile yeni düzeltmeyi ayırt etmenin tek yolu. |
+| `meta/membership_lockdown` yoksa (kilit kapalı) | Kilit AÇIKKEN kimliksiz create yok — kilit tam olarak “yeni kayıt akışı dursun” demek. |
+| Belge kimliği = istenen e-posta (`memberId == request.resource.data.email.lower()`) | Kimlik, yolun kendisi; başkasının belgesi yerine geçilemez. |
+| `role == 'user'`, `status in [active, pending]`, tam `memberShapeOk` biçimi | Yetki kaçışı yok: admin/editörlük, `authUid` (yalnız kendi uid’n), hak alanları create’ta geçmez. |
 
-Kuyruğun **yapamadığı** tek şey: bulut erişimi olmayan bir cihaza hak yazmak. Kuyrukta
-bekleyen üye admin listesine düşmez; engel kalkınca kendiliğinden görünür olur.
-Kalıcı çözüm hâlâ tek adımdır ve geliştiriciye aittir: `firestore.rules` dosyasını
-Console → Firestore → Rules → yapıştır → **Publish**. (Bu depoda CI yok; `git push`
-kuralları yayınlamaz, `dist` üretmez.)
+Ayrıca uygulama **bayat oturum token’ını kendisi tazeler**: yanıt
+`TOKEN_EXPIRED`/`AUTHENTICATION_FAILED` gibi görünüyorsa aynı istek taze token’la
+bir kez daha gönderilir (`lib/firestoreApi.ts`). Bu, “okuma serbest, yazma reddediliyor”
+şeklinde görünen sessiz 403’lerin en yaygın nedeni; kullanıcıya işlem baştan
+denetmez, tek cümleyle bildirilir.
 
-> Geliştirici için: `lib/accessDiag.ts → accessDiagReportText(diag, …)` hâlâ tek blok
-> ölçüm metni üretir (`neden / adım / hedef / okuma / kimlik / biçim / ham yanıt /
-> derleme`). Panele bağlanmadı; hata izini sürerken konsoldan çağrılır.
+Panelde tanılama/kuyruk satırı yok; kalan tek bilgi “Üyelik koleksiyonu” satırının
+altında yol + `kod member-…` (cihazdaki derleme etiketi).
+
+> Kalıcı yayın adımı geliştiricide: Console → Firestore → Rules → `firestore.rules`
+> metnini yapıştır → **Publish**. Bu depoda CI yok; `git push` kuralları yayınlamaz
+> ve `dist` üretmez. Yayınlanana kadar yeni üyeler yazma redliyse kayıt açılmaz
+> (bilerek: cihazda kopya bırakmıyoruz) ve ekranda tek cümlelik neden yazar.
 
 ## 8) Sık karşılaşılan hatalar
 | Belirti | Sebep / çözüm |
@@ -405,15 +413,15 @@ kuralları yayınlamaz, `dist` üretmez.)
 | “Firestore kurallı yazmayı reddetti” | Kurallar yayında değil → 3. adım. |
 | `NOT_FOUND: Database (default) does not exist` | Veritabanını farklı isimle açtın → `EXPO_PUBLIC_FIRESTORE_DATABASE` ile doğru ismi ver veya `(default)` DB oluştur. |
 | Kayıt var ama panel listesi boş | `root` ayarı belge yoluyla uyuşmuyor (kök ↔ artifacts). Kartta görünen “Üyelik koleksiyonu” yolunu Console yoluyla kıyasla. |
-| “Üye ol” derken **“okuma/yazma kuralı engellendi”** | Uygulama üyeliği bloke etmez: belgeyi bulut kuyruğuna alır, oturumu açar ve yazmayı kendi kendine yeniden dener (7b). Kalıcı onarım geliştiricide: Console → Firestore → Rules → kural metnini yapıştır → **Publish**; veritabanı yoksa önce **Create database** (Native, `(default)`). |
+| “Üye ol” derken **“okuma/yazma kuralı engellendi”** | Bilerek: üyelik verisi cihazda bekletilmez, bu yüzden red = kayıt açılmaz (yarım hesap da bırakılmaz, Firebase hesabı geri alınır). Onarım geliştiricide: Console → Firestore → Rules → kural metnini yapıştır → **Publish**; veritabanı yoksa önce **Create database** (Native, `(default)`). Kuralın E-posta/Parola kapalıyken de create kabul etmesi için 7b’deki `selfCreateOk` dalı yayında olmalı. |
 | Üye olurken okuma serbest, yazma reddediliyor | Uygulama artık red nedenini **yazmadan önce** biliyor: `lib/memberShape.ts`, `firestore.rules` içindeki `memberShapeOk` denetiminin aynası. Kuralın tolere edemediği sapmalar (bozuk/boş `verifier/salt/iterations` üçlüsü, 80 karakteri aşan ad, `31.12.2030` biçiminde tarih, 12'den çok `courseUsage` girdisi) **düzeltildikten sonra** gönderilir; düzeltilemeyen şey alan adıyla (`email: ...`) bildirilir. |
 | Kısmi güncelleme reddediliyor, tam belge yazılıyor | Firestore REST'te `PATCH`, belge **yokken** create sayar ve `memberShapeOk` eksik alanları reddeder. `lib/firestoreApi.ts → writeMemberDoc` bunu kademe kademe çözer: create → 409 ise kabul edilen alanlarla güncelle (benimsenme) → create reddedildiyse önce belgenin varlığına bak, varsa kısmi yaz. |
 | Panel üyeye VIP verirken yazma reddedildi | `memberUpdateOk` tek PATCH'te **ya** `usageOnlyChange` **ya** `entitlementChange` listesinde kalmayı istiyor. `authUid` yalnız birinci, `vip/vipPlan/vipExpiresAt/status` yalnız ikinci listede → `upsertMemberDoc` bunları **iki ayrı PATCH**'te yazar; `createdAt/id/email/role` hiç PATCH'lenmez. |
 | Kilit "yok" görünüyor ama yazmalar engelli | `meta/membership_lockdown` belgesi **legacy yolda** (`artifacts/kpss-asistani/public/data/...`) duruyor olabilir; kurallar iki yolu da denetliyor. İstemci de öyle: `readLockdownInfo()` / `metaDocPaths()` iki yolu birden yoklar ve panel **silinecek belgenin tam yolunu** söyler (kopyalanabilir). |
 | Kayıt olurken “hesap açılamadı / başka proje” | Firebase anahtarı ile Firestore hedefi farklı projeleri gösteriyor. `config/firebaseApp.ts` içindeki `projectId` ile `app.json → expo.extra.firestore.projectId` (veya `EXPO_PUBLIC_FIRESTORE_PROJECT`) eşit olmalı. |
-| Rapor `derleme: member-…` satırında **bayat bir tarih** taşıyor | Cihazdaki paket bu düzeltmeleri içermiyor — eski kod, kural reddiyle birebir aynı hatayı üretir. Web'de: `npx expo start --clear` + tarayıcıyı tam yenile (Ctrl/Cmd+Shift+R). Vercel'e çıkan sürüm kullanıyorsan **yeniden deploy** şart: depoda CI yok, `git push` ne `firestore.rules` yayınlar ne `dist` üretir. |
-| Rapor `e-posta/parola girişi: … OPERATION_NOT_ALLOWED` | Firebase Anahtarı doğru ama sağlayıcı kapalı: Console → Authentication → Sign-in method → **Email/Password → Enable**. Bu açık olmadan üyelik hiçbir kural yayınlamayla açılmaz. |
-| Rapor `eşleşme: … anahtar parametresi gerekli` diyor, başka sorun yok | Proje anahtarsız istekleri reddediyor; uygulama `?key=<web API anahtarı>` eklemeyi **kendi kendine** öğrendi (aynı oturumdaki tüm istekler anahtarlı gider). Yapılacak bir şey yok — kuralı yeniden yayınlamak bu satırı değiştirmez. |
+| Kayıt açılırken “yazma reddedildi” | Sırayla: (1) kural yayında mı → 3. adım; (2) `meta/membership_lockdown` var mı → silince kimliksiz create açılır (7b); (3) E-posta/Parola sağlayıcısı kapalıysa (`OPERATION_NOT_ALLOWED`) → Console → Authentication → Sign-in method → **Email/Password → Enable** — ama kural 7b’deki gibi yayındaysa sağlayıcı kapalıyken de üyelik yazılır. |
+| Üyelik yazması bir ara `TOKEN_EXPIRED`/403 verip sonra geçiyor | Beklenen durum: uygulama bayat token’ı kendiliğinden yenileyip aynı isteği tekrar gönderiyor (`lib/firestoreApi.ts`). Kullanıcıya “işlemi yeniden dene” denmez; tek cümlelik bilgi yeter. |
+| Cihazda derlemenin hangisi çalıştığından şüphe | Panel → Firestore bağlantısı kartındaki `kod member-…` satırına bak; beklenen etiketle farklıysa paket eski: `npx expo start --clear` + Ctrl/Cmd+Shift+R (Vercel sürümü kullanıyorsan yeniden deploy şart — CI yok). |
 | Env değişikliği etkili olmadı | `.env.local` repo kökünde mi, ad `EXPO_PUBLIC_` ile mi başlıyor, ve Metro'yu `npx expo start --clear` ile yeniden başlattın mı? |
 | Panel “root hâlâ legacy” uyarısı veriyor | Sadece proje kimliğini verdin; `EXPO_PUBLIC_FIRESTORE_ROOT=.` satırını ekle (B seçeneğinde `root: "."`). |
 | İçerik Console'da var, app boş gösteriyor | Koleksiyon/yol birebir `courses/{courseId}/topics/{docId}` olmalı; `questions` bir **array of map**. |

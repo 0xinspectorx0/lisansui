@@ -12,7 +12,7 @@
  * dokunan Her değişiklikte son harf ilerletilir (`…a` → `…b`). Damga yalnızca
  * tanılama amaçlıdır; davranıştan bağımsızdır, bu yüzden hiçbir akışı kırmaz.
  */
-export const MEMBERSHIP_BUILD_TAG = 'member-2026-11-14b';
+export const MEMBERSHIP_BUILD_TAG = 'member-2026-11-14c';
 
 /** Rapor satırı/panel etiketi için tek biçimli metin. */
 export function membershipBuildLabel(): string {

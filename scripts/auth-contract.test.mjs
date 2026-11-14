@@ -241,7 +241,8 @@ ok(/auth\.updatePassword\(next0\)/.test(ctx), 'changePassword: Firebase’de gü
 ok(/auth\.signIn\(current\.email, current0\)/.test(ctx), 'changePassword: mevcut parola ile taze oturum');
 ok(/if \(auth\.isAuthConfigured\(\)\) await auth\.deleteAccount\(\);/.test(ctx), 'deleteAccount: Firebase hesabı da siliniyor');
 ok(/Authorization: `Bearer \$\{token\}`/.test(api), 'firestoreApi: idToken bearer olarak ekleniyor');
-ok(/const token = await auth\.currentIdToken\(\);/.test(api), 'firestoreApi: token yenileme dahil alınıyor');
+ok(/const token = await auth\.currentIdToken\(opts\);/.test(api), 'firestoreApi: başlık taze token isteyebiliyor (forceRefresh)');
+ok(/isTokenStale\(res\)/.test(api), 'firestoreApi: bayat token yanıtları kural reddinden ayrılıyor');
 ok(ctx.includes('authMode: auth.isAuthConfigured(),') && ctx.includes('sendPasswordReset,'), 'context: authMode + sendPasswordReset dışa açık');
 // Anahtar SONRADAN eklendiğinde eski (yerel PBKDF2) üyeler dışarıda kalmamalı.
 ok(/account\.code === 'EMAIL_NOT_FOUND' \? await fetchMemberByEmail\(emailKey\) : null/.test(ctx), 'signIn: Firebase hesabı olmayan eski üye belgeden aranıyor');
@@ -259,9 +260,11 @@ ok(!C.verifyPassword('herhangi-bir-parola', C.AUTH_PASSWORD_BUNDLE), 'firebase b
 ok(/await auth\.ensureAuthConfigLoaded\(\);\n        await auth\.currentIdToken\(\)\.catch\(\(\) => null\);/.test(ctx), 'boot: cihaz anahtarı + oturum yüklenmeden Firestore isteği gitmiyor');
 ok(/const missingDoc =\s*!found\.ok && authMode && \(found\.reason === 'notfound' \|\| found\.reason === 'denied'\)/.test(ctx), 'katı modda 403 dönen eksik belge “yok” sayılıyor (yeni üye girişebilir)');
 ok(
-  /created\.reason === 'denied' \|\| created\.reason === 'offline'/.test(ctx) && /enqueuePendingWrite\(draft/.test(ctx),
-  'okuma+yazma reddedilirse üyelik bloke edilmiyor: belge kuyruğa alınıp oturum açılıyor'
+  /if \(authMode\) await auth\.deleteAccount\(\);\s*\n\s*noteCloud\(created\);/.test(ctx) && !/enqueuePendingWrite|findPending\(/.test(ctx),
+  'yazma reddedilirse cihazda bir şey bırakılmıyor: hesap geri alınıyor, neden tek cümle'
 );
+ok(!/memberPending/.test(ctx), 'context: bulut kuyruğu modülü tamamen kaldırıldı');
+ok(!/AsyncStorage\.setItem\(MEMBER_CACHE_KEY, JSON\.stringify\(draft\)/.test(ctx), 'yarım kayıt cihaz profilinine yazılmıyor');
 ok(!/function selfCreateOk[\s\S]{0,200}?[^.]resource\.data\./.test(rules), 'selfCreateOk eksik belgeye bakmıyor → okuma yasağı ilk girişte yazmayı engellemiyor');
 ok((ctx.match(/await auth\.ensureAuthConfigLoaded\(\);/g) || []).length >= 4, 'kayıt/giriş/parola akışları da yüklenmeyi bekliyor');
 const panelSrc = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
@@ -512,8 +515,8 @@ try {
   );
   ok(!/diagnoseMembershipAccess|accessDiagReportText|probeMembershipWrite/.test(panel2), 'panel: tanı altyapısı panelden çağrılmıyor (kullanıcıya iş yok)');
   ok(!/firestore\.rules metnini kopyala|Kilit belge yolunu kopyala/.test(panel2), 'panel: kural/kilit kopyalama satırları da kaldırıldı');
-  ok(/Bulut kuyruğu/.test(panel2) && /membership\.pendingWrites/.test(panel2), 'panel: tek satırlık bulut kuyruğu durumu var');
-  ok(/flushPendingNow\(\)/.test(panel2), 'panel: “Şimdi dene” kuyruğunu kendisi boşaltıyor');
+  ok(!/Bulut kuyruğu|pendingWrites|flushPendingNow/.test(panel2), 'panel: kuyruk/tekrar deneme arayüzü yok — yazma anlık');
+  ok(/yalnızca Firestore’da, cihazda kopya tutulmaz/.test(panel2), 'panel: verinin tek kaynağı satırda yazıyor');
   ok(/membershipBuildLabel\(\)/.test(panel2), 'panel: cihazdaki üyelik kodu tek bakışta görünüyor');
   ok(!/Admin → Ayarlar/.test(ctx), 'context: kullanıcı panelde tanı yapmaya yönlendirilmiyor');
 } finally {
@@ -903,9 +906,9 @@ console.log('\n\x1b[1m[17] kuralı uygulayan sahte Firestore: yazma kademeleri +
   const ctx2 = fs.readFileSync('lib/MembershipContext.tsx', 'utf8');
   ok(/writeMembershipSelf\(draft\)/.test(ctx2), 'context: kayıt ve ilk giriş yazması kademeli yolu kullanıyor');
   ok(!/createMemberDoc\(draft\)/.test(ctx2), 'context: çıplak createMemberDoc çağrısı kalmadı');
-  ok(/syncPending\(/.test(ctx2) && /setPendingWrites\(res\.held\)/.test(ctx2), 'context: kuyruk boşaltmayı kendisi deniyor');
+  ok(!/syncPending|setPendingWrites|refreshPendingDoc/.test(ctx2), 'context: bekletme/tekrar katmanı yok (tek yazma yolu anlık)');
   ok(!/probeMembershipWrite\(/.test(ctx2), 'context: kullanıcıya sınama/rapor işi bırakılmıyor');
-  ok(/clearPendingWrite\(current\.email \|\| current\.id\)/.test(ctx2), 'context: hesap silinince bekleyen yazma da siliniyor');
+  ok(!/setTimeout\(\(\) => \{\s*const payload =\s*testsCompleted:/.test(ctx2), 'context: sayaç yazması bekletilmiyor');
 }
 
 console.log('\n\x1b[1m[18] API anahtarı yoklaması, ham sunucu yanıtları ve kopyalanabilir rapor\x1b[0m');
@@ -1005,104 +1008,127 @@ console.log('\n\x1b[1m[18] API anahtarı yoklaması, ham sunucu yanıtları ve k
 }
 
 
-console.log('\x1b[1m[19] Bulut kuyruğu — reddedilen üyelik yazması üyeliği bloke etmez\x1b[0m');
+console.log('\x1b[1m[19] Cihazda bekletme YOK: her üyelik yazması doğrudan Firestore’a\x1b[0m');
 {
-  const MP = await import(`/tmp/memberPendingBundle.mjs?v=${Date.now()}-${Math.random()}`);
-  const store = globalThis.__store;
-  store.clear();
-  const doc = { id: 'kuyruk@ornek.com', email: 'kuyruk@ornek.com', status: 'active' };
-
-  // A) kuyruğa alma + tekilleştirme
-  let list = await MP.enqueuePendingWrite(doc, { reason: 'denied', authUid: 'uid-1', error: 'permission-denied' });
-  ok(list.length === 1 && list[0].authUid === 'uid-1', 'A: red kuyruğa alındı, uid bağlanacak');
-  list = await MP.enqueuePendingWrite({ ...doc, displayName: 'Sonraki' }, { reason: 'denied', error: 'hâlâ kapalı' });
-  ok(list.length === 1, 'A: aynı e-posta için kuyrukta tek girdi var', String(list.length));
-  ok(list[0].doc.displayName === 'Sonraki', 'A: en yeni belge yazılır (eski hali gitmesin)');
-  ok(await MP.findPending('KUYRUK@ornek.com ') !== null, 'A: bulma da normalize e-posta ile çalışıyor');
-
-  // B) geri çekilme: vadesi gelmemiş girdi denetlenmez, zorlamada denetlenir
-  const dueNow = await MP.duePending(await MP.loadPending(), Date.now() - 1);
-  ok(dueNow.length === 0, 'B: vadesi gelmemiş girdi denetime girmiyor', String(dueNow.length));
-  let tries = 0;
-  const failing = async () => {
-    tries += 1;
-    return { ok: false, reason: 'denied', error: 'kural yayında değil' };
-  };
-  const r1 = await MP.syncPending(failing, { now: Date.now(), onlyDue: false });
-  ok(r1.held === 1 && r1.denied === true && tries === 1, 'B: red => kuyrukta kalıyor ve “denied” diye işaretleniyor', `${r1.held}/${r1.denied}/${tries}`);
-  const afterFail = await MP.loadPending();
-  ok(afterFail[0].attempts === 1, 'B: deneme sayacı işliyor', String(afterFail[0].attempts));
-  ok(afterFail[0].lastError === 'kural yayında değil', 'B: son hata geliştirici okuması için saklanıyor');
-  const nextDelay = afterFail[0].nextTryAt - Date.now();
-  ok(nextDelay > 0, 'B: red sonrası deneme gecikiyor (sunucuya çakılmıyor)', String(nextDelay));
-  const beforeDue = await MP.syncPending(async () => ({ ok: true }), { now: Date.now() });
-  ok(beforeDue.held === 1, 'B: vade gelmeden ikinci deneme YOK', String(beforeDue.held));
-
-  // C) engel kalkınca kuyruk kendiliğinden boşalıyor
-  globalThis.__pushed = [];
-  const r2 = await MP.syncPending(
-    async e => {
-      globalThis.__pushed.push(e.email + ':' + (e.authUid || '-'));
-      return { ok: true };
-    },
-    { now: Date.now() + 10 ** 10 }
-  );
-  ok(r2.pushed.length === 1 && r2.drained, 'C: vade gelince yazma kabul edildi ve kuyruk boşaldı', JSON.stringify(r2));
-  ok(globalThis.__pushed[0] === 'kuyruk@ornek.com:uid-1', 'C: uid yazılırken kaybolmadı', globalThis.__pushed[0]);
-  ok(store.size === 0, 'C: boş kuyruk depoda iz bırakmıyor (temiz silme)', String(store.size));
-
-  // D) bozuk depo verisi çökertmez, offline sayacı ayrı davranır
-  store.set(MP.PENDING_KEY, '{bozuk json');
-  ok((await MP.loadPending()).length === 0, 'D: bozuk kuyruk verisi sessizce boş sayılıyor');
-  store.set(MP.PENDING_KEY, JSON.stringify([{ email: 'x@y.co' }]));
-  ok((await MP.loadPending()).length === 0, 'D: belge taşımayan girdi kuyruğa alınmıyor');
-  await MP.enqueuePendingWrite({ id: 'a@b.co', email: 'a@b.co' }, { reason: 'offline', error: 'bağlantı yok' });
-  const off = (await MP.loadPending())[0];
-  ok(off.reason === 'offline', 'D: ulaşılamazlık “kural reddi” olarak etiketlenmiyor', off.reason);
-  const r3 = await MP.syncPending(async () => ({ ok: false, reason: 'offline', error: 'yok' }), { now: Date.now() + 10 ** 10, onlyDue: false });
-  ok(r3.denied === false, 'D: offline red raporda “kural yayınlamalı” denmesine yol açmıyor');
-
-  // E) uygulama bağlantıları: red => oturum açılıyor, hesap geri alınmıyor, silme kuyruğu temizliyor
   const ctx19 = fs.readFileSync('lib/MembershipContext.tsx', 'utf8');
-  const queueBranch = ctx19.slice(ctx19.indexOf("const created = await writeMembershipSelf(draft);"));
-  ok(/setPendingWrites\(p => p \+ 1\)/.test(ctx19), 'E: kuyruk sayacı kayıtla birlikte ilerliyor');
-  ok(/return \{ ok: true \};/.test(queueBranch.slice(0, 1600)), 'E: red durumunda signUp BAŞARILI dönüyor (üyelik açık)');
-  const deniedBranch = queueBranch.slice(
-    queueBranch.indexOf("if (created.reason === 'denied' || created.reason === 'offline') {"),
-    queueBranch.indexOf("return { ok: true };")
-  );
-  ok(deniedBranch.length > 80 && !/deleteAccount/.test(deniedBranch), 'E: red yüzünden Firebase hesabı geri alınmıyor (tekrarda EMAIL_EXISTS yok)', String(deniedBranch.length));
-  ok(/applyMember\(draft\)/.test(deniedBranch) && /sessionStore\.set\(SESSION_KEY, draft\.id\)/.test(deniedBranch), 'E: red durumunda oturum bu cihazda açılıyor');
-  ok(/AppState\.addEventListener\('change'/.test(ctx19) && /window\.addEventListener\('online'/.test(ctx19), 'E: odaklanma/çevrimiçi olma anında kuyruk kendini deniyor');
-  ok(/setInterval\(tick, 60_000\)/.test(ctx19), 'E: kuyruk dolu olduğu sürece periyodik deneme var');
-  ok(/clearPendingWrite\(current\.email \|\| current\.id\)/.test(ctx19), 'E: hesap silinince bekleyen yazma da siliyor');
-  // F) silme de kuyruğa giriyor: “sildim” denen hesap kural yayınınca geri gelmesin
-  store.clear();
-  let dl = await MP.enqueuePendingDelete('Silinecek@Ornek.com', { reason: 'denied', error: 'kural' });
-  ok(dl.length === 1 && dl[0].kind === 'delete', 'F: silme girdisi kuyruğa alındı', JSON.stringify(dl[0]?.kind));
-  ok((await MP.loadPending())[0].doc === undefined || true, 'F: silme girdisi belge taşımadan saklanabiliyor');
-  let delTries = 0;
-  const r4 = await MP.syncPending(
-    async e => {
-      delTries += 1;
-      return e.kind === 'delete' ? { ok: true } : { ok: false, error: 'yazma değil' };
-    },
-    { now: Date.now() + 10 ** 10, onlyDue: false }
-  );
-  ok(r4.drained && delTries === 1, 'F: silme kabul edilince kuyruk boşalıyor', `${r4.drained}/${delTries}`);
-  await MP.enqueuePendingDelete('a@b.co', { reason: 'denied' });
-  await MP.enqueuePendingWrite({ id: 'a@b.co', email: 'a@b.co' }, { reason: 'denied' });
-  const conflict = await MP.loadPending();
-  ok(conflict.length === 1 && conflict[0].kind !== 'delete', 'F: sonradan gelen yazma, silmeyi ezberliyor (son söz kimde)', JSON.stringify(conflict.map(c => c.kind)));
-  store.clear();
+  const api19 = fs.readFileSync('lib/firestoreApi.ts', 'utf8');
+  const panel19 = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
 
-  // G) bağlama bağlantıları
-  ok(/refreshPendingDoc\(next, res\)/.test(ctx19) && /refreshPendingDoc\(merged, res\)/.test(ctx19), 'G: profil ve parola düzenlemesi kuyruktaki belgeyi de tazeliyor');
-  ok(/\} else if \(await findPending\(id\)\) \{/.test(ctx19), 'G: bulutta henüz belge olmayan bekletilmiş üye yenilemede dışarı atılmıyor');
-  ok(/entry\.kind === 'delete'/.test(ctx19), 'G: kuyruk boşaltması silme işini de tanıyor');
-  const pendSrc19 = fs.readFileSync('lib/memberPending.ts', 'utf8');
-  ok(!/fetch\(/.test(pendSrc19), 'kuyruk modülü ağa kendi çıkmıyor (tek yazma yolu firestoreApi)');
-  ok(!/alert\(|window\.confirm/.test(pendSrc19), 'kuyruk modülü kullanıcıya pencere açmıyor');
+  // A) bekletme katmanı dosya olarak da yok
+  ok(!fs.existsSync('lib/memberPending.ts'), 'A: lib/memberPending.ts kaldırıldı (üyelik verisi cihaza yazılmıyor)');
+  for (const [name, src] of [['context', ctx19], ['api', api19], ['panel', panel19]])
+    ok(!/memberPending|PendingWrite|pendingWrites|flushPending/.test(src), `A: ${name} tarafında bekletme izi yok`);
+
+  // B) test biter bitmez sayaç yazımı (debounce yok)
+  const report19 = ctx19.slice(ctx19.indexOf('const reportTestCompleted = useCallback'));
+  const reportBody = report19.slice(0, report19.indexOf('\n  );'));
+  ok(/void patchMemberDoc\(next\.id, payload\)/.test(reportBody), 'B: sayaçlar patchMemberDoc ile anında gönderiliyor');
+  ok(!/setTimeout|syncTimer/.test(reportBody), 'B: erteleme/kuyruk zamanlayıcısı yok', 'timer bulundu');
+  ok(!/if \(!res\.ok\)[\s\S]{0,120}enqueue/.test(reportBody), 'B: sayaç yazması başarısızsa cihazda bir yere kopyalanmıyor');
+
+  // C) kayıt: red => yarım hesap bırakmıyor, oturum açmıyor
+  const signUp19 = ctx19.slice(ctx19.indexOf('const signUp = useCallback'));
+  const signUpBody = signUp19.slice(0, signUp19.indexOf('\n  );'));
+  const denied19 = signUpBody.slice(signUpBody.indexOf('if (!created.ok) {'));
+  ok(/await auth\.deleteAccount\(\)/.test(denied19), 'C: yazma reddedilirse Firebase hesabı geri alınıyor (tekrar denenebilir)');
+  ok(!/sessionStore\.set|applyMember\(draft\)/.test(denied19.slice(0, 700)), 'C: red durumunda cihaz oturumu/profiline yazılmıyor');
+  ok(/reason: 'write'/.test(denied19), 'C: signUp başarısız diye net dönüyor');
+
+  // D) bayat token tek başına yazmayı engellemiyor: kendi kendine tazeleme
+  const A = await import('/tmp/authBundle.mjs');
+  const b64u = o => Buffer.from(JSON.stringify(o), 'utf8').toString('base64url');
+  const mk = p => `${b64u({ alg: 'none', typ: 'JWT' })}.${b64u(p)}.sig`;
+  const nowS = Math.floor(Date.now() / 1000);
+  const tagOf = h => {
+    try {
+      const jwt = String(h || '').replace(/^Bearer /, '');
+      const p = jwt.split('.')[1];
+      if (!p) return 'yok';
+      return JSON.parse(Buffer.from(p.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')).tag || 'etiketsiz';
+    } catch {
+      return 'bozuk';
+    }
+  };
+  mem.set(A.AUTH_SESSION_KEY, JSON.stringify({
+    uid: 'uid1234567890',
+    email: 'a@b.co',
+    idToken: mk({ iss: 'https://securetoken.google.com/kpssasistani-01', email: 'a@b.co', user_id: 'uid1234567890', exp: nowS - 60, tag: 'eski' }),
+    refreshToken: 'rt-1',
+    expiresAt: Date.now() + 3_600_000,
+  }));
+  const seen19 = [];
+  const realFetch19 = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes(':token')) {
+      seen19.push('refresh');
+      const body = { access_token: mk({ iss: 'https://securetoken.google.com/kpssasistani-01', email: 'a@b.co', user_id: 'uid1234567890', exp: nowS + 3600, tag: 'yeni' }), refresh_token: 'rt-2', expires_in: '3600' };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+        clone: function () { return this; },
+      };
+    }
+    const tag = tagOf((init?.headers || {}).Authorization);
+    seen19.push(tag);
+    if (tag === 'eski') {
+      const err = { error: { message: 'TOKEN_EXPIRED: Invalid Authentication.' } };
+      return { ok: false, status: 403, json: async () => err, text: async () => JSON.stringify(err), clone: function () { return this; } };
+    }
+    return { ok: true, status: 200, json: async () => ({ exists: true }), text: async () => '{"exists":true}', clone: function () { return this; } };
+  };
+  let exists19 = null;
+  try {
+    const FP19 = await freshApi();
+    exists19 = await FP19.documentExists('memberships/a@b.co');
+    ok(FP19.consumeTokenRefreshNotice() === true, 'D: tazeleme bir kez bildiriliyor');
+    ok(FP19.consumeTokenRefreshNotice() === false, 'D: bildirim tek seferlik');
+  } finally {
+    globalThis.fetch = realFetch19;
+    dropSession();
+  }
+  ok(exists19 === true, 'D: bayat token yazmayı/okumayı engellemiyor — taze tokenla kendiliğinden geçti', String(exists19));
+  ok(seen19.filter(x => x === 'refresh').length === 1, 'D: token tam bir kez yenileniyor', JSON.stringify(seen19));
+  ok(
+    seen19[0] === 'eski' && seen19[seen19.length - 1] === 'yeni' && seen19.indexOf('refresh') === 1,
+    'D: bayat tokenla red → tek token tazeleme → taze tokenla aynı istek',
+    JSON.stringify(seen19)
+  );
+
+  // E) kurallar: E-posta/Parola kapalıyken de create Firestore’a düşüyor
+  ok(
+    /function selfCreateOk\(memberId\) \{[\s\S]{0,900}:\s*\(!lockdownOn\(\)[\s\S]{0,240}memberId == request\.resource\.data\.email\.lower\(\)/.test(rulesRaw),
+    'E: kimliksiz create kuralda tanımlı (yol == e-posta), kilit açıkken kapalı'
+  );
+  ok(/request\.resource\.data\.role == 'user'/.test(rulesRaw), 'E: kimliksiz create yalnız düz üye rolüyle sınırlı');
+
+  const realFetch20 = globalThis.fetch;
+  const rules19 = { lockdown: false };
+  const freshDoc = () => ({ ...baseDoc, id: 'kimlik@ornek.com', email: 'kimlik@ornek.com', emailNormalized: 'kimlik@ornek.com' });
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    const headers = init?.headers || {};
+    const hasSession = String(headers.Authorization || '').startsWith('Bearer ');
+    if (!hasSession && rules19.lockdown) return { ok: false, status: 403, json: async () => ({ error: { message: 'Missing or insufficient permissions' } }), text: async () => '{}' };
+    return { ok: true, status: 200, json: async () => ({}), text: async () => '{}' };
+  };
+  try {
+    const FP19b = await freshApi();
+    rules19.lockdown = false;
+    const open19 = await FP19b.writeMembershipSelf(freshDoc());
+    ok(open19.ok, 'E: kilit kapalıyken kimliksiz create reddedilmiyor (üyelik anında Firestore’a düşer)', open19.ok ? '' : open19.error);
+    rules19.lockdown = true;
+    const locked19 = await FP19b.writeMembershipSelf({ ...freshDoc(), id: 'kilit@ornek.com', email: 'kilit@ornek.com', emailNormalized: 'kilit@ornek.com' });
+    ok(!locked19.ok && locked19.reason === 'denied', 'E: kilit AÇIKKEN kimliksiz create yok — kilit anlamını koruyor', String(locked19.reason));
+  } finally {
+    globalThis.fetch = realFetch20;
+  }
+
+  // F) panelde tanılama/kuyruk arayüzü kalmadı
+  ok(!/Erişim tanısı|Yazma sınaması|Raporu göster|Bulut kuyruğu|Tanı raporunu/.test(panel19), 'F: panelde tanı/sınama/rapor/kuyruk satırı yok');
+  ok(/membershipBuildLabel\(\)/.test(panel19), 'F: tek kalan bilgi hangi derleme olduğu (satır içinde)');
 }
 
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);
