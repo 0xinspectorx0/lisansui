@@ -377,8 +377,8 @@ head('\x1b[1m[5] supabase/migrations — tablo + bekçi + politika + grant\x1b[0
   ok(/'questions'/.test(sql), 'konu belgesi soru dizisini tanıyor');
   ok(!/drop table|truncate/.test(sql) && flat.includes('delete from public.members where'), 'migration yıkıcı değil; üye silme yalnız where ile tek satır');
   ok(/create extension if not exists "citext"/.test(sql), 'e-posta için citext isteniyor (varsa dokunulmaz)');
-  ok(!/^\s{0,1}insert into public\.members\b/m.test(sql), 'SQL sahte üye tohumlamıyor (boş başla)');
-  ok(!/^\s{0,1}insert into public\.admins\b/m.test(sql), 'yönetici listesi elle/panelden dolduruluyor');
+  ok(!sql.split('\n').some(l => /^insert into public\.members\b/.test(l)), 'SQL sahte üye tohumlamıyor (boş başla; membership_policy satırı sayılmaz)');
+  ok(!sql.split('\n').some(l => /^insert into public\.admins\b/.test(l)), 'yönetici listesi elle/panelden dolduruluyor');
   ok(flat.includes('not exists (select 1 from public.admins)'), 'ilk yönetici kendisini ekleyebiliyor (bootstrap), sonrası yöneticide');
 }
 
@@ -519,6 +519,12 @@ head('\x1b[1m[9] panel ve akış metinleri\x1b[0m');
 {
   const panel = read('screens/AdminSettingsScreen.tsx');
   ok(/SQL — tablolar ve RLS/.test(panel), 'panelde SQL satırı var (kopyala → yapıştır → Run)');
+  ok((panel.match(/title="SQL — tablolar ve RLS"/g) || []).length === 1, 'SQL kartı panelde tek tane (bayat kopya yok)');
+  ok(panel.includes('?sql=1'), 'panel PIN’siz teslim adresini de söylüyor');
+  const appSrc = read('App.tsx');
+  ok(appSrc.includes('sqlDeliveryRequested()') && appSrc.includes('SqlDeliveryScreen'), 'App `?sql=1` dalını navigator’dan ÖNCE yakalıyor');
+  const sqlPage = read('screens/SqlDeliveryScreen.tsx');
+  ok(sqlPage.includes('SUPABASE_SQL') && !sqlPage.includes('AsyncStorage') && !/[^a-zA-Z]fetch\(/.test(sqlPage), 'teslim sayfası yalnız metni gösterir (veri katmanına dokunmaz)');
   ok(/copySql|Kopyala/.test(panel), 'SQL kopyalama eylemi pane bağlı');
   ok(/setup:supabase/.test(panel) && !/setup:firestore|deploy:rules/.test(panel), 'kurulum komutları Supabase’e dönük');
   ok(!/diagnoseMembershipAccess|accessDiag|teşhis/.test(panel) && !/Tanı(?!mlı)/.test(panel), 'panelde tanı/rapor arayüzü yok');

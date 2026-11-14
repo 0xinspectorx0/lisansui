@@ -583,28 +583,19 @@ export const AdminSettingsScreen: React.FC = () => {
               {SUPABASE_SQL.slice(0, 3000)}
             </Text>
           ) : null}
-          <AdminRow
-            icon="construct-outline"
-            title="SQL — tablolar ve RLS"
-            subtitle={
-              sqlNote ??
-              `${describeSupabaseSql()} · uygulamanın beklediği tek şema bu; Dashboard → SQL Editor → Run`
-            }
-          />
-          {sqlNote && !sqlCopied ? (
-            <Text
-              selectable
-              style={{ fontSize: 10.5, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 15, marginBottom: 6 }}
-            >
-              {SUPABASE_SQL.slice(0, 3000)}
-            </Text>
-          ) : null}
+          <Text style={{ fontSize: 10.5, color: colors.textMuted, lineHeight: 15, marginBottom: 4 }}>
+            Panele erişemiyorsan aynı metin adres üzerinden de açık:{' '}
+            <Text selectable style={{ fontFamily: 'monospace' }}>
+              ?sql=1
+            </Text>{' '}
+            (uygulamanın adresinin sonuna ekle; salt-okunur, PIN sormaz).
+          </Text>
           <AdminRow
             icon="code-slash-outline"
             title="Ayar kaynağı"
             subtitle={
               fsTarget.source === 'none'
-                ? 'Repo varsayılanı — yeni proje için .env veya app.json kullan'
+                ? 'Repo varsayılanı boş — hedefi bir kez yaz: npm run setup:supabase (config/supabaseApp.ts + app.json + .env.local doldurur, anahtar sende kalmaz)'
                 : `${fsTarget.source} üzerinden verildi`
             }
             right={<AdminChip label={fsTarget.source} tone="info" compact />}

@@ -38,6 +38,7 @@ import { AuthScreen } from './screens/AuthScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { MembershipPaywallScreen } from './screens/MembershipPaywallScreen';
 import { AdminMaintenanceGate } from './components/admin/MaintenanceGate';
+import { SqlDeliveryScreen, sqlDeliveryRequested } from './screens/SqlDeliveryScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -179,6 +180,11 @@ function RootNavigator() {
   const { colors } = useAppTheme();
   const { width } = useWindowDimensions();
   const isWideWeb = Platform.OS === 'web' && width > 540;
+
+  // `?sql=1` → PIN'siz, salt-okunur SQL teslim sayfası. Kasıtlı olarak en başta
+  // dönülür: veri katmanı/oturum bozukken de açılabilsin (kurulumda panel
+  // kilitli kalabilir; tek gereken şey SQL metnini kopyalamak).
+  if (sqlDeliveryRequested()) return <SqlDeliveryScreen />;
 
   const navTheme = colors.isDark
     ? {

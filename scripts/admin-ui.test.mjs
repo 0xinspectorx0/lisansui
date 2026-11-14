@@ -337,6 +337,29 @@ console.log('\x1b[1m[bulut] anlık yazı + politika belgesi bağlantıları\x1b[
   ok(/useSyncExternalStore\(subscribeCloudWrite/.test(ac), 'yazım durumu aboneyle akıyor');
 }
 
+console.log('\x1b[1m[sqldelivery] `?sql=1` teslim sayfası[0m');
+{
+  const entry = [
+    "import React from 'react';",
+    "import { renderToString } from 'react-dom/server';",
+    "import { SqlDeliveryScreen, sqlDeliveryRequested } from '../screens/SqlDeliveryScreen';",
+    "export function render() {",
+    "  return renderToString(<SqlDeliveryScreen />) + '<!--' + String(sqlDeliveryRequested()) + '-->';",
+    "}",
+    '',
+  ].join('\n');
+  const f = 'screens/_uishadow-sqldelivery.tsx';
+  fs.writeFileSync(path.join(REPO, f), entry, 'utf8');
+  written.push(f);
+  const { html, vis } = await renderOf(f);
+  ok(html.length > 400, `sayfa çökmeden render edildi (${(html.length / 1024) | 0} KB)`);
+  ok(vis.includes('SQL — tablolar ve RLS'), 'başlık görünüyor');
+  ok(vis.includes('create table if not exists public.members'), 'SQL metni sayfanın içinde');
+  ok(vis.includes('Kopyala') || vis.includes('kopyala'), 'kopyalama eylemi var');
+  ok(!/AIza|apiKey/.test(vis), 'anahtar/çevresel döküm sayfada yok');
+  ok(!/function/.test(vis.slice(0, 200)), 'başlık düz metin basılıyor');
+}
+
 cleanup();
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${fail + pass} kontrol\x1b[0m\n`);
 process.exit(fail ? 1 : 0);

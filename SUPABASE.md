@@ -91,6 +91,14 @@ Firestore döneminde oluşturulmuş hesaplarda parola bizim hash'imizdi; o üyel
   yeniden başlat, uygulama otomatik devam eder.
 * Sorular satır satır `questions` tablosundadır; konu belgeleri yalnız meta taşır.
 
+## SQL'ü panele hiç girmeden alma
+
+Uygulamanın adresinin sonuna `?sql=1` ekle (ör. `https://…/?sql=1`): PIN sormayan,
+hiçbir yere yazmayan salt-okunur bir sayfa açılır ve çalıştırılacak SQL'i olduğu gibi
+basar. Panel bozuksa/erişemiyorsan kurulum yine tamamlanabilir. İçerik yedeği için
+`?seed=` diye ayrı bir sayfa yok — panel "Ayarlar" ekranında `admin.exportJson()`
+züccaciyesi zaten düz metin olarak basılıyor, kopyala → `yedek.json` olarak kaydet.
+
 ## Testler
 
 ```bash
