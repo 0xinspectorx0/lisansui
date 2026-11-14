@@ -251,6 +251,14 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
   const shimDir = path.join(TMP, 'stubs');
   fs.mkdirSync(shimDir, { recursive: true });
   const plainPath = path.join(REPO, 'scripts', 'admin-ui-shims', 'plain.js');
+  const stubLine = n => {
+    if (/^use[A-Z]/.test(n)) return `export const ${n} = neutralHook;`;
+    // Kaynakta çağrılan isimler fonksiyon gibi durmalı; değer olanlar nesne gibi
+    // (aksi halde React child olarak görüp "Functions are not valid" diye bağırır).
+    const called = new RegExp(`${n}\\s*\\(`).test(setSrc);
+    return `export const ${n} = ${called ? 'callable' : 'plain'};`;
+
+  };
   let shadowSrc = setSrc;
   const seen = new Set();
   for (const spec of stubbed) {
@@ -260,11 +268,11 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
       throw new Error(`ayarlar gölgesi: import bulunamadı (${spec})`);
     }
     const file = path.join(shimDir, `${spec.replace(/[^a-z0-9]/gi, '_')}.js`);
-    const lines = [`import { plain, neutralHook } from '${plainPath}';`];
+    const lines = [`import { plain, neutralHook, callable } from '${plainPath}';`];
     for (const n of found.names) {
       if (seen.has(n)) continue;
       seen.add(n);
-      lines.push(`export const ${n} = ${/^use[A-Z]/.test(n) ? 'neutralHook' : 'plain'};`);
+      lines.push(stubLine(n));
     }
     fs.writeFileSync(file, lines.join('\n') + '\n', 'utf8');
     shadowSrc = shadowSrc.replace(found.statement, `import {${found.names.join(',')}} from '${file}';`);

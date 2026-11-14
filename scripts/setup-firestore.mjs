@@ -131,6 +131,27 @@ function writeRepoFirebaseConfig(file, updates) {
   return true;
 }
 
+/**
+ * config/firebaseApp.ts içindeki FIREBASE_WEB_CONFIG değerini okur
+ * (apiKey/projectId/authDomain/appId satırları). `--check` bunu da dener,
+ * böylece `.env.local` olmasa bile “anahtar yok” demeyiz.
+ */
+function readRepoFirebaseConfig(file) {
+  if (!fs.existsSync(file)) return {};
+  const text = fs.readFileSync(file, 'utf8');
+  const body = text.slice(text.indexOf('FIREBASE_WEB_CONFIG'));
+  const grab = key => {
+    const m = body.match(new RegExp(`${key}:\\s*'([^']*)'`));
+    return m ? m[1].trim() : '';
+  };
+  return {
+    apiKey: grab('apiKey'),
+    projectId: grab('projectId'),
+    authDomain: grab('authDomain'),
+    appId: grab('appId'),
+  };
+}
+
 function readEnvValue(file, name) {
   for (const f of [file, path.join(path.dirname(file), '.env')]) {
     if (!fs.existsSync(f)) continue;
@@ -464,7 +485,8 @@ async function main() {
   }
 
   if (flags.has('--check')) {
-    const key = (apiKeyArg || readEnvValue(envPath, 'EXPO_PUBLIC_FIREBASE_API_KEY') || '').trim();
+    const repoCfg = readRepoFirebaseConfig(repoFirebasePath);
+    const key = (apiKeyArg || readEnvValue(envPath, 'EXPO_PUBLIC_FIREBASE_API_KEY') || repoCfg.apiKey || '').trim();
     console.log('');
     console.log(c.b('  Firebase Auth testi'));
     if (!key) {
@@ -474,6 +496,8 @@ async function main() {
       console.log(c.dim('  Kalıcı çözüm (kullanıcıya bir daha sorulmaz):'));
       console.log(c.dim('    npm run setup:firestore -- ' + projectId + ' --root . --api-key <ANAHTAR>'))
     } else {
+      const src = apiKeyArg ? '--api-key argümanı' : readEnvValue(envPath, 'EXPO_PUBLIC_FIREBASE_API_KEY') ? '.env.local' : 'config/firebaseApp.ts (depoya gömülü)';
+      console.log(c.dim(`  ○ anahtar kaynağı: ${src}${repoCfg.appId ? ` • appId: ${repoCfg.appId.slice(0, 12)}…` : ''}`));
       const a = await probeIdentity(key);
       console.log(`  ${a.verdict.ok ? c.ok('✔') : c.bad('✗')} ${a.verdict.note}${a.verdict.extra ? c.dim(' ' + a.verdict.extra) : ''}`);
     }

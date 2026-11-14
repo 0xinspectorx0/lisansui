@@ -209,12 +209,19 @@ npm run setup:firestore -- kpssasistani-01 --root . --api-key AIza...   # config
 npm run deploy:rules
 npx expo start --clear
 npm run check:firestore     # "Firebase Auth testi: API anahtarı geçerli ve sağlayıcı açık"
+#   (anahtarı sırasıyla --api-key, .env.local ve config/firebaseApp.ts’ten okur)
 ```
 4. Panelde **Uygulama Ayarları → Firebase Auth (kimlik doğrulama) → Test et**:
    mod rozeti `firebase-auth` ve “Kaynak: depoya gömülü config” satırı görünmeli;
    kart, bu cihazdaki oturumu da gösterir. Anahtar giriş alanı yoktur — gerekmez.
 
 Ne değişir:
+- **Eski (yerel PBKDF2) hesaplar kaybolmaz.** Anahtar sonradan eklendiğinde bir üyenin
+  Firebase hesabı yoktur; girişte Firebase `EMAIL_NOT_FOUND` derse uygulama üyelik
+  belgesini okuyup parolayı belgedeki hash ile doğrular ve üyeyi içeri alır (Firestore
+  yazmaları yine kurallara tabidir). **Profil → Şifremi değiştir** ise hesabı kalıcı
+  olarak Firebase’e taşır: yeni parolayla Firebase kullanıcısı açılır, belge
+  `algo: 'firebase-auth'` + `authUid` olur. Kayıt verisine dokunulmaz.
 - Üyelik belgesine parola hash'i **yazılmaz**; `lib/crypto.ts` yalnızca yerel modda kullanılır.
 - Kayıt/giriş `identitytoolkit.googleapis.com` üzerinden yapılır (`lib/authClient.ts`);
   hata mesajları Türkçeye çevrilir (`EMAIL_EXISTS`, `INVALID_LOGIN_CREDENTIALS`,

@@ -37,9 +37,9 @@ const TEXT_METHODS = new Set(['join', 'trim', 'replace', 'replaceAll', 'toLowerC
 /** Yok sayılan (çağrısı hiçbir şey yapmayan) metotlar. */
 const NOOP_METHODS = new Set(['forEach', 'push', 'pop', 'set', 'delete', 'clear', 'add', 'sort', 'reverse']);
 
-const make = () => {
-  const fn = () => make();
-  return new Proxy(fn, {
+const make = (callable = false) => {
+  const target = callable ? () => make(true) : {};
+  return new Proxy(target, {
     get(target, prop) {
       if (prop === Symbol.toPrimitive) return EMPTY_TEXT;
       if (prop === Symbol.iterator) return () => [][Symbol.iterator]();
@@ -53,22 +53,33 @@ const make = () => {
       if (prop === 'indexOf' || prop === 'findIndex') return () => -1;
       if (prop === 'find' || prop === 'some' || prop === 'every') return () => undefined;
       if (prop === 'then' || prop === 'catch' || prop === 'finally') return undefined;
+      // Çağrılabilir stub JSX çocuğu olarak kullanılırsa React
+      // “Functions are not valid as a React child” diye bağırır. Sahte bir
+      // react.element kimliği verince React onu boş <span> sayar: uyarı yok,
+      // çağrılabilirlik de korunuyor (`admin.exportJson()` çalışmaya devam eder).
+      if (callable && prop === '$$typeof') return Symbol.for('react.element');
+      if (callable && prop === 'type') return 'span';
+      if (callable && prop === 'props') return { children: '' };
+      if (callable && (prop === 'key' || prop === 'ref')) return null;
       if (FALSE_FLAGS.has(prop)) return false;
       if (TRUE_FLAGS.has(prop)) return true;
       if (prop === 'toString') return EMPTY_TEXT;
-      return make();
+      return make(callable);
     },
-    apply: () => make(),
-    construct: () => make(),
+    apply: () => make(callable),
+    construct: () => make(callable),
     has: () => true,
   });
 };
 
-/** Değiştirilemez stub — hangi bağlama bağlanırsan bağlanabilirsin. */
-export const plain = make();
+/**
+ * Nesne gibi davranan stub (JSX çocuklarına güvenle basılabilir — `typeof`
+ * 'function' olsaydı React "Functions are not valid as a React child" derdi).
+ */
+export const plain = make(false);
+
+/** Çağrılan şeyler için: aynı stub, ama fonksiyon hedefli. */
+export const callable = make(true);
 
 /** Hook gibi kullanılan stub: `const { settings } = useApp();` */
-export const neutralHook = () => make();
-
-/** Asenkron gibi görünen stub: `await readAdminList()` çökmesin. */
-export const asyncNeutral = async () => make();
+export const neutralHook = () => make(true);
