@@ -132,7 +132,7 @@ export const AdminMembershipScreen: React.FC = () => {
   const loadRef = useRef(load);
   loadRef.current = load;
   useEffect(() => {
-    if (policy.cloudMembers) void loadRef.current(true);
+    void loadRef.current(true);
     // membersVersion bumps after every successful cloud write, so the list stays honest.
   }, [policy.cloudMembers, membership.membersVersion]);
 

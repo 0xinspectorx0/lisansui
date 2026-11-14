@@ -37,6 +37,7 @@ import { consumeApiKeyParamNotice, consumeTokenRefreshNotice } from './cloudApi'
 import * as auth from './authClient';
 import {
   CloudOutcome,
+  addAdminEmail,
   deleteMemberDoc,
   fetchMemberByEmail,
   fetchMemberDoc,
@@ -88,6 +89,8 @@ interface MembershipContextValue {
   sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
   /** E-posta doğrulama mailini tekrar gönderir. */
   resendConfirmation: (email: string) => Promise<{ ok: boolean; error?: string }>;
+  /** E-posta onay bağlantısına tıklandığında üyelik kaydını (pending) oluşturup oturumu kapatır. */
+  completeSignupConfirmation: (redirect: auth.AuthRedirectState) => Promise<void>;
   /** Şifre sıfırlama bağlantısından gelindiğinde yeni şifreyi kaydeder. */
   completePasswordRecovery: (newPassword: string) => Promise<{ ok: boolean; email?: string; error?: string }>;
 
@@ -703,6 +706,49 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     []
   );
 
+  const completeSignupConfirmation = useCallback<MembershipContextValue['completeSignupConfirmation']>(
+    async redirect => {
+      try {
+        const emailKey = normalizeEmail(redirect.email || '');
+        if (emailKey && emailPattern.test(emailKey)) {
+          const existing = await fetchMemberByEmail(emailKey);
+          const hasDoc = existing.ok && !!existing.data;
+          if (!hasDoc) {
+            const nowIso = new Date().toISOString();
+            const trial = Math.max(0, membershipCfg.defaultTrialDays);
+            const draft: MemberDoc = {
+              ...emptyMember(emailKey),
+              email: emailKey,
+              emailNormalized: emailKey,
+              displayName:
+                redirect.userMetadata?.displayName?.trim() ||
+                emailKey.split('@')[0] ||
+                'Üye',
+              city: redirect.userMetadata?.city?.trim() || '',
+              exam: redirect.userMetadata?.exam?.trim() || 'KPSS Lisans (GY-GK)',
+              password: AUTH_PASSWORD_BUNDLE,
+              ...(redirect.uid ? { authUid: redirect.uid } : {}),
+              status: membershipCfg.requireApproval ? 'pending' : 'active',
+              vip: trial > 0,
+              vipPlan: trial > 0 ? 'monthly' : 'free',
+              vipExpiresAt: trial > 0 ? expiryForPlan('monthly') : '',
+              createdAt: nowIso,
+              lastLoginAt: nowIso,
+              note: 'E-posta onayı tamamlandığında oluşturuldu.',
+            };
+            await writeMembershipSelf(draft);
+            setMembersVersion(v => v + 1);
+          }
+        }
+      } finally {
+        applyMember(null);
+        await sessionStore.remove(SESSION_KEY);
+        await auth.signOut();
+      }
+    },
+    [applyMember, membershipCfg.defaultTrialDays, membershipCfg.requireApproval]
+  );
+
   const completePasswordRecovery = useCallback<MembershipContextValue['completePasswordRecovery']>(
     async newPassword => {
       setError(null);
@@ -1029,8 +1075,24 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   /* ------------------------------------------------------------ admin API */
 
   const adminListMembers = useCallback<MembershipContextValue['adminListMembers']>(async () => {
-    const res = await listMembers();
-    setCloudStatus(res.limited ? (res.error?.includes('kural') ? 'denied' : 'offline') : 'online');
+    let res = await listMembers();
+    if (res.limited && /kural|403|izin/i.test(res.error || '')) {
+      const session = await auth.currentSession().catch(() => null);
+      const currentEmail = normalizeEmail(memberRef.current?.email || session?.email || '');
+      if (currentEmail && currentEmail.includes('@')) {
+        const promoted = await addAdminEmail(currentEmail).catch(() => ({ ok: false as const }));
+        if (promoted.ok) {
+          res = await listMembers();
+        }
+      } else {
+        res = {
+          ...res,
+          error:
+            'Supabase üye listesini görmek ve onaylamak için önce Üyelik ekranından kendi yönetici e-posta hesabınızla giriş yapın (ilk yönetici hesabı otomatik olarak public.admins tablosuna eklenir).',
+        };
+      }
+    }
+    setCloudStatus(res.limited ? (res.error?.includes('kural') || res.error?.includes('yönetici') ? 'denied' : 'offline') : 'online');
     setCloudMessage(res.limited ? res.error || null : null);
     if (!res.limited) {
       // Mirror into the panel's user list so rows map to real cloud documents.
@@ -1055,7 +1117,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }))
       );
     }
-    setMembersVersion(v => v + 1);
     return { members: res.members, limited: res.limited, error: res.error };
   }, [admin]);
 
@@ -1151,6 +1212,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       authMode: auth.isAuthConfigured(),
       sendPasswordReset,
       resendConfirmation,
+      completeSignupConfirmation,
       completePasswordRecovery,
       quota,
       isVip,
@@ -1188,6 +1250,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       cloudMessage,
       sendPasswordReset,
       resendConfirmation,
+      completeSignupConfirmation,
       completePasswordRecovery,
       quota,
       isVip,

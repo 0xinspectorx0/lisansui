@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -26,10 +26,11 @@ import {
 } from '../components/admin/ui';
 import { AdminGate } from '../components/admin/AdminGate';
 
-type FilterId = 'all' | 'vip' | 'free' | 'blocked' | 'expiring';
+type FilterId = 'all' | 'pending' | 'vip' | 'free' | 'blocked' | 'expiring';
 
 const FILTERS: { id: FilterId; label: string }[] = [
   { id: 'all', label: 'Tümü' },
+  { id: 'pending', label: 'Onay bekleyen' },
   { id: 'vip', label: 'VIP' },
   { id: 'free', label: 'Ücretsiz' },
   { id: 'expiring', label: 'Süresi doluyor' },
@@ -45,6 +46,7 @@ const ROLE_LABEL: Record<AdminRole, string> = {
 
 const STATUS_LABEL: Record<UserStatus, string> = {
   active: 'Aktif',
+  pending: 'Onay bekliyor',
   suspended: 'Askıda',
   banned: 'Yasaklı',
 };
@@ -95,7 +97,14 @@ function memberFromRow(row: AdminUser, doc: MemberDoc): MemberDoc {
         : row.role === 'editor'
         ? 'editor'
         : 'user',
-    status: row.status === 'active' ? 'active' : 'suspended',
+    status:
+      row.status === 'active'
+        ? 'active'
+        : row.status === 'pending'
+        ? 'pending'
+        : row.status === 'banned'
+        ? 'banned'
+        : 'suspended',
     city: row.city,
     exam: row.exam,
     note: row.note,
@@ -115,6 +124,10 @@ export const AdminUsersScreen: React.FC = () => {
   const { users, settings, isVip, localUser } = admin;
 
   const [vipDays, setVipDays] = useState(30);
+
+  useEffect(() => {
+    void membership.adminListMembers();
+  }, [membership.membersVersion]);
 
   /** Supabase is the source of truth: a row that mirrors a member document is
    *  written back to `memberships/{id}` instead of only living in the panel. */
@@ -140,7 +153,13 @@ export const AdminUsersScreen: React.FC = () => {
       if (row.remoteId) {
         const res = await membership.adminSetStatus(
           row.remoteId,
-          status === 'active' ? 'active' : 'suspended'
+          status === 'active'
+            ? 'active'
+            : status === 'pending'
+            ? 'pending'
+            : status === 'banned'
+            ? 'banned'
+            : 'suspended'
         );
         if (!res.ok) cloudError(res.error);
         return;
@@ -218,9 +237,10 @@ export const AdminUsersScreen: React.FC = () => {
     const q = search.trim().toLocaleLowerCase('tr-TR');
     return users
       .filter(u => {
+        if (filter === 'pending' && u.status !== 'pending') return false;
         if (filter === 'vip' && !u.vip) return false;
         if (filter === 'free' && u.vip) return false;
-        if (filter === 'blocked' && u.status === 'active') return false;
+        if (filter === 'blocked' && (u.status === 'active' || u.status === 'pending')) return false;
         if (filter === 'expiring') {
           const d = daysLeft(u.vipExpiresAt);
           if (!u.vip || d === null || d < 0 || d > 7) return false;
@@ -390,9 +410,29 @@ export const AdminUsersScreen: React.FC = () => {
                       subtitle={`${u.email || '—'} • ${u.city || '—'} • ${u.solved.toLocaleString(
                         'tr-TR'
                       )} soru • net ${u.net} • ${u.streak} gün seri`}
-                      badge={u.isLocal ? 'BU CİHAZ' : u.remoteId ? 'BULUT' : undefined}
+                      badge={
+                        u.status === 'pending'
+                          ? 'ONAY BEKLİYOR'
+                          : u.isLocal
+                          ? 'BU CİHAZ'
+                          : u.remoteId
+                          ? 'BULUT'
+                          : undefined
+                      }
                       onPress={() => setEditor({ mode: 'edit', draft: { ...u } })}
-                      right={<RightChevron />}
+                      right={
+                        u.status === 'pending' ? (
+                          <AdminButton
+                            small
+                            tone="success"
+                            icon="checkmark-circle-outline"
+                            label="Onayla"
+                            onPress={() => void setStatusFor(u, 'active')}
+                          />
+                        ) : (
+                          <RightChevron />
+                        )
+                      }
                     />
                   </View>
                 </View>

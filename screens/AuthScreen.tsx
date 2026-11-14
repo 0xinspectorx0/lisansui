@@ -99,10 +99,14 @@ export const AuthScreen: React.FC = () => {
       if (!active || !redirected) return;
       if (redirected.email) setEmail(redirected.email);
       if (redirected.kind === 'signup') {
+        await membership.completeSignupConfirmation(redirected);
+        if (!active) return;
         setMode('signin');
         setLocalError(null);
         membership.clearError();
-        setLocalNotice('Üyeliğiniz onaylandı! Şimdi e-posta adresiniz ve parolanızla giriş yapabilirsiniz.');
+        setLocalNotice(
+          'E-posta adresiniz onaylandı ve kaydınız yönetici onayına gönderildi! Şimdi e-posta adresiniz ve parolanızla giriş yapabilirsiniz.'
+        );
       } else if (redirected.kind === 'recovery') {
         setMode('recovery');
         setLocalError(null);

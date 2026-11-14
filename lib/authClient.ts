@@ -622,6 +622,8 @@ export function authErrorMessage(raw: string): string {
 export interface AuthRedirectState {
   kind: 'signup' | 'recovery' | 'error';
   email?: string;
+  uid?: string;
+  userMetadata?: { displayName?: string; city?: string; exam?: string };
   accessToken?: string;
   refreshToken?: string;
   expiresIn?: number;
@@ -691,7 +693,7 @@ function detectInitialAuthRedirect(): AuthRedirectState | null {
   const expiresIn = Number(params.expires_in || 3600) || 3600;
   const refreshToken = params.refresh_token || '';
 
-  if (kind === 'recovery' && accessToken) {
+  if (accessToken) {
     void persist({
       uid: decoded.uid || '',
       email: decoded.email || '',
@@ -699,14 +701,12 @@ function detectInitialAuthRedirect(): AuthRedirectState | null {
       refreshToken,
       expiresAt: Date.now() + expiresIn * 1000,
     });
-  } else if (kind === 'signup') {
-    // E-posta onaylandığında doğrudan içeri sokmak yerine Giriş ekranına yönlendiriyoruz.
-    void persist(null);
   }
 
   return {
     kind,
     email: decoded.email || params.email || '',
+    uid: decoded.uid || undefined,
     accessToken: accessToken || undefined,
     refreshToken: refreshToken || undefined,
     expiresIn,
@@ -740,15 +740,46 @@ export async function consumeAuthRedirect(): Promise<AuthRedirectState | null> {
       };
     }
     const session = toSession(data, current.email || '');
-    if (current.kind === 'recovery' && data?.access_token) {
+    if (data?.access_token) {
       await persist(session);
-    } else if (current.kind === 'signup') {
-      await persist(null);
     }
     return {
       ...current,
       email: session.email || current.email || '',
+      uid: session.uid || current.uid,
+      userMetadata: session.userMetadata,
     };
+  }
+  if (current.accessToken && current.kind === 'signup') {
+    await ensureAuthConfigLoaded();
+    const cfg = resolveAuthConfig();
+    if (cfg) {
+      try {
+        const res = await fetch(`${authRoot()}/user`, {
+          method: 'GET',
+          headers: {
+            apikey: cfg.anonKey,
+            Authorization: `Bearer ${current.accessToken}`,
+          },
+        });
+        if (res.ok) {
+          const user = await res.json();
+          const meta = user?.user_metadata || {};
+          return {
+            ...current,
+            email: String(user?.email || current.email || '').trim().toLowerCase(),
+            uid: String(user?.id || current.uid || ''),
+            userMetadata: {
+              displayName: typeof meta.displayName === 'string' ? meta.displayName : undefined,
+              city: typeof meta.city === 'string' ? meta.city : undefined,
+              exam: typeof meta.exam === 'string' ? meta.exam : undefined,
+            },
+          };
+        }
+      } catch {
+        /* ignore */
+      }
+    }
   }
   return current;
 }

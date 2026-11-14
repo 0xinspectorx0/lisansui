@@ -438,7 +438,32 @@ async function postMemberDoc(
         code: 409,
         reason: 'error',
       };
-    if (!res.ok) return classify(undefined, res);
+    if (!res.ok) {
+      // E-posta onayı açıkken kayıt anında henüz JWT oturumu yoktur (anon).
+      // Eski kpss_write_doc içindeki ON CONFLICT DO UPDATE ifadesi Postgres'te
+      // SELECT/UPDATE RLS politikalarını da tetiklediği için 403 dönebilir.
+      // Saf INSERT (Prefer: return=minimal) ise yalnız members_self_insert ve
+      // kpss_guard_member_write bekçisini çalıştırır ve pending satırı anında yazar.
+      if (res.status === 403 && /row-level security.*members/i.test(res.raw || '')) {
+        const emailLower = String(memberId).trim().toLowerCase();
+        const plainRow: Record<string, unknown> = {
+          ...fieldsToJson(fields),
+          id: emailLower,
+          email: emailLower,
+          emailNormalized: emailLower,
+          schemaVersion: 1,
+        };
+        const direct = await restFetch('members', '', {
+          method: 'POST',
+          headers: { Prefer: 'return=minimal' },
+          body: JSON.stringify(plainRow),
+        });
+        if (direct.ok || direct.status === 201 || direct.status === 204) {
+          return { ok: true, data: memberFromFields(fields, emailLower) };
+        }
+      }
+      return classify(undefined, res);
+    }
     const json = await res.json();
     const id = String(json?.name || '').split('/').pop() || memberId;
     return { ok: true, data: memberFromFields(json?.fields || fields, id) };
