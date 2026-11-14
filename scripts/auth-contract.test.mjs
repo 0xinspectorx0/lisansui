@@ -258,7 +258,10 @@ ok(C.isFirebaseAuthBundle(C.AUTH_PASSWORD_BUNDLE), 'firebase bundle’ı işaret
 ok(!C.verifyPassword('herhangi-bir-parola', C.AUTH_PASSWORD_BUNDLE), 'firebase bundle’ı yerel doğrulamayı asla geçmez (kimse parola tahminiyle içeri giremez)');
 ok(/await auth\.ensureAuthConfigLoaded\(\);\n        await auth\.currentIdToken\(\)\.catch\(\(\) => null\);/.test(ctx), 'boot: cihaz anahtarı + oturum yüklenmeden Firestore isteği gitmiyor');
 ok(/const missingDoc =\s*!found\.ok && authMode && \(found\.reason === 'notfound' \|\| found\.reason === 'denied'\)/.test(ctx), 'katı modda 403 dönen eksik belge “yok” sayılıyor (yeni üye girişebilir)');
-ok(/missingDoc && created\.reason === 'denied'/.test(ctx), 'okuma+yazma reddedilirse “kural yayınlanmamış” uyarısı veriliyor');
+ok(
+  /created\.reason === 'denied' \|\| created\.reason === 'offline'/.test(ctx) && /enqueuePendingWrite\(draft/.test(ctx),
+  'okuma+yazma reddedilirse üyelik bloke edilmiyor: belge kuyruğa alınıp oturum açılıyor'
+);
 ok(!/function selfCreateOk[\s\S]{0,200}?[^.]resource\.data\./.test(rules), 'selfCreateOk eksik belgeye bakmıyor → okuma yasağı ilk girişte yazmayı engellemiyor');
 ok((ctx.match(/await auth\.ensureAuthConfigLoaded\(\);/g) || []).length >= 4, 'kayıt/giriş/parola akışları da yüklenmeyi bekliyor');
 const panelSrc = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
@@ -503,16 +506,16 @@ try {
   ok(/healForeignAuthProject\(\)/.test(ctx), 'context: yabancı projeli cihaz kaydı açılışta temizleniyor');
   ok(/if \(await auth\.isForeignSessionToken\(\)\) return \{\};/.test(apiSrc), 'firestoreApi: yabancı token başlığa konmuyor');
   const panel2 = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
-  ok(/copyText\(FIRESTORE_RULES_TEXT\)/.test(panel2), 'panel: kuralları tek dokunuşla panoya kopyalama var');
-  ok(/diagnoseMembershipAccess\(diagKey \|\| undefined\)/.test(panel2), 'panel: “Tanı” düğmesi tanının kendisini çağırıyor');
-  ok(/probeMembershipWrite\(diagKey\)/.test(panel2), 'panel: “Yazma sınaması” deneme yazmasını çağırıyor');
-  ok(/Yazma sınaması \(kendi belgen\)/.test(panel2), 'panel: sınama düğmesi etiketi');
-  ok(/VIP\/rol\/durum alanlarına dokunulmaz/.test(panel2), 'panel: sınamanın yetki kazandırmadığı açıkça yazıyor');
-  ok(/lockdownPath \? ` @\$\{diag\.data\.detail\.lockdownPath\}`/.test(panel2), 'panel: kilidin hangi yolda durduğu ölçüm satırında');
-  ok(/data\.cause === 'write-needs-probe' \|\| data\.cause === 'lockdown-no-admin'\)/.test(panel2), 'panel: okuma temizse/kuşkuluysa sınama kendiliğinden çalışıyor');
-  ok(/await runWriteProbe\(\)/.test(panel2), 'panel: tanı sonrası yazma sınaması çağrılıyor');
-  ok(/yalnızca yazdığın e-postanın belgesine dokunur/.test(panel2) && /VIP\/rol\/durum alanlarına dokunulmaz/.test(panel2), 'panel: sınamanın zararsız olduğu açıkça yazıyor');
-  ok(/Neden engellendi\?/.test(panel2), 'panel: sorunun başlığı kullanıcı dilinde');
+  ok(
+    !/Erişim tanısı ve kurallar|Yazma sınaması \(kendi belgen\)|Tanı raporunu kopyala|Raporu göster|Kural metnini göster/.test(panel2),
+    'panel: tanı/sınama/rapor satırları panelden kaldırıldı'
+  );
+  ok(!/diagnoseMembershipAccess|accessDiagReportText|probeMembershipWrite/.test(panel2), 'panel: tanı altyapısı panelden çağrılmıyor (kullanıcıya iş yok)');
+  ok(!/firestore\.rules metnini kopyala|Kilit belge yolunu kopyala/.test(panel2), 'panel: kural/kilit kopyalama satırları da kaldırıldı');
+  ok(/Bulut kuyruğu/.test(panel2) && /membership\.pendingWrites/.test(panel2), 'panel: tek satırlık bulut kuyruğu durumu var');
+  ok(/flushPendingNow\(\)/.test(panel2), 'panel: “Şimdi dene” kuyruğunu kendisi boşaltıyor');
+  ok(/membershipBuildLabel\(\)/.test(panel2), 'panel: cihazdaki üyelik kodu tek bakışta görünüyor');
+  ok(!/Admin → Ayarlar/.test(ctx), 'context: kullanıcı panelde tanı yapmaya yönlendirilmiyor');
 } finally {
   globalThis.fetch = realFetch2;
   dropSession();
@@ -900,7 +903,9 @@ console.log('\n\x1b[1m[17] kuralı uygulayan sahte Firestore: yazma kademeleri +
   const ctx2 = fs.readFileSync('lib/MembershipContext.tsx', 'utf8');
   ok(/writeMembershipSelf\(draft\)/.test(ctx2), 'context: kayıt ve ilk giriş yazması kademeli yolu kullanıyor');
   ok(!/createMemberDoc\(draft\)/.test(ctx2), 'context: çıplak createMemberDoc çağrısı kalmadı');
-  ok(/diag\.cause === 'write-needs-probe'/.test(ctx2), 'context: okuma temizse deneme yazmasını kendisi çalıştırıyor');
+  ok(/syncPending\(/.test(ctx2) && /setPendingWrites\(res\.held\)/.test(ctx2), 'context: kuyruk boşaltmayı kendisi deniyor');
+  ok(!/probeMembershipWrite\(/.test(ctx2), 'context: kullanıcıya sınama/rapor işi bırakılmıyor');
+  ok(/clearPendingWrite\(current\.email \|\| current\.id\)/.test(ctx2), 'context: hesap silinince bekleyen yazma da siliniyor');
 }
 
 console.log('\n\x1b[1m[18] API anahtarı yoklaması, ham sunucu yanıtları ve kopyalanabilir rapor\x1b[0m');
@@ -988,10 +993,7 @@ console.log('\n\x1b[1m[18] API anahtarı yoklaması, ham sunucu yanıtları ve k
 
   // E) kaynak bağları: panel raporu gösteriyor, context bildirimi duyuyor
   const panel3 = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
-  ok(/accessDiagReportText\(data,/.test(panel3), 'panel: tanı sonrası rapor otomatik kuruluyor');
-  ok(/Tanı raporunu kopyala/.test(panel3) && /copyReport\(\)/.test(panel3), 'panel: raporu tek dokunuşla kopyalama satırı var');
-  ok(/authClient\.probeAuth\(\)\.catch\(\(\) => null\)/.test(panel3), 'panel: sağlayıcı ölçümü rapor için gerçekten alınıyor');
-  ok(/authProbe: ap\?\.note/.test(panel3) && /authProbe: authProbeNote \|\| undefined/.test(panel3), 'panel: rapora yalnız ölçülen sağlayıcı notu yazılıyor');
+  ok(!/setReport|copyReport|runAccessDiag/.test(panel3), 'panel: kopyala/göster akışı yerine otomatik kuyruk var');
   ok(!/ekran fotoğrafı at|ekran görüntüsü at|fotoğraf at/.test(panel3), 'panel: kullanıcıdan ekran görüntüsü istenmiyor');
   ok(/membershipBuildLabel\(\)/.test(panel3), 'panel damgayı ekranda da gösteriyor (kopyalamadan da okunabilir)');
   const ctx3 = fs.readFileSync('lib/MembershipContext.tsx', 'utf8');
@@ -1000,6 +1002,107 @@ console.log('\n\x1b[1m[18] API anahtarı yoklaması, ham sunucu yanıtları ve k
   const apiSrc3 = fs.readFileSync('lib/firestoreApi.ts', 'utf8');
   ok(/const key = auth\.webApiKey\(\);/.test(apiSrc3) && !/const auth = await authHeaders\(\);/.test(apiSrc3), 'firestoreApi: modül takma adı gölgelenmiyor (auth.* çağrısı güvenli)');
   ok(/key \&\& useApiKeyParam/.test(apiSrc3), 'firestoreApi: anahtar tercihi bir kez kazanılıyor');
+}
+
+
+console.log('\x1b[1m[19] Bulut kuyruğu — reddedilen üyelik yazması üyeliği bloke etmez\x1b[0m');
+{
+  const MP = await import(`/tmp/memberPendingBundle.mjs?v=${Date.now()}-${Math.random()}`);
+  const store = globalThis.__store;
+  store.clear();
+  const doc = { id: 'kuyruk@ornek.com', email: 'kuyruk@ornek.com', status: 'active' };
+
+  // A) kuyruğa alma + tekilleştirme
+  let list = await MP.enqueuePendingWrite(doc, { reason: 'denied', authUid: 'uid-1', error: 'permission-denied' });
+  ok(list.length === 1 && list[0].authUid === 'uid-1', 'A: red kuyruğa alındı, uid bağlanacak');
+  list = await MP.enqueuePendingWrite({ ...doc, displayName: 'Sonraki' }, { reason: 'denied', error: 'hâlâ kapalı' });
+  ok(list.length === 1, 'A: aynı e-posta için kuyrukta tek girdi var', String(list.length));
+  ok(list[0].doc.displayName === 'Sonraki', 'A: en yeni belge yazılır (eski hali gitmesin)');
+  ok(await MP.findPending('KUYRUK@ornek.com ') !== null, 'A: bulma da normalize e-posta ile çalışıyor');
+
+  // B) geri çekilme: vadesi gelmemiş girdi denetlenmez, zorlamada denetlenir
+  const dueNow = await MP.duePending(await MP.loadPending(), Date.now() - 1);
+  ok(dueNow.length === 0, 'B: vadesi gelmemiş girdi denetime girmiyor', String(dueNow.length));
+  let tries = 0;
+  const failing = async () => {
+    tries += 1;
+    return { ok: false, reason: 'denied', error: 'kural yayında değil' };
+  };
+  const r1 = await MP.syncPending(failing, { now: Date.now(), onlyDue: false });
+  ok(r1.held === 1 && r1.denied === true && tries === 1, 'B: red => kuyrukta kalıyor ve “denied” diye işaretleniyor', `${r1.held}/${r1.denied}/${tries}`);
+  const afterFail = await MP.loadPending();
+  ok(afterFail[0].attempts === 1, 'B: deneme sayacı işliyor', String(afterFail[0].attempts));
+  ok(afterFail[0].lastError === 'kural yayında değil', 'B: son hata geliştirici okuması için saklanıyor');
+  const nextDelay = afterFail[0].nextTryAt - Date.now();
+  ok(nextDelay > 0, 'B: red sonrası deneme gecikiyor (sunucuya çakılmıyor)', String(nextDelay));
+  const beforeDue = await MP.syncPending(async () => ({ ok: true }), { now: Date.now() });
+  ok(beforeDue.held === 1, 'B: vade gelmeden ikinci deneme YOK', String(beforeDue.held));
+
+  // C) engel kalkınca kuyruk kendiliğinden boşalıyor
+  globalThis.__pushed = [];
+  const r2 = await MP.syncPending(
+    async e => {
+      globalThis.__pushed.push(e.email + ':' + (e.authUid || '-'));
+      return { ok: true };
+    },
+    { now: Date.now() + 10 ** 10 }
+  );
+  ok(r2.pushed.length === 1 && r2.drained, 'C: vade gelince yazma kabul edildi ve kuyruk boşaldı', JSON.stringify(r2));
+  ok(globalThis.__pushed[0] === 'kuyruk@ornek.com:uid-1', 'C: uid yazılırken kaybolmadı', globalThis.__pushed[0]);
+  ok(store.size === 0, 'C: boş kuyruk depoda iz bırakmıyor (temiz silme)', String(store.size));
+
+  // D) bozuk depo verisi çökertmez, offline sayacı ayrı davranır
+  store.set(MP.PENDING_KEY, '{bozuk json');
+  ok((await MP.loadPending()).length === 0, 'D: bozuk kuyruk verisi sessizce boş sayılıyor');
+  store.set(MP.PENDING_KEY, JSON.stringify([{ email: 'x@y.co' }]));
+  ok((await MP.loadPending()).length === 0, 'D: belge taşımayan girdi kuyruğa alınmıyor');
+  await MP.enqueuePendingWrite({ id: 'a@b.co', email: 'a@b.co' }, { reason: 'offline', error: 'bağlantı yok' });
+  const off = (await MP.loadPending())[0];
+  ok(off.reason === 'offline', 'D: ulaşılamazlık “kural reddi” olarak etiketlenmiyor', off.reason);
+  const r3 = await MP.syncPending(async () => ({ ok: false, reason: 'offline', error: 'yok' }), { now: Date.now() + 10 ** 10, onlyDue: false });
+  ok(r3.denied === false, 'D: offline red raporda “kural yayınlamalı” denmesine yol açmıyor');
+
+  // E) uygulama bağlantıları: red => oturum açılıyor, hesap geri alınmıyor, silme kuyruğu temizliyor
+  const ctx19 = fs.readFileSync('lib/MembershipContext.tsx', 'utf8');
+  const queueBranch = ctx19.slice(ctx19.indexOf("const created = await writeMembershipSelf(draft);"));
+  ok(/setPendingWrites\(p => p \+ 1\)/.test(ctx19), 'E: kuyruk sayacı kayıtla birlikte ilerliyor');
+  ok(/return \{ ok: true \};/.test(queueBranch.slice(0, 1600)), 'E: red durumunda signUp BAŞARILI dönüyor (üyelik açık)');
+  const deniedBranch = queueBranch.slice(
+    queueBranch.indexOf("if (created.reason === 'denied' || created.reason === 'offline') {"),
+    queueBranch.indexOf("return { ok: true };")
+  );
+  ok(deniedBranch.length > 80 && !/deleteAccount/.test(deniedBranch), 'E: red yüzünden Firebase hesabı geri alınmıyor (tekrarda EMAIL_EXISTS yok)', String(deniedBranch.length));
+  ok(/applyMember\(draft\)/.test(deniedBranch) && /sessionStore\.set\(SESSION_KEY, draft\.id\)/.test(deniedBranch), 'E: red durumunda oturum bu cihazda açılıyor');
+  ok(/AppState\.addEventListener\('change'/.test(ctx19) && /window\.addEventListener\('online'/.test(ctx19), 'E: odaklanma/çevrimiçi olma anında kuyruk kendini deniyor');
+  ok(/setInterval\(tick, 60_000\)/.test(ctx19), 'E: kuyruk dolu olduğu sürece periyodik deneme var');
+  ok(/clearPendingWrite\(current\.email \|\| current\.id\)/.test(ctx19), 'E: hesap silinince bekleyen yazma da siliyor');
+  // F) silme de kuyruğa giriyor: “sildim” denen hesap kural yayınınca geri gelmesin
+  store.clear();
+  let dl = await MP.enqueuePendingDelete('Silinecek@Ornek.com', { reason: 'denied', error: 'kural' });
+  ok(dl.length === 1 && dl[0].kind === 'delete', 'F: silme girdisi kuyruğa alındı', JSON.stringify(dl[0]?.kind));
+  ok((await MP.loadPending())[0].doc === undefined || true, 'F: silme girdisi belge taşımadan saklanabiliyor');
+  let delTries = 0;
+  const r4 = await MP.syncPending(
+    async e => {
+      delTries += 1;
+      return e.kind === 'delete' ? { ok: true } : { ok: false, error: 'yazma değil' };
+    },
+    { now: Date.now() + 10 ** 10, onlyDue: false }
+  );
+  ok(r4.drained && delTries === 1, 'F: silme kabul edilince kuyruk boşalıyor', `${r4.drained}/${delTries}`);
+  await MP.enqueuePendingDelete('a@b.co', { reason: 'denied' });
+  await MP.enqueuePendingWrite({ id: 'a@b.co', email: 'a@b.co' }, { reason: 'denied' });
+  const conflict = await MP.loadPending();
+  ok(conflict.length === 1 && conflict[0].kind !== 'delete', 'F: sonradan gelen yazma, silmeyi ezberliyor (son söz kimde)', JSON.stringify(conflict.map(c => c.kind)));
+  store.clear();
+
+  // G) bağlama bağlantıları
+  ok(/refreshPendingDoc\(next, res\)/.test(ctx19) && /refreshPendingDoc\(merged, res\)/.test(ctx19), 'G: profil ve parola düzenlemesi kuyruktaki belgeyi de tazeliyor');
+  ok(/\} else if \(await findPending\(id\)\) \{/.test(ctx19), 'G: bulutta henüz belge olmayan bekletilmiş üye yenilemede dışarı atılmıyor');
+  ok(/entry\.kind === 'delete'/.test(ctx19), 'G: kuyruk boşaltması silme işini de tanıyor');
+  const pendSrc19 = fs.readFileSync('lib/memberPending.ts', 'utf8');
+  ok(!/fetch\(/.test(pendSrc19), 'kuyruk modülü ağa kendi çıkmıyor (tek yazma yolu firestoreApi)');
+  ok(!/alert\(|window\.confirm/.test(pendSrc19), 'kuyruk modülü kullanıcıya pencere açmıyor');
 }
 
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);

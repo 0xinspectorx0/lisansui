@@ -376,18 +376,28 @@ Nasıl çalışır:
 Sonrası: Console → `meta/content_lock` oluştur (içerik yazma penceresi kapanır) ve
 isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
 
-## 7b) Panel tarafında tek dokunuşla doğrulama
+## 7b) Yazma reddedilirse ne olur (tanı ekranı YOK, kendini onaran kuyruk var)
 
-**Admin → Ayarlar → “Erişim tanısı ve kurallar”**:
+Panelde “tanı / yazma sınaması / rapor kopyala” satırları kaldırıldı — kullanıcıya
+yaptırılacak bir iş bırakmamak için. Yerine tek şey var: **bulut kuyruğu**.
 
-| Satır | Ne yapar |
+| Durum | Ne olur |
 | --- | --- |
-| **Tanı** | Üç okuma (içerik / kilit / üyelik) + yerel biçim denetimi. Hiçbir şey yazmaz. Nedeni tek cümle + sıralı adım olarak verir. |
-| **Yazma sınaması (kendi belgen)** | Yalnızca yazdığın e-postanın belgesine dokunur: belge yoksa kurala tam uygun biçimde oluşturulur, varsa sadece `lastLoginAt` yenilenir. VIP/rol/durum alanlarına dokunmaz — yetki kazandırmaz. Okuma izinleri yazma iznini kanıtlamadığı için tek kesin cevap budur. |
-| **firestore.rules metnini kopyala** | Uygulamanın beklediği kural metninin tamamını panoya kopyalar → Console → Rules → yapıştır → Publish. |
-| **Kilit belge yolunu kopyala** | Kilit hangi yolda duruyorsa (kök ya da legacy) o belge yolunu kopyalar; Console'dan silmek kilidi kapatır, kuralı yeniden yayınlamak gerekmez. |
-| **Tanı raporunu kopyala** | Tanı + yazma sınaması + e-posta/parola sağlayıcı ölçümünü **tek blok metin** olarak panoya kopyalar (`neden / adım / hedef / okuma / kimlik / eşleşme / biçim / ham yanıt / derleme / düz`). Geliştiriciyle ekran fotoğrafı ya da tahmin cümlesi paylaşmak gerekmez. |
-| **Raporu göster** | Aynı metni ekranda monospace blok olarak açar; panoya kopyalanamazsa uzun basıp seçilebilir. Okuma kuşkuluysa yazma sınaması ve `probeAuth()` kendiliğinden koşulur; ölçülemeyen satır rapora hiç yazılmaz. |
+| `firestore.rules` yayınlanmamış/bayat, veritabanı yok, kilit açık — yani **kendi üyelik belgen yazılamıyor** | Üyelik **bloke edilmez**: belge cihazda bekletilir (`lib/memberPending.ts`), oturum açılır, VIP/kota/hepsi çalışır. Firebase hesabı geri ALINMAZ (tekrar denemede `EMAIL_EXISTS` olmaz). |
+| Kuyruk nasıl boşalır | Uygulama açılışında, odaklanmada, `online` olayında ve kuyruk dolu olduğu sürece dakikada bir yazmayı yeniden dener (üstel geri çekilme: 0s → 20s → 1dk → 3dk → 10dk → 30dk → 6s). Engel kalktığı anda **kimseye haber vermeden** buluta geçer ve “Üyeliğin buluta aktarıldı” der. |
+| Kuyrukta bekleyen belge düzenlenirse | Profil/parola değişimi kuyruktaki belgeye de işlenir (`refreshPendingDoc`); sırası gelince güncel sürüm yazılır. |
+| Silinen hesap | Buluttan silinemeyen belge **silme olarak** kuyruğa alınır; kural yayınınca o da uygulanır (“sildim” denen hesap geri gelmez). |
+| Panel nerede? | Yönetim → Ayarlar → **“Bulut kuyruğu”**: kaç yazma bekliyor + “Şimdi dene”. Kartın başlığında cihazdaki **üyelik kodu** (`member-YYYY-AA-GG<harf>`) yazar — bayat paket ile yeni düzeltmeyi ayırt etmenin tek yolu. |
+
+Kuyruğun **yapamadığı** tek şey: bulut erişimi olmayan bir cihaza hak yazmak. Kuyrukta
+bekleyen üye admin listesine düşmez; engel kalkınca kendiliğinden görünür olur.
+Kalıcı çözüm hâlâ tek adımdır ve geliştiriciye aittir: `firestore.rules` dosyasını
+Console → Firestore → Rules → yapıştır → **Publish**. (Bu depoda CI yok; `git push`
+kuralları yayınlamaz, `dist` üretmez.)
+
+> Geliştirici için: `lib/accessDiag.ts → accessDiagReportText(diag, …)` hâlâ tek blok
+> ölçüm metni üretir (`neden / adım / hedef / okuma / kimlik / biçim / ham yanıt /
+> derleme`). Panele bağlanmadı; hata izini sürerken konsoldan çağrılır.
 
 ## 8) Sık karşılaşılan hatalar
 | Belirti | Sebep / çözüm |
@@ -395,7 +405,7 @@ isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
 | “Firestore kurallı yazmayı reddetti” | Kurallar yayında değil → 3. adım. |
 | `NOT_FOUND: Database (default) does not exist` | Veritabanını farklı isimle açtın → `EXPO_PUBLIC_FIRESTORE_DATABASE` ile doğru ismi ver veya `(default)` DB oluştur. |
 | Kayıt var ama panel listesi boş | `root` ayarı belge yoluyla uyuşmuyor (kök ↔ artifacts). Kartta görünen “Üyelik koleksiyonu” yolunu Console yoluyla kıyasla. |
-| “Üye ol” derken **“okuma/yazma kuralı engellendi”** | Uygulama nedeni kendisi ölçer: **Admin → Ayarlar → “Erişim tanısı ve kurallar” → Tanı**. Çıkan satırlardan: `kural yok (her şey reddediliyor)` → aynı kartta **“firestore.rules metnini kopyala”** → Console → Firestore → Rules → yapıştır → **Publish**. `yayındaki kurallar ESKİ` → aynı adımla yeniden yayınla. `kimlik doğrulama … projesinden token veriyor` → cihazda kalmış eski anahtar **otomatik silinir**, bir kez daha “Üye ol” de. `Üyelik kilidi AÇIK` → ya giriş yaparak kendi belgeni kullan ya da `meta/membership_lockdown` belgesini sil. |
+| “Üye ol” derken **“okuma/yazma kuralı engellendi”** | Uygulama üyeliği bloke etmez: belgeyi bulut kuyruğuna alır, oturumu açar ve yazmayı kendi kendine yeniden dener (7b). Kalıcı onarım geliştiricide: Console → Firestore → Rules → kural metnini yapıştır → **Publish**; veritabanı yoksa önce **Create database** (Native, `(default)`). |
 | Üye olurken okuma serbest, yazma reddediliyor | Uygulama artık red nedenini **yazmadan önce** biliyor: `lib/memberShape.ts`, `firestore.rules` içindeki `memberShapeOk` denetiminin aynası. Kuralın tolere edemediği sapmalar (bozuk/boş `verifier/salt/iterations` üçlüsü, 80 karakteri aşan ad, `31.12.2030` biçiminde tarih, 12'den çok `courseUsage` girdisi) **düzeltildikten sonra** gönderilir; düzeltilemeyen şey alan adıyla (`email: ...`) bildirilir. |
 | Kısmi güncelleme reddediliyor, tam belge yazılıyor | Firestore REST'te `PATCH`, belge **yokken** create sayar ve `memberShapeOk` eksik alanları reddeder. `lib/firestoreApi.ts → writeMemberDoc` bunu kademe kademe çözer: create → 409 ise kabul edilen alanlarla güncelle (benimsenme) → create reddedildiyse önce belgenin varlığına bak, varsa kısmi yaz. |
 | Panel üyeye VIP verirken yazma reddedildi | `memberUpdateOk` tek PATCH'te **ya** `usageOnlyChange` **ya** `entitlementChange` listesinde kalmayı istiyor. `authUid` yalnız birinci, `vip/vipPlan/vipExpiresAt/status` yalnız ikinci listede → `upsertMemberDoc` bunları **iki ayrı PATCH**'te yazar; `createdAt/id/email/role` hiç PATCH'lenmez. |
