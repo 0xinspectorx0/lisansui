@@ -4,12 +4,13 @@
  * There is no local membership store to fall back to: if the cloud write fails,
  * the row is not changed.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAppTheme } from '../lib/theme';
 import { useAdmin } from '../lib/AdminContext';
 import { useMembership } from '../lib/MembershipContext';
+import { useMemberListRefresh } from '../lib/useMemberListRefresh';
 import { hashPassword } from '../lib/crypto';
 import { CloudStatusBanner } from '../components/membership/ui';
 import {
@@ -113,28 +114,17 @@ export const AdminMembershipScreen: React.FC = () => {
     async (silent = false) => {
       if (!silent) setLoading(true);
       const res = await membership.adminListMembers();
-      setMembers(res.members);
-      const count = admin.syncCloudMembers(res.members);
+      if (!res.limited) setMembers(res.members);
       if (res.error) setNotice(res.error);
       else if (!silent) {
-        setNotice(
-          `${count.cloud} üye Supabase’dan alındı${res.limited ? ' (liste sayfalı, tamamlanmadı)' : ''}.`
-        );
+        setNotice(`${res.members.length} üye Supabase’dan alındı.`);
       }
       setLoading(false);
     },
     [admin, membership]
   );
 
-  // NOTE: `load` is deliberately kept out of the dependency array. It closes over
-  // `admin`, and loading calls admin.syncCloudMembers (which bumps the admin
-  // revision) — depending on it would re-trigger this effect forever.
-  const loadRef = useRef(load);
-  loadRef.current = load;
-  useEffect(() => {
-    void loadRef.current(true);
-    // membersVersion bumps after every successful cloud write, so the list stays honest.
-  }, [policy.cloudMembers, membership.membersVersion]);
+  useMemberListRefresh(() => load(true), membership.membersVersion);
 
   const patchPolicy = (patch: Partial<typeof policy>) => {
     admin.patchSettings({ membership: { ...policy, ...patch } });
