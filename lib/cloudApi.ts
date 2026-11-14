@@ -144,7 +144,7 @@ function reasonOf(res?: SbResponse): string {
 }
 
 function classify(err: unknown, res?: SbResponse): CloudFailure {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = err == null ? '' : err instanceof Error ? err.message : String(err);
   if (res) {
     if (res.status === 404) return { ok: false, error: 'Kayıt bulunamadı', code: 404, reason: 'notfound' };
     if (res.status === 403 || res.status === 401) {
@@ -168,12 +168,13 @@ function classify(err: unknown, res?: SbResponse): CloudFailure {
         reason: 'error',
       };
     }
+    const why = reasonOf(res) || msg;
     return {
       ok: false,
       error:
         res.status >= 500
-          ? `Supabase hata verdi (HTTP ${res.status})${msg ? ` — ${msg}` : ''}`
-          : `Supabase HTTP ${res.status}${msg ? ` — ${msg}` : ''}`,
+          ? `Supabase hata verdi (HTTP ${res.status})${why ? ` — ${why}` : ''}`
+          : `Supabase HTTP ${res.status}${why ? ` — ${why}` : ''}`,
       code: res.status,
       reason: 'error',
     };
@@ -461,6 +462,7 @@ async function postMemberDoc(
         if (direct.ok || direct.status === 201 || direct.status === 204) {
           return { ok: true, data: memberFromFields(fields, emailLower) };
         }
+        return classify(undefined, direct);
       }
       return classify(undefined, res);
     }

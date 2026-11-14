@@ -60,7 +60,11 @@ export const CloudStatusBanner: React.FC<{ compact?: boolean }> = ({ compact }) 
             { color: denied ? colors.warning : colors.danger },
           ]}
         >
-          {denied ? 'Supabase yazma/okuma kuralı engelledi' : 'Supabase’e ulaşılamadı'}
+          {denied
+            ? 'Supabase yazma/okuma kuralı engelledi'
+            : cloudStatus === 'offline'
+              ? 'Supabase’e ulaşılamadı'
+              : 'Supabase işlemi başarısız'}
         </Text>
         {!!cloudMessage && (
           <Text style={[styles.bannerText, { color: colors.textSecondary }]}>

@@ -72,7 +72,7 @@ function memberCacheStub(next: MemberDoc | null): string {
   });
 }
 
-export type CloudStatus = 'unknown' | 'online' | 'offline' | 'denied';
+export type CloudStatus = 'unknown' | 'online' | 'offline' | 'denied' | 'error';
 
 interface MembershipContextValue {
   ready: boolean;
@@ -238,7 +238,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       );
       return;
     }
-    setCloudStatus(res.reason === 'denied' ? 'denied' : 'offline');
+    setCloudStatus(res.reason === 'denied' ? 'denied' : res.reason === 'offline' ? 'offline' : 'error');
     setCloudMessage(res.error || 'Supabase işlemi başarısız');
   }, []);
 
@@ -315,7 +315,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               setCloudMessage('Üyelik kaydın bulutta bulunamadı, çıkış yapıldı.');
             }
           } else {
-            setCloudStatus(res.reason === 'denied' ? 'denied' : 'offline');
+            setCloudStatus(res.reason === 'denied' ? 'denied' : res.reason === 'offline' ? 'offline' : 'error');
             setCloudMessage(res.error || null);
           }
         }

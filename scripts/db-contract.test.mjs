@@ -340,6 +340,20 @@ head('\x1b[1m[3] Supabase geçidi — oku / yaz / listele / sil\x1b[0m');
   ok(/pending/.test(rls.error || ''), 'red sebebi kullanıcıya kadar taşınıyor', rls.error);
   fake.clearInject();
 
+  fake.injectWith(() => ({ status: 400, body: { code: '22023', message: 'invalid input syntax' } }));
+  const badRequest = await F2.readDocument('courses/tarih');
+  ok(!badRequest.ok && badRequest.reason === 'error' && badRequest.error.includes('invalid input syntax') && !badRequest.error.includes('undefined'),
+    'HTTP 400 gerçek sunucu mesajını taşır, undefined göstermez', JSON.stringify(badRequest));
+  fake.injectWith(() => ({ status: 200, body: { status: 400, error: 'unknown document path' } }));
+  const badEnvelope = await F2.readDocument('courses/tarih');
+  ok(!badEnvelope.ok && badEnvelope.error.includes('unknown document path'),
+    'RPC hata zarfının açıklaması gösterilir', JSON.stringify(badEnvelope));
+  fake.injectWith(() => ({ status: 400, body: {} }));
+  const noMessage = await F2.readDocument('courses/tarih');
+  ok(!noMessage.ok && noMessage.error === 'Supabase HTTP 400',
+    'açıklamasız HTTP hatasında undefined gösterilmez', JSON.stringify(noMessage));
+  fake.clearInject();
+
   // bayat JWT: 401 + “JWT expired” → token zorla tazelenip tek deneme
   await F2.documentExists('meta/content_lock');
   ok(true, 'geçit, token tazeleme denemesini sessiz yapıyor (kullanıcı “yeniden dene” görmez)');
@@ -456,6 +470,12 @@ head('\x1b[1m[5] supabase/migrations — tablo + bekçi + politika + grant\x1b[0
     const end = sql.indexOf('$$;', at);
     return sql.slice(at, end < 0 ? sql.length : end);
   };
+  const writeFn = fnBody('kpss_write_doc');
+  const repairSql = read('supabase/migrations/0002_fix_member_write_format.sql');
+  ok(writeFn.includes("format('%I = excluded.%I', a.attname, a.attname)"),
+    'üye yazımında iki format yer tutucusu için iki argüman var');
+  ok(repairSql.includes(writeFn + '$$;'),
+    'mevcut veritabanları için onarım migration aynı fonksiyonu kurar');
   const tables = [...flat.matchAll(/create table if not exists public\.(\w+)/g)].map(m => m[1]);
   for (const t of ['membership_policy', 'admins', 'members', 'courses', 'topics', 'questions', 'user_tests', 'tips', 'user_data'])
     ok(tables.includes(t), `tablo var: ${t}`);
@@ -716,7 +736,7 @@ head('\x1b[1m[10] config/supabaseSqlCopy.ts = migrations (bayat kopya kapısı)\
   const expected = `${banner}\n${files.map(f => read(path.join(dir, f)).trim()).join('\n\n')}\n`;
   ok(SQLC.SUPABASE_SQL === expected, 'kopya metni bayt bayt aynı', `${SQLC.SUPABASE_SQL.length} vs ${expected.length}`);
   ok(SQLC.SUPABASE_SQL_LINES === expected.split('\n').length, 'satır sayısı bildirimi doğru');
-  ok(/^[\w+]+\.sql$/.test(SQLC.SUPABASE_SQL_NAME), 'kaynak dosya adı panelde görünüyor', SQLC.SUPABASE_SQL_NAME);
+  ok(SQLC.SUPABASE_SQL_NAME === files.join(' + '), 'kaynak dosya adları panelde görünüyor', SQLC.SUPABASE_SQL_NAME);
   ok(/^[0-9a-f]{16}$/.test(SQLC.SUPABASE_SQL_SHA), 'sha kısa ve biçimli', SQLC.SUPABASE_SQL_SHA);
   ok(typeof SQLC.describeSupabaseSql === 'function' && /satır/.test(SQLC.describeSupabaseSql()), 'panel özeti hazır', SQLC.describeSupabaseSql?.());
   ok(/^member-\d{4}-\d{2}-\d{2}[a-z]$/.test(BT.MEMBERSHIP_BUILD_TAG), 'derleme damgası biçimi', BT.MEMBERSHIP_BUILD_TAG);
