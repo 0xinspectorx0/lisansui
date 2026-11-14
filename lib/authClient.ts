@@ -879,6 +879,23 @@ export async function sendPasswordResetEmail(email: string): Promise<AuthResult>
   return { ok: true };
 }
 
+/** E-posta doğrulama bağlantısını tekrar gönderir. */
+export async function resendConfirmationEmail(email: string): Promise<AuthResult> {
+  await ensureAuthConfigLoaded();
+  const cfg = resolveAuthConfig();
+  if (!cfg)
+    return { ok: false, code: 'NOT_CONFIGURED', error: 'Supabase hedefi tanımlı değil.' };
+  const redirectTo = appRedirectUrl() || cfg.url;
+  const data = await postJson(`${authRoot()}/resend`, {
+    type: 'signup',
+    email,
+    ...(redirectTo ? { options: { emailRedirectTo: redirectTo } } : {}),
+  });
+  if (data.error)
+    return { ok: false, code: codeOf(data.error.message), error: authErrorMessage(String(data.error.message)) };
+  return { ok: true };
+}
+
 /**
  * Hesap kapatma: `members` satırını uygulama silebilir (RLS: yalnız yönetici),
  * Auth kaydını silmek ise service_role ister. Service key istemcide bulunmadığı
