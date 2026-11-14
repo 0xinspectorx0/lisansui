@@ -15,3 +15,6 @@ keyfile*.json
 .migrate-state.json
 # test gölge dosyaları (npm run test:ui üretir ve siler)
 screens/_uishadow-*.tsx
+
+# geçici deneme çıktısı (araçlar yazıyor, depoya girmemeli)
+.tmp-*

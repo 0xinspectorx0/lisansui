@@ -72,6 +72,7 @@ import {
   resolveAuthConfig,
   resetAuthConfigCache,
   signOut as authSignOut,
+  repoConfigFile,
 } from '../lib/authClient';
 import { hasRepoApiKey } from '../config/supabaseApp';
 import { membershipBuildLabel } from '../lib/buildTag';
@@ -172,7 +173,7 @@ export const AdminSettingsScreen: React.FC = () => {
       : authConfigSource() === 'env'
         ? '.env.local (pakete gömülü)'
         : authConfigSource() === 'repo'
-          ? 'depoya gömülü config (config/supabaseApp.ts)'
+          ? `depoya gömülü config (${repoConfigFile()})`
           : 'yok';
 
   /* eski projeden içerik kopyalama (terminal gerekmez) */

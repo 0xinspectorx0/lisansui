@@ -37,9 +37,44 @@ const DIR = path.resolve(opt('dir') || process.cwd());
 const DRY = has('--dry-run');
 const CHECK = has('--check');
 
-const url = cleanUrl(opt('url') || process.env.SUPABASE_URL || '');
-const anonKey = (opt('anon-key') || process.env.SUPABASE_ANON_KEY || '').trim();
-const schema = (opt('schema') || 'public').trim();
+/* ---- hedef çözümleme: bayrak → ortam → .env.local → config/supabaseApp.ts ---- */
+
+function readEnvFile(file) {
+  const out = {};
+  if (!fs.existsSync(file)) return out;
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return out;
+}
+
+/** config/supabaseApp.ts içindeki DEFAULT_* sabitleri (derlenmiş TS değil, düz metin). */
+function readConfigConstants(file) {
+  const out = {};
+  if (!fs.existsSync(file)) return out;
+  const txt = fs.readFileSync(file, 'utf8');
+  for (const name of ['DEFAULT_SUPABASE_URL', 'DEFAULT_SUPABASE_ANON_KEY', 'DEFAULT_SUPABASE_SCHEMA']) {
+    const m = txt.match(new RegExp(`export const ${name}\\s*(?::\\s*string\\s*)?=\\s*'([^']*)'`));
+    if (m) out[name] = m[1];
+  }
+  return out;
+}
+
+function resolveTarget(dir, flags = {}) {
+  const env = readEnvFile(path.join(dir, '.env.local'));
+  const cfg = readConfigConstants(path.join(dir, 'config', 'supabaseApp.ts'));
+  return {
+    url: cleanUrl(flags.url || process.env.SUPABASE_URL || env.EXPO_PUBLIC_SUPABASE_URL || cfg.DEFAULT_SUPABASE_URL || ''),
+    anonKey: (flags.anonKey || process.env.SUPABASE_ANON_KEY || env.EXPO_PUBLIC_SUPABASE_ANON_KEY || cfg.DEFAULT_SUPABASE_ANON_KEY || '').trim(),
+    schema: (flags.schema || env.EXPO_PUBLIC_SUPABASE_SCHEMA || cfg.DEFAULT_SUPABASE_SCHEMA || 'public').trim(),
+  };
+}
+
+const resolved = resolveTarget(DIR, { url: opt('url'), anonKey: opt('anon-key'), schema: opt('schema') });
+const url = resolved.url;
+const anonKey = resolved.anonKey;
+const schema = resolved.schema;
 
 function cleanUrl(v) {
   return String(v || '').trim().replace(/\/+$/, '');
@@ -80,19 +115,81 @@ function patchEnv(raw, patch) {
   return out.join('\n') + '\n';
 }
 
-/** config/supabaseApp.ts içindeki DEFAULT_* sabitlerini günceller (yalnız 2 satır). */
+const CFG_NAMES = ['DEFAULT_SUPABASE_URL', 'DEFAULT_SUPABASE_ANON_KEY', 'DEFAULT_SUPABASE_SCHEMA'];
+
+/**
+ * config/supabaseApp.ts içindeki DEFAULT_* sabitlerini günceller.
+ *
+ * Eskiden yalnız `NAME: string = ''` biçimini arıyordu; depo `NAME = ''` yazdığı
+ * için desen hiç eşleşmiyor, fonksiyon “bulunamadı” diye hata vermek yerine
+ * arayüzün üstüne YENİ satır ekliyordu → çift bildirim (tsc: Cannot redeclare)
+ * ve asıl değer hâlâ boş. Şimdi her iki yazım biçimi de tanınır, yinelenen
+ * bildirimler temizlenir ve bulunamayan ad yüksek sesle hata olur.
+ */
 function patchConfigTs(raw, nextUrl, nextKey, nextSchema) {
-  let s = String(raw || '');
-  const set = (name, value) => {
-    const re = new RegExp(`export const ${name}\\s*:\\s*string\\s*=\\s*'[^']*'`, 'm');
-    const line = `export const ${name}: string = ${JSON.stringify(value).replace(/"/g, "'")}`;
-    if (re.test(s)) s = s.replace(re, line);
-    else s = s.replace(/(export interface SupabaseAppConfig)/, `${line}\n\n$1`);
+  const wanted = {
+    DEFAULT_SUPABASE_URL: nextUrl,
+    DEFAULT_SUPABASE_ANON_KEY: nextKey,
+    DEFAULT_SUPABASE_SCHEMA: nextSchema,
   };
-  set('DEFAULT_SUPABASE_URL', nextUrl);
-  set('DEFAULT_SUPABASE_ANON_KEY', nextKey);
-  set('DEFAULT_SUPABASE_SCHEMA', nextSchema);
-  return s;
+  const q = v => `'${String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  const re = /^(\s*)export const (DEFAULT_SUPABASE_URL|DEFAULT_SUPABASE_ANON_KEY|DEFAULT_SUPABASE_SCHEMA)\s*(?::\s*string\s*)?=\s*(['"]).*?\3\s*;?\s*$/;
+  const seen = {};
+  const out = [];
+  for (const line of String(raw || '').split('\n')) {
+    const m = line.match(re);
+    if (!m) {
+      out.push(line);
+      continue;
+    }
+    const name = m[2];
+    seen[name] = (seen[name] || 0) + 1;
+    // ilk bildirim yazılır; kopyaları (eskiden kalan) düşer
+    if (seen[name] === 1) out.push(`${m[1]}export const ${name} = ${q(wanted[name])};`);
+  }
+  const missing = CFG_NAMES.filter(n => !seen[n]);
+  if (missing.length) {
+    throw new Error(`config/supabaseApp.ts içinde bulunamadı: ${missing.join(', ')} — dosya elle değiştirilmiş olabilir.`);
+  }
+  return out.join('\n');
+}
+
+/** Yazdıktan sonra geri oku: “yazıldı” demek yetmez, değerin orada olduğunu gör. */
+/**
+ * Uygulama deposuna RLS'i devre dışı bırakan anahtar sızmasını iki yoldan yakalar:
+ * yeni biçim (`sb_secret_…`) ve eski JWT biçimi (`payload.role === 'service_role'`).
+ */
+function secretProblems(key) {
+  const out = [];
+  if (!key) return out;
+  if (/^sb_secret_/i.test(key)) out.push('anon yerine secret anahtar yazılmış — uygulamaya yalnız publishable/anon girer');
+  const parts = String(key).split('.');
+  if (parts.length === 3) {
+    try {
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+      if (payload?.role === 'service_role') out.push('config’de service_role anahtarı var — bu anahtar RLS’i devre dışı bırakır');
+    } catch {
+      /* çözülemeyen segment zaten --check'te bildiriliyor */
+    }
+  }
+  return out;
+}
+
+function verifyConfigFile(file) {
+  const txt = fs.readFileSync(file, 'utf8');
+  const problems = [];
+  for (const name of CFG_NAMES) {
+    const hits = txt
+      .split('\n')
+      .filter(l => l.startsWith(`export const ${name} =`) || l.startsWith(`export const ${name}:`));
+    if (hits.length !== 1) problems.push(`${name}: ${hits.length} bildirim (1 bekleniyor)`);
+  }
+  const urlLine = (txt.match(/export const DEFAULT_SUPABASE_URL\s*(?::\s*string\s*)?=\s*'([^']*)'/) || [])[1] || '';
+  const keyLine = (txt.match(/export const DEFAULT_SUPABASE_ANON_KEY\s*(?::\s*string\s*)?=\s*'([^']*)'/) || [])[1] || '';
+  if (!urlLine || !keyLine) problems.push('değerler boş');
+  problems.push(...secretProblems(keyLine));
+  if (problems.length) throw new Error(`config/supabaseApp.ts doğrulanamadı — ${problems.join('; ')}`);
+  return { url: urlLine, keyLength: keyLine.length };
 }
 
 function patchAppJson(raw, cfg) {
@@ -115,6 +212,18 @@ if (!CHECK) {
     console.error(`Adres biçimi bekleniyor https://<ref>.supabase.co — gelen: ${url}`);
     process.exit(2);
   }
+  // Yanlış anahtarı bir kere yapıştırmak onu commit'lenmiş dosyaya yazabilirdi.
+  {
+    const bad = secretProblems(anonKey);
+    if (bad.length) {
+      console.error(
+        `\x1b[31m✗ --anon-key reddedildi: ${bad.join('; ')}\x1b[0m\n` +
+          '  Dashboard → Settings → API → **Client** sekmesindeki public/anon anahtarı ver;\n' +
+          '  secret/service_role anahtarı repoya, panele veya cihaza hiçbir şekilde yazılmaz.'
+      );
+      process.exit(2);
+    }
+  }
   console.log(`\x1b[1mSupabase hedefi: ${url} • şema:${schema}\x1b[0m`);
   writeIfChanged(
     path.join(DIR, '.env.local'),
@@ -126,11 +235,22 @@ if (!CHECK) {
     '.env.local'
   );
   const cfgPath = path.join(DIR, 'config', 'supabaseApp.ts');
+  if (!fs.existsSync(cfgPath)) {
+    console.error(`config/supabaseApp.ts yok: ${cfgPath}`);
+    process.exit(1);
+  }
   writeIfChanged(
     cfgPath,
-    patchConfigTs(fs.existsSync(cfgPath) ? fs.readFileSync(cfgPath, 'utf8') : '', url, anonKey, schema),
+    patchConfigTs(fs.readFileSync(cfgPath, 'utf8'), url, anonKey, schema),
     'config/supabaseApp.ts'
   );
+  try {
+    const chk = verifyConfigFile(cfgPath);
+    console.log(`  ✓ config/supabaseApp.ts doğrulandı (ref:${refOf(chk.url)}, anon ${chk.keyLength} karakter)`);
+  } catch (e) {
+    console.error(`\x1b[31m✗ ${e instanceof Error ? e.message : e}\x1b[0m`);
+    process.exit(1);
+  }
   const appJsonPath = path.join(DIR, 'app.json');
   writeIfChanged(
     appJsonPath,
@@ -152,22 +272,43 @@ if (!CHECK) {
 
 /* ------------------------------------------------------------- --check */
 
+/**
+ * Ağ hatası ile proje hatasını ayır: "fetch failed" tek başına kullanıcıya
+ * "SQL kurulmadı" gibi okunuyor; oysa çoğu zaman bu makine Supabase'e ulaşamıyor.
+ */
+function netNote(e) {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|certificate|TLS/i.test(msg)) {
+    return `ağ erişilemedi (${msg}) — bu makine Supabase projesine ulaşamıyor; yoklamayı kendi terminalinde çalıştır`;
+  }
+  return msg;
+}
+
 async function probe(name, run) {
   try {
     const r = await run();
     console.log(`  ${r.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[33m!\x1b[0m'} ${name}: ${r.note}`);
     return r.ok;
   } catch (e) {
-    console.log(`  \x1b[31m✗\x1b[0m ${name}: ${e instanceof Error ? e.message : e}`);
+    console.log(`  \x1b[31m✗\x1b[0m ${name}: ${netNote(e)}`);
     return false;
   }
 }
 
-const target = url || process.env.EXPO_PUBLIC_SUPABASE_URL || '';
-const key = anonKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+// `npm run check:supabase` artık tek başına çalışır: adres/anahtar için
+// .env.local ve config/supabaseApp.ts de okunur (kurulum oraya yazılmıştı).
+const target = url;
+const key = anonKey;
 if (!target || !key) {
-  console.error('Doğrulama için adres ve anon anahtar gerekli (.env.local yoksa --url/--anon-key ver).');
+  console.error('Doğrulama için adres ve anon anahtar gerekli — `.env.local` ya da config/supabaseApp.ts boşsa önce kur:  npm run setup:supabase -- --url … --anon-key …');
   process.exit(2);
+}
+{
+  const bad = secretProblems(key);
+  if (bad.length) {
+    console.error(`\x1b[31m✗ ${bad.join('; ')}\x1b[0m\n  Depoyu temizle: config/supabaseApp.ts, app.json ve .env.local yalnız public/anon tutar.`);
+    process.exit(2);
+  }
 }
 console.log(`\x1b[1mYoklama: ${target} • ref:${refOf(target)}\x1b[0m`);
 const H = { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` };

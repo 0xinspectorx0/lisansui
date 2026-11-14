@@ -120,13 +120,21 @@ let deviceOverride: AuthConfig | null = null;
 let deviceConfigLoaded = false;
 
 function fromEnv(): AuthConfig | null {
-  return buildAuthConfig(
-    {
-      url: envValue('EXPO_PUBLIC_SUPABASE_URL').trim() || cloudTarget().url,
-      anonKey: envValue('EXPO_PUBLIC_SUPABASE_ANON_KEY').trim() || cloudTarget().anonKey,
-    },
-    'env'
-  );
+  // Yalnız GERÇEKTEN ortam değişkeni varsa 'env' de. Eskiden `|| cloudTarget()`
+  // ile depodaki değerleri de 'env' olarak etiketliyordu; panel "kaynak:
+  // .env.local" diyordu ve kişi olmayan dosyayı arıyordu.
+  const url = envValue('EXPO_PUBLIC_SUPABASE_URL').trim();
+  const anonKey = envValue('EXPO_PUBLIC_SUPABASE_ANON_KEY').trim();
+  if (!url || !anonKey) return null;
+  return buildAuthConfig({ url, anonKey }, 'env');
+}
+
+/** Değerler hangimizde duruyor? Panel bu dosya adını gösterir (yanlış dosya aratma). */
+export function repoConfigFile(): string {
+  const src = cloudTarget().source;
+  if (src === 'app.json') return 'app.json → expo.extra.supabase';
+  if (src === 'env') return '.env.local';
+  return 'config/supabaseApp.ts';
 }
 
 /** Modül yüklendiğinde bir kez oku; `ensureAuthConfigLoaded()` ile beklenebilir. */

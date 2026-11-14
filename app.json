@@ -26,8 +26,8 @@
         "projectId": "552f0665-e30d-4f11-9ea9-97bc22a22809"
       },
       "supabase": {
-        "url": "",
-        "anonKey": "",
+        "url": "https://ahkasuppmferkremltxp.supabase.co",
+        "anonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFoa2FzdXBwbWZlcmtyZW1sdHhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ2NDk0NDIsImV4cCI6MjExMDIyNTQ0Mn0.Oj0GdxllNho9U2P_83VXSQ1EMHIY9kvc_AJ4ZZExQwY",
         "schema": "public"
       }
     },

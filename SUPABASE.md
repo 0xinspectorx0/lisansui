@@ -22,6 +22,28 @@ Komut üç yere yazar ve hepsi aynı değeri taşır:
 Kullanıcıdan hiçbir şey **yapıştırması istenmez**. Yalnızca **public/anon** anahtarı
 kullanılır; `service_role` anahtarı uygulamanın hiçbir sürümünde yoktur (koruma RLS'dir).
 
+**Ajana söylenen adres/anahtar kullanıcının işi değildir:** `https://<ref>.supabase.co` ve
+anon anahtarı mesajda yaz; kurulum komutunu ajana çalıştırır. `--anon-key` verilmeden
+çalıştırılan kurulum `config/supabaseApp.ts`'i olduğu gibi (boş) bırakırdı — yazıcı artık
+hem `export const X = ''` hem `export const X: string = ''` biçimini tanır, adı tekrar
+deklare etmez, **bulamazsa hata verir** ve yazdıktan sonra dosyayı geri okuyup doğrular
+(`✓ config/supabaseApp.ts doğrulandı (ref:…, anon … karakter)`).
+
+Anahtarın doğru projeye ait olduğu da dosyadan denetleniyor: JWT biçimindeyse `payload.ref`
+adresi, `payload.role` `anon`'u olmak zorunda (`bash scripts/db-contract.sh`, blok [1b]).
+`service_role`/secret anahtarı hiçbir yere yazılmaz; **elle** yazılırsa panel uyarır
+(`Kaynak: … • YANLIŞ ANAHTAR: service_role`), cihazda yazılırsa Auth istemcisini kurcalamadan
+dururur (`Bu anahtar yalnızca doğrulama komutları içindir`).
+
+`npm run check:supabase` adres/anahtar sormaz: `.env.local` → `config/supabaseApp.ts`
+sırasıyla okur; hiçbir kurulum yoksa tek komutu gösterir ve 2 ile çıkar.
+
+Secret anahtarı yanlışlıkla **yazmak** da mümkün değil: `--anon-key sb_secret_…` ya da
+`payload.role = service_role` taşıyan JWT verilirse kurulum hiçbir dosyaya dokunmadan
+çıkar (2) ve “Client sekmesindeki public/anon anahtarı ver” der; aynı kontrol
+`config/supabaseApp.ts` yazıldıktan sonra dosya geri okunarak tekrarlanır ve
+`npm run check:supabase` bozuk depoyla yoklama yapmaz.
+
 ## 2) Bir kez: tablolar ve RLS
 
 ```bash
@@ -44,6 +66,49 @@ Doğrulama:
 ```bash
 npm run check:supabase    # erişim, içerik okuma, Auth, RLS red davranışı
 ```
+
+Beklenen dört satır:
+
+```
+✓ erişim: HTTP 200 (anon anahtar kabul edildi)
+✓ içerik okuma: SQL kurulmuş, içerik kilizi kapalı (yazılabilir)
+✓ Auth (GoTrue): HTTP 200
+✓ RLS denetimi: kimliksiz üyelik yazması reddedildi (beklenen)
+```
+
+`POST /rest/v1/members` `201` dönerse RLS **çalışmıyor** demektir. `relation does not exist`
+ise SQL hiç uygulanmamış demek.
+
+**Gözle SQL okuma listesi yok** — üç kırılgan nokta kodda garanti edildi ve `bash
+scripts/db-contract.sh` ile kilitlendi: (1) membership yazımında kolon listesi gövdede
+**bulunan** anahtarlardan üretilir, eksik kolon `NULL` yazılıp `not null`u patlatmaz ve
+varsayılanları tablonun `DEFAULT`u verir; (2) `boolean/int/numeric` dönüşümleri
+`kpss_as_bool/kpss_as_int/kpss_as_num` üzerinden yapılır, `"1"`/`true`/`2.7` gibi
+kaynaklar yazmayı kesmez, tip uyuşmazlığı **sessizce yok sayılmaz**; (3) `select "x".*`
+kullanılan yolda tabloya eklenen kolon `p_doc`'ta zorla aranmaz.
+
+Yine de sunucu tarafından emin olmak istersen SQL Editor'de çalıştır (hepsi yalnız okuma):
+
+```sql
+-- 1) dokuz tablo var mı?
+select tablename from pg_tables where schemaname='public' order by 1;
+-- 2) hepsinde RLS açık mı?
+select relname, relrowsecurity from pg_class
+ where relname in ('members','admins','membership_policy','courses','topics','questions','user_tests','tips','user_data')
+ order by 1;
+-- 3) politika sayısı
+select count(*) from pg_policies where schemaname='public';
+-- 4) geçit gerçekten varsayılanları veriyor mu? (kısmi gövde → tam kayıt)
+select * from public.kpss_write_doc('memberships/deneme@ornek.com','{"displayName":"Deneme"}'::jsonb,'merge');
+-- 5) temizlik
+delete from public.members where email='deneme@ornek.com';
+```
+
+Beklenen: (1) dokuz tablo adı, (2) dokuz satırın hepsi `true`, (3) `19`,
+(4) `status=pending` + `vip=true` + `exam='KPSS Lisans (GY-GK)'` + `testsCompleted=0`
+(boş alanları sunucu veriyor), (5) `DELETE 1`.
+Davranış denemeleri (kota, rol, yönetici-only alan) Admin → **Denetimler** panelinde ve
+`scripts/db-contract-fake.mjs` sahte sunucusunda zaten yapılıyor.
 
 ## 3) Uygulamayı çalıştır
 

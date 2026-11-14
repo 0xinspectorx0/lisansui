@@ -32,8 +32,8 @@ export interface SupabaseAppConfig {
 }
 
 /** Kurulum sırasında `npm run setup:supabase` doldurur; boş = yerel mod. */
-export const DEFAULT_SUPABASE_URL = '';
-export const DEFAULT_SUPABASE_ANON_KEY = '';
+export const DEFAULT_SUPABASE_URL = 'https://ahkasuppmferkremltxp.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFoa2FzdXBwbWZlcmtyZW1sdHhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ2NDk0NDIsImV4cCI6MjExMDIyNTQ0Mn0.Oj0GdxllNho9U2P_83VXSQ1EMHIY9kvc_AJ4ZZExQwY';
 export const DEFAULT_SUPABASE_SCHEMA = 'public';
 
 export const SUPABASE_APP_CONFIG: SupabaseAppConfig = {

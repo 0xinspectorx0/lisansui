@@ -36,7 +36,7 @@ bundle lib/authClient.ts /tmp/authBundle.mjs
 
 # 2) Aynı modül, ANAHTARSIZ: çözümleme depoya gömülü config'ten olmalı
 #    (kullanıcıdan hiçbir şey istenmiyor) — boş env, boş config = yerel mod.
-bundle lib/authClient.ts /tmp/authBundleNoEnv.mjs "" noenv
+bundle lib/authClient.ts /tmp/authBundleNoEnv.mjs noenv
 
 # 3) Bulut okuma/yazma katmanı (geçit + belge API'si) ve kullanıcı verisi eşi.
 bundle lib/cloudApi.ts /tmp/cloudApiBundle.mjs

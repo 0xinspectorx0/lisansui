@@ -18,6 +18,8 @@
  * davrandığını (kayıt açılıyor mu, kopya bırakıyor mu, mesaj doğru mu) ölçmek.
  */
 import fs from 'node:fs';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { createFakeSupabase, REF, URL0, makeToken } from './db-contract-fake.mjs';
 
@@ -69,6 +71,19 @@ const cfg = A.resolveAuthConfig();
 ok(cfg?.apiKey === 'eyJTESTANONKEY.abcdef.0123456789', 'anon anahtar okundu', JSON.stringify(cfg));
 ok(/kpssdemo/.test(cfg.url || ''), 'auth kökü projenin adresinden türer', cfg.url);
 ok(A.authConfigSource() === 'env', 'authConfigSource() kaynağı bildiriyor (panel “env” der)');
+const A0 = await import('/tmp/authBundleNoEnv.mjs');
+{
+  const repoTxt2 = read('config/supabaseApp.ts');
+  const configured = !!(repoTxt2.match(/export const DEFAULT_SUPABASE_URL\s*=\s*'[^']+'/) || []);
+  if (configured) {
+    ok(A0.authConfigSource() === 'repo', 'ortam yoksa kaynak “repo” olur (env’e atılmaz)', String(A0.authConfigSource()));
+    ok(A0.repoConfigFile() === 'config/supabaseApp.ts', 'panel doğru dosyayı söylüyor (yanlış dosya aratmaz)', A0.repoConfigFile());
+  } else {
+    ok(A0.authConfigSource() === null, 'ne env ne depo: kaynak yok → yerel mod', String(A0.authConfigSource()));
+  }
+  const srcTxt = read('lib/authClient.ts');
+  ok(!srcTxt.includes("envValue('EXPO_PUBLIC_SUPABASE_URL').trim() || cloudTarget()"), 'env değerleri depodan “ödünç alınmıyor” (etikat yalan söylemez)');
+}
 ok(A.maskKey('eyJTEST-ANON-KEY.0123456789.abc').includes('•'), 'anahtar maskeleniyor: ' + A.maskKey('eyJTEST-ANON-KEY.0123456789.abc'));
 ok(A.refOfUrl('https://abc123.supabase.co') === 'abc123', 'refOfUrl URL’den ref çıkarıyor');
 ok(A.refOfUrl('') === '', 'refOfUrl boşta patlamıyor');
@@ -97,6 +112,87 @@ ok(A.decodeIdToken('çöp').projectId === null, 'çözümleyemeyen token projeyi
   const appJson = JSON.parse(read('app.json'));
   ok(!!appJson.expo.extra.supabase, 'app.json → expo.extra.supabase var');
   ok(!('firestore' in (appJson.expo.extra || {})), 'app.json’dan firestore bloğu kalktı');
+}
+
+/* ================================================ [1b] setup:supabase yazıcı */
+head('\x1b[1m[1b] npm run setup:supabase — üç kopya da aynı değeri taşır\x1b[0m');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lisansui-setup-'));
+  fs.mkdirSync(path.join(dir, 'config'), { recursive: true });
+  fs.copyFileSync(path.join(REPO, 'config', 'supabaseApp.ts'), path.join(dir, 'config', 'supabaseApp.ts'));
+  fs.copyFileSync(path.join(REPO, 'app.json'), path.join(dir, 'app.json'));
+  const run = () =>
+    spawnSync(
+      process.execPath,
+      [
+        path.join(REPO, 'scripts', 'setup-supabase.mjs'),
+        '--dir', dir,
+        '--url', 'https://demo123.supabase.co',
+        '--anon-key', 'ANONTESTKEY',
+      ],
+      { encoding: 'utf8' }
+    );
+  const first = run();
+  ok(first.status === 0, 'kurulum komutu 0 ile çıktı', String(first.stderr || first.stdout).split('\n').slice(-3).join(' '));
+  const txt = fs.readFileSync(path.join(dir, 'config', 'supabaseApp.ts'), 'utf8');
+  const decls = n => (txt.match(new RegExp(`^export const ${n} =`, 'gm')) || []).length;
+  for (const n of ['DEFAULT_SUPABASE_URL', 'DEFAULT_SUPABASE_ANON_KEY', 'DEFAULT_SUPABASE_SCHEMA'])
+    ok(decls(n) === 1, `${n} tek bildirime indirgendi (${decls(n)})`);
+  ok(txt.includes("export const DEFAULT_SUPABASE_URL = 'https://demo123.supabase.co';"), 'adres doğru satırda güncellendi');
+  ok(txt.includes("export const DEFAULT_SUPABASE_ANON_KEY = 'ANONTESTKEY';"), 'anahtar güncellendi (desen kaymasına rağmen)');
+  const appj = JSON.parse(fs.readFileSync(path.join(dir, 'app.json'), 'utf8'));
+  ok(appj.expo.extra.supabase.url === 'https://demo123.supabase.co' && appj.expo.extra.supabase.anonKey === 'ANONTESTKEY', 'app.json aynı değeri taşıyor');
+  ok(!('firestore' in (appj.expo.extra || {})), 'app.json’da eski firestore bloğu kalmadı');
+  const env = fs.readFileSync(path.join(dir, '.env.local'), 'utf8');
+  ok(env.includes('EXPO_PUBLIC_SUPABASE_URL=https://demo123.supabase.co') && env.includes('EXPO_PUBLIC_SUPABASE_ANON_KEY=ANONTESTKEY'), '.env.local yazıldı');
+  const second = run();
+  ok(second.status === 0 && (second.stdout.match(/değişiklik yok/g) || []).length === 3, 'ikinci çalıştırma hiçbir şey yazmıyor (idempotent)', String(second.stdout).split('\n').slice(1, 5).join(' | '));
+  fs.rmSync(dir, { recursive: true, force: true });
+  // `--check` hedefi dosyalardan okur (kurulumdan sonra tek başına çalışır),
+  // hiç kurulum yoksa kullanıcıyı kurulum komutuna yönlendirir.
+  const ckDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lisansui-check-'));
+  fs.mkdirSync(path.join(ckDir, 'config'), { recursive: true });
+  fs.writeFileSync(path.join(ckDir, '.env.local'), 'EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:9\nEXPO_PUBLIC_SUPABASE_ANON_KEY=ANONDOSYADAN\n', 'utf8');
+  const ck = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'setup-supabase.mjs'), '--check', '--dir', ckDir], { encoding: 'utf8', timeout: 30000 });
+  ok(String(ck.stdout).includes('Yoklama: http://127.0.0.1:9'), '--check adresi .env.local’dan buluyor', String(ck.stdout).split('\n')[0]);
+  ok(!String(ck.stdout + ck.stderr).includes('gerekli'), '--check için anahtar sormuyor');
+  // Secret anahtarı bir kere yapıştırmak commit'lenmiş dosyaya sızabilirdi: reddedilir.
+  const secDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lisansui-sec-'));
+  fs.cpSync(path.join(REPO, 'config'), path.join(secDir, 'config'), { recursive: true });
+  fs.writeFileSync(path.join(secDir, 'app.json'), fs.readFileSync(path.join(REPO, 'app.json'), 'utf8'), 'utf8');
+  const before = fs.readFileSync(path.join(secDir, 'config', 'supabaseApp.ts'), 'utf8');
+  const sec = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'setup-supabase.mjs'), '--dir', secDir,
+    '--url', 'https://abc.supabase.co', '--anon-key', 'sb_secret_SUPERGEHEIM123'], { encoding: 'utf8' });
+  ok(sec.status === 2 && /reddedildi/.test(String(sec.stderr)), 'kurulum secret anahtarı yazmıyor', String(sec.stderr).split('\n')[0]);
+  ok(before === fs.readFileSync(path.join(secDir, 'config', 'supabaseApp.ts'), 'utf8'), 'ret sonrası config dokunulmadı');
+  ok(!fs.existsSync(path.join(secDir, '.env.local')), 'ret sonrası .env.local oluşmuyor');
+  fs.writeFileSync(path.join(secDir, 'config', 'supabaseApp.ts'), "export const DEFAULT_SUPABASE_URL = 'https://abc.supabase.co';\nexport const DEFAULT_SUPABASE_ANON_KEY = 'sb_secret_SUPERGEHEIM123';\nexport const DEFAULT_SUPABASE_SCHEMA = 'public';\n", 'utf8');
+  const secCheck = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'setup-supabase.mjs'), '--check', '--dir', secDir], { encoding: 'utf8' });
+  ok(secCheck.status === 2 && /secret/.test(String(secCheck.stderr)), 'yoklama secret ile çıkmıyor', String(secCheck.stderr).trim().split('\n')[0]);
+  fs.rmSync(secDir, { recursive: true, force: true });
+  const ckEmpty = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'setup-supabase.mjs'), '--check', '--dir', fs.mkdtempSync(path.join(os.tmpdir(), 'lisansui-empty-'))], { encoding: 'utf8' });
+  ok(ckEmpty.status === 2 && /npm run setup:supabase/.test(String(ckEmpty.stderr)), 'kurulum yoksa tek komutu söylüyor', String(ckEmpty.stderr).trim().slice(0, 120));
+  fs.rmSync(ckDir, { recursive: true, force: true });
+
+  // Depodaki üç kopya BİRBİRİYLE çelişmemeli; anahtar JWT ise ref adresle eşleşmeli.
+  const repoTxt = read('config/supabaseApp.ts');
+  const repoUrl = (repoTxt.match(/export const DEFAULT_SUPABASE_URL\s*=\s*'([^']*)'/) || [])[1] || '';
+  const repoKey = (repoTxt.match(/export const DEFAULT_SUPABASE_ANON_KEY\s*=\s*'([^']*)'/) || [])[1] || '';
+  const appUrl = (JSON.parse(read('app.json')).expo?.extra?.supabase?.url) || '';
+  if (!repoUrl) {
+    ok(true, 'hedef henüz kurulmamış — yerel mod açık (komut bekliyor)');
+  } else {
+    ok(repoUrl === appUrl, 'depo config ile app.json aynı projeyi söylüyor', `${repoUrl} ≠ ${appUrl}`);
+    ok(repoKey.length > 20, 'depoda anon anahtar var (kullanıcıya sorulmaz)', String(repoKey.length));
+    const parts = repoKey.split('.');
+    if (parts.length === 3) {
+      const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
+      ok(payload.ref === repoUrl.replace(/^https:\/\//, '').split('.')[0], 'anon anahtarın ref’i adresle aynı (yanlış proje anahtarı depoya giremez)', `${payload.ref}`);
+      ok(payload.role === 'anon', 'depoda yalnız anon anahtar var (service_role değil)', payload.role);
+    } else {
+      ok(true, 'anahtar JWT biçiminde değil (yeni sb_publishable türü) — ref denetimi uygulanmaz');
+    }
+  }
 }
 
 /* ============================================================ [2] GoTrue */
