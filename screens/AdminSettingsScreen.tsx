@@ -506,7 +506,7 @@ export const AdminSettingsScreen: React.FC = () => {
           <AdminRow
             icon="person-badge-outline"
             title="Üyelik paneli"
-            subtitle="Üye oluştur, düzenle, plan/rol değiştir, sil — doğrudan Firestore’a yazar"
+            subtitle="Üye oluştur, düzenle, plan/rol değiştir, sil — doğrudan Firestore’a yazar · onay kuralı meta/membership_policy belgesinde durur"
             onPress={() => navigation.navigate('AdminMembership')}
             badge={membershipPolicy.cloudMembers ? 'bulut' : 'yerel'}
           />

@@ -115,6 +115,10 @@ export function isVipActive(
 ): boolean {
   if (!member || !member.vip) return false;
   if (member.status === 'banned' || member.status === 'suspended') return false;
+  // ONAY YOKSA HAK YOK: `pending` üye VIP sayılmaz (eskiden yalnız ban/askı
+  // dışlanıyordu, yani onay bekleyen üye deneme VIP'ini kayıt olduğu oturumda
+  // kullanabiliyordu — panelde "onay zorunlu" olsa bile).
+  if (member.status === 'pending') return false;
   if (member.vipPlan === 'lifetime') return true;
   const left = daysLeft(member.vipExpiresAt);
   if (left === null) return true;

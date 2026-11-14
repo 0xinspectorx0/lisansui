@@ -454,7 +454,11 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         applyMember(created.data);
         await sessionStore.set(SESSION_KEY, created.data.id);
         setCloudStatus('online');
-        setCloudMessage(null);
+        setCloudMessage(
+          created.data?.status === 'pending'
+            ? 'Üyeliğin oluşturuldu ve Firestore’a yazıldı; durum: ONAY BEKLİYOR. Yönetici onaylayınca VIP/kota hakların açılır.'
+            : null
+        );
         setMembersVersion(v => v + 1);
         return { ok: true };
       } finally {
@@ -565,10 +569,11 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           );
           return { ok: false, reason: doc.status };
         }
-        if (doc.status === 'pending') {
-          setError('Üyeliğin henüz yönetim onayında.');
-          return { ok: false, reason: 'pending' };
-        }
+        // Onay bekleyen üye KAPIDAN DÖNMEZ: içeri girer, ücretsiz kotasını
+        // kullanır ve durumunu görür; VIP/kota hakkı onayla açılır (isVipActive
+        // `pending`i dışlıyor). Böylece "üyelik aktif değil" kuralı hem ara
+        // yüzde hem hakedişte aynı şeyi söyler.
+        if (doc.status === 'pending') setCloudMessage('Üyeliğin yönetim onayında — onaylanana kadar yalnız ücretsiz haklar geçerli.');
         const stamp: Partial<MemberDoc> = {
           lastLoginAt: new Date().toISOString(),
           ...(authUid && doc.authUid !== authUid ? { authUid } : {}),

@@ -42,6 +42,9 @@ import type { CourseId, TopicMeta } from './types';
 
 export const CONTENT_LOCK_PATH = collectionPath('meta/content_lock');
 export const COURSES_COLLECTION = collectionPath('courses');
+
+import { questionFields, topicDocFields, topicDocPathFor } from './contentDoc';
+export { questionFields, topicDocFields, topicDocPathFor } from './contentDoc';
 export const TIPS_DOC_PATH = collectionPath('daily_tips/main');
 
 export interface SeedDoc {
@@ -89,21 +92,6 @@ async function contentUnlocked(): Promise<boolean | null> {
   return state === null ? null : state === false;
 }
 
-function questionFields(
-  topicDocId: string,
-  index: number,
-  q: { question: string; options: string[]; answer: number; explanation?: string; id?: string }
-): FbValue {
-  return fbMap({
-    // Konu kimliğiyle adlandır: aynı yedek soru birden fazla konuya yazılsa bile
-    // uygulama genelinde soru kimlikleri çakışmaz.
-    id: str(`${topicDocId}::${q.id || index}`),
-    question: str(q.question),
-    options: arr((q.options || []).map(o => str(o))),
-    answer: int(q.answer ?? 0),
-    explanation: str(q.explanation || ''),
-  });
-}
 
 /** Yazılacak belge listesini hazırlar; hiçbir ağ yazımı yapmaz. */
 export async function buildSeedPlan(opts: SeedOptions = {}): Promise<SeedPlan> {
@@ -168,19 +156,10 @@ export async function buildSeedPlan(opts: SeedOptions = {}): Promise<SeedPlan> {
       }
       questions += list.length;
       docs.push({
-        path: `${COURSES_COLLECTION}/${courseId}/topics/${encodeURIComponent(topic.docId)}`,
+        path: topicDocPathFor(courseId, topic.docId),
         label: `konu • ${topic.name || topic.docId} (${list.length} soru)`,
         kind: 'topic',
-        fields: {
-          id: str(topic.id || topic.docId),
-          name: str(topic.name || topic.docId),
-          courseId: str(courseId),
-          order: int(index),
-          questionCount: int(list.length),
-          questions: arr(list.map((q, i) => questionFields(topic.docId, i, q))),
-          updatedAt: str(new Date().toISOString()),
-          schemaVersion: int(1),
-        },
+        fields: topicDocFields(courseId, topic.docId, topic, list, index),
       });
     }
   }

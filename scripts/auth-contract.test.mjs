@@ -1131,5 +1131,168 @@ console.log('\x1b[1m[19] Cihazda bekletme YOK: her üyelik yazması doğrudan Fi
   ok(/membershipBuildLabel\(\)/.test(panel19), 'F: tek kalan bilgi hangi derleme olduğu (satır içinde)');
 }
 
+
+console.log('\x1b[1m[20] Üyelik politikası + içerik yazmaları: anında Firestore, cihazda bekletme yok\x1b[0m');
+{
+  const POLICY_KEYS = [
+    'enforce', 'freeTestsPerCourse', 'cloudVip', 'cloudMembers',
+    'defaultTrialDays', 'requireApproval', 'registrationOpen', 'updatedAt', 'schemaVersion',
+  ];
+  const CONTENT_KEYS = [
+    'id', 'name', 'title', 'icon', 'order', 'hidden', 'courseId',
+    'questionCount', 'questions', 'list', 'updatedAt', 'schemaVersion',
+  ];
+  const docs = new Map();
+  const putLog = [];
+  let denyPolicy = false;
+  const resp = (status, body) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+    clone() {
+      return this;
+    },
+  });
+  const realFetch20 = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    const method = init?.method || 'GET';
+    const path = (u.match(/\/documents\/([^?]+)/) || [])[1] || '';
+    putLog.push(`${method} ${path}`);
+    const isPolicy = path.endsWith('meta/membership_policy');
+    if (method === 'PUT') {
+      const fields = (init.body ? JSON.parse(init.body) : {}).fields || {};
+      const keys = Object.keys(fields);
+      if (isPolicy) {
+        if (denyPolicy) return resp(403, { error: { message: 'Missing or insufficient permissions' } });
+        if (keys.length !== POLICY_KEYS.length || !keys.every(k => POLICY_KEYS.includes(k)))
+          return resp(403, { error: { message: `POLICY_FIELDS ${keys.join(',')}` } });
+        if (fields.schemaVersion?.integerValue !== '1') return resp(403, { error: { message: 'POLICY_VERSION' } });
+        if (typeof fields.requireApproval?.booleanValue !== 'boolean')
+          return resp(403, { error: { message: 'POLICY_TYPE' } });
+        docs.set('meta/membership_policy', fields);
+        return resp(200, { fields });
+      }
+      if (!keys.every(k => CONTENT_KEYS.includes(k))) return resp(403, { error: { message: 'CONTENT_FIELDS' } });
+      docs.set(path, fields);
+      return resp(200, { fields });
+    }
+    if (method === 'GET') {
+      if (isPolicy && denyPolicy) return resp(403, { error: { message: 'Missing or insufficient permissions' } });
+      return docs.has(path) ? resp(200, { name: path, fields: docs.get(path) }) : resp(404, {});
+    }
+    if (method === 'DELETE') {
+      docs.delete(path);
+      return resp(200, {});
+    }
+    return resp(404, {});
+  };
+
+  let CW = null;
+  let policyOk = null;
+  let badRes = null;
+  let retryRes = null;
+  let readBack = null;
+  let topicRes = null;
+  let statusAfterFail = null;
+  let statusAfterRetry = null;
+  try {
+    CW = await import(`/tmp/cloudWriteBundle.mjs?v=${Date.now()}-${Math.random()}`);
+    const policy = {
+      enforce: true, freeTestsPerCourse: 1, cloudVip: true, cloudMembers: true,
+      defaultTrialDays: 0, requireApproval: true, registrationOpen: true,
+    };
+    policyOk = await CW.writeMembershipPolicy(policy);
+    ok(policyOk.ok, 'A: politika belgesi meta/membership_policy’ye yazıldı', policyOk.ok ? '' : policyOk.error);
+    ok(
+      docs.get('meta/membership_policy')?.requireApproval?.booleanValue === true,
+      'A: onay zorunluluğu bulutta boolean olarak duruyor',
+      JSON.stringify(docs.get('meta/membership_policy')?.requireApproval)
+    );
+    readBack = await CW.readMembershipPolicy();
+    ok(
+      readBack.ok && readBack.policy?.requireApproval === true && readBack.policy?.freeTestsPerCourse === 1,
+      'A: politika buluttan geri okunuyor (cihaz kopyası kaynak değil)',
+      JSON.stringify(readBack.policy)
+    );
+
+    // B) yazma reddedilirse: hata görünür, bekletme YOK, tek dokunuşla yeniden denenir
+    denyPolicy = true;
+    badRes = await CW.writeMembershipPolicy({ ...policy, requireApproval: false });
+    statusAfterFail = CW.getCloudWriteStatus();
+    ok(!badRes.ok, 'B: kural yayınlanmamışken politika yazması red alır');
+    ok(!!statusAfterFail.error && /yazılamadı/.test(statusAfterFail.error), 'B: red panelde tek satır hata olarak görünür', statusAfterFail.error || '-');
+    ok(statusAfterFail.failed === 1 && CW.hasFailedWrites() === true, 'B: hatalı iş yeniden denenmek üzere işaretlenir', String(statusAfterFail.failed));
+    ok(docs.get('meta/membership_policy')?.requireApproval?.booleanValue === true, 'B: red sonrası buluttaki belge bozulmadı');
+    denyPolicy = false;
+    retryRes = await CW.retryFailedWrites();
+    statusAfterRetry = CW.getCloudWriteStatus();
+    ok(retryRes.retried === 1 && retryRes.ok === 1, 'C: “Yeniden dene” aynı işi gönderdi', JSON.stringify(retryRes));
+    ok(statusAfterRetry.error === null && CW.hasFailedWrites() === false, 'C: başarılı yazma hata satırını temizler');
+    ok(
+      docs.get('meta/membership_policy')?.requireApproval?.booleanValue === false,
+      'C: yeniden deneme politikanın yeni değerini taşıdı'
+    );
+    ok(statusAfterRetry.lastOkAt !== null, 'C: son başarılı yazım zamanı panelde gösterilebiliyor');
+
+    // D) konu belgesi: panel düzenlemesi anında PUT, biçim tohumlama ile aynı
+    topicRes = await CW.writeTopicDoc('tyt', 'admin_x', { id: 'admin_x', name: 'Yeni konu' }, [
+      { id: 'q1', question: 'Soru?', options: ['A', 'B'], answer: 0, explanation: '' },
+    ], 3);
+    ok(topicRes.ok, 'D: konu belgesi yazıldı', topicRes.ok ? '' : topicRes.error);
+    const tdoc = docs.get('courses/tyt/topics/admin_x');
+    ok(tdoc?.questionCount?.integerValue === '1', 'D: questionCount soru listesiyle birlikte gidiyor');
+    ok(tdoc?.order?.integerValue === '3', 'D: konu sırası da belgede (panel sıralaması bulutta)');
+    ok(!!tdoc?.questions?.arrayValue?.values?.[0]?.mapValue?.fields?.question, 'D: soru gövdesi yazıldı');
+    ok(putLog.filter(l => l.startsWith('PUT courses/tyt/topics/admin_x')).length === 1, 'D: gereksiz çift PUT yok', String(putLog.length));
+
+    // E) politika okunamazsa “cihaz ayarı” dürüstçe söylenir
+    docs.clear();
+    const empty = await CW.readMembershipPolicy();
+    ok(empty.ok && empty.policy === null, 'E: belge yoksa politika “yok” döner (varsayılanı uydurmuyor)', JSON.stringify(empty));
+    denyPolicy = true;
+    docs.clear();
+    const denied = await CW.readMembershipPolicy();
+    ok(!denied.ok, 'E: okuma reddedilirse “okundu” diye gösterilmiyor');
+    denyPolicy = false;
+  } finally {
+    globalThis.fetch = realFetch20;
+  }
+
+  // F) onaysız üye hak kazanamıyor (davranış)
+  const MBD = await import('/tmp/membershipBundle.mjs');
+  ok(
+    MBD.isVipActive({ vip: true, vipPlan: 'monthly', vipExpiresAt: '', status: 'pending' }) === false,
+    'F: pending üye VIP sayılmıyor (onaydan önce hak yok)'
+  );
+  ok(
+    MBD.isVipActive({ vip: true, vipPlan: 'monthly', vipExpiresAt: '', status: 'active' }) === true,
+    'F: onaylanınca aynı belge VIP sayılıyor'
+  );
+  ok(MBD.isVipActive({ vip: true, vipPlan: 'lifetime', vipExpiresAt: '', status: 'suspended' }) === false, 'F: askıdaki üye hâlâ dışarıda');
+
+  // G) varsayılanlar + bağlantılar
+  const store20 = fs.readFileSync('lib/adminStore.ts', 'utf8');
+  ok(/requireApproval: true/.test(store20), 'G: requireApproval varsayılanı artık true');
+  const admCtx20 = fs.readFileSync('lib/AdminContext.tsx', 'utf8');
+  ok(/void writeTopicDoc\(/.test(admCtx20) && /void writeTopicMeta\(/.test(admCtx20), 'G: soru/konu düzenlemesi anında yazılıyor');
+  ok(/void deleteTopicDoc\(/.test(admCtx20) && /void writeTipsDoc\(/.test(admCtx20), 'G: silme ve hap bilgi düzenlemesi de anında yazılıyor');
+  ok(/normalized\.forEach\(id => pushCourseDoc\(id\)\)/.test(admCtx20) && /pushCourseDoc\(courseId\)/.test(admCtx20), 'G: ders sırası/görünürlüğü belgeye yazılıyor');
+  ok(/if \(patch\.membership \|\| 'registrationOpen' in patch\) pushMembershipPolicy\(\);/.test(admCtx20), 'G: politika değiştiği anda buluta gider');
+  ok(/void pullMembershipPolicy\(\)/.test(admCtx20), 'G: açılışta politika buluttan okunuyor');
+  ok(/updateAdminSettings\(\{\s*membership: \{/.test(admCtx20), 'G: buluttan okunan politika geri yazılmaz (döngü yok)');
+  const cwSrc20 = fs.readFileSync('lib/cloudWrite.ts', 'utf8');
+  ok(!/setTimeout\(|AsyncStorage/.test(cwSrc20), 'G: yazma katmanında erteleme/yerel depo yok');
+  ok(/if \(chains\.get\(key\) === tracked\) chains\.delete\(key\)/.test(cwSrc20), 'G: aynı belgeye gelen yazılar sıraya alınıyor (çift PUT yarışı yok)');
+  const doc20 = fs.readFileSync('lib/contentDoc.ts', 'utf8');
+  ok(/questions: arr\(list\.map\(\(q, i\) => questionFields\(docId, i, q\)\)\)/.test(doc20), 'G: soru biçimi tek yerde tanımlı (tohumlama ile birebir aynı)');
+  const seed20 = fs.readFileSync('lib/contentSeed.ts', 'utf8');
+  ok(/fields: topicDocFields\(courseId, topic\.docId, topic, list, index\)/.test(seed20), 'G: tohumlama da aynı builder’ı kullanıyor');
+  ok(/function membershipPolicyOk\(data\)/.test(rulesRaw) && /match \/meta\/membership_policy \{/.test(rulesRaw), 'G: kurallar politika belgesini tanıyor');
+  ok(/match \/artifacts\/\{artifact\}\/public\/data\/meta\/membership_policy \{/.test(rulesRaw), 'G: legacy kurulumda da politika belgesi okunabilir/yazılabilir');
+  ok(!!(await import('/tmp/rulesCopyBundle.mjs')), 'G: kural kopyası modülü yüklenebiliyor');
+}
+
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);
 process.exit(fail ? 1 : 0);

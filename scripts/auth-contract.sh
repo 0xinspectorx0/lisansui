@@ -36,6 +36,9 @@ bundle lib/firestoreApi.ts /tmp/firestoreApiBundle.mjs '""'
 # 3c) Derleme damgası (eski paketın yeni kod sanılmasını engelleyen tek satır).
 bundle lib/buildTag.ts /tmp/buildTagBundle.mjs '""'
 
+# 3e) Anlık bulut yazıları (politika + konu/hap bilgi belgeleri).
+bundle lib/cloudWrite.ts /tmp/cloudWriteBundle.mjs '""'
+
 
 # 3b) Kural aynası + belge kodlayıcısı (yazmadan önce biçim denetimi).
 npx esbuild lib/memberShape.ts --bundle --format=esm --platform=neutral \
