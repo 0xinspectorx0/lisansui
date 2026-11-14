@@ -1,10 +1,9 @@
 /**
  * Self-contained SHA-256 + HMAC + PBKDF2 (no native crypto dependency).
  *
- * Membership secrets must be verifiable by simply reading Firestore documents,
- * so we cannot rely on Firebase Identity Toolkit. This module gives the app the
- * same primitive (password-based key derivation) on web and React Native with
- * identical output, which is what makes the "cloud only" membership possible.
+ * Gives the app password-based key derivation on web and React Native with
+ * identical output for offline/local credential verification when Supabase Auth
+ * is not active.
  *
  * NOTE: this is app-level credential protection, not a hardened KMS. The
  * iteration counts are deliberately modest so Hermes stays responsive.
@@ -181,23 +180,26 @@ export interface PasswordBundle {
   salt: string;
   /** Kept in the record so any device can recompute the same verifier. */
   iterations: number;
-  /** `firebase-auth` = parola Firebase Auth'ta doğrulanır, belgede hash tutulmaz. */
-  algo: 'pbkdf2-sha256' | 'firebase-auth';
+  /** `supabase-auth` = parola Supabase Auth'ta doğrulanır, belgede hash tutulmaz. */
+  algo: 'pbkdf2-sha256' | 'supabase-auth';
 }
 
 /**
- * Firebase Auth kullanılırken üyelik belgesine yazılan işaretçi.
- * Doğrulama Firebase'de yapılır; belgede hash/salt tutulmaz.
+ * Supabase Auth kullanılırken üyelik satırına yazılan işaretçi.
+ * Doğrulama GoTrue'da (Supabase Auth) yapılır; Postgres'te hash/salt TUTULMAZ.
  */
+export const CLOUD_AUTH_ALGOS: readonly string[] = ['supabase-auth'];
+
 export const AUTH_PASSWORD_BUNDLE: PasswordBundle = {
   verifier: '',
   salt: '',
   iterations: 0,
-  algo: 'firebase-auth',
+  algo: 'supabase-auth',
 };
 
-export function isFirebaseAuthBundle(record?: { algo?: string } | null): boolean {
-  return record?.algo === 'firebase-auth';
+/** Bu satırın parolası bulutta mı doğrulanıyor (yerel PBKDF2 değil)? */
+export function isCloudAuthBundle(record?: { algo?: string } | null): boolean {
+  return CLOUD_AUTH_ALGOS.includes(String(record?.algo || ''));
 }
 
 const ITERATIONS = 1200;

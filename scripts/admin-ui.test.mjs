@@ -30,6 +30,17 @@ const ok = (cond, label, extra = '') => {
   }
 };
 
+const cleanup = () => {
+  for (const f of written) {
+    try {
+      fs.unlinkSync(path.join(REPO, f));
+    } catch {}
+  }
+  try {
+    fs.rmSync(TMP, { recursive: true, force: true });
+  } catch {}
+};
+
 /** react-native-web yoksa (ör. bağımlılıklar kurulu değil) test anlamsızdır. */
 const skip = reason => {
   console.log(`\x1b[33mATLANDI\x1b[0m ${reason}`);
@@ -46,17 +57,6 @@ for (const f of ['rn.js', 'icons.js', 'safe-area.js', 'navigation.js', 'async-st
     process.exit(1);
   }
 }
-
-const cleanup = () => {
-  for (const f of written) {
-    try {
-      fs.unlinkSync(path.join(REPO, f));
-    } catch {}
-  }
-  try {
-    fs.rmSync(TMP, { recursive: true, force: true });
-  } catch {}
-};
 
 /** Kaynak metni verili değişikliklerle screens/ içine gölge olarak yazar. */
 function shadow(name, source, subs) {
@@ -215,7 +215,7 @@ console.log('\x1b[1m[4] konu seçici ve toplu ekleme hâlâ yerinde\x1b[0m');
   ok(!/Konu seç —/.test(vis), 'konu listesi kapalı başlıyor');
 }
 
-console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan istenmiyor\x1b[0m');
+console.log('\x1b[1m[5] ayarlar ekranı — anahtar kullanıcıdan istenmiyor\x1b[0m');
 {
   const SET_SRC = 'screens/AdminSettingsScreen.tsx';
   const setSrc = fs.readFileSync(path.join(REPO, SET_SRC), 'utf8');
@@ -245,8 +245,8 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
     '../lib/MembershipContext',
     '../lib/contentSeed',
     '../lib/contentCopy',
-    '../lib/firestoreApi',
-    '../lib/firebaseConfig',
+    '../lib/cloudApi',
+    '../lib/supabaseConfig',
   ];
   const shimDir = path.join(TMP, 'stubs');
   fs.mkdirSync(shimDir, { recursive: true });
@@ -277,7 +277,7 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
     fs.writeFileSync(file, lines.join('\n') + '\n', 'utf8');
     shadowSrc = shadowSrc.replace(found.statement, `import {${found.names.join(',')}} from '${file}';`);
   }
-  ok(true, 'ayarlar gölgesi: 6 modül nötr stub’a bağlandı', `${seen.size} export`);
+  ok(true, `ayarlar gölgesi: ${stubbed.length} modül nötr stub’a bağlandı`, `${seen.size} export`);
   const uiShim = f => path.join(REPO, 'scripts', 'admin-ui-shims', f);
   // AdminGate (PIN kapısı) gerçek shim ile açılır; AdminContext yukarıda stub’landı.
   shadowSrc = shadowSrc.replace(
@@ -295,27 +295,29 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
   written.push(setFile);
 
   const { html, vis } = await renderOf(setFile);
-  const repoKey = ((fs.readFileSync(path.join(REPO, 'config', 'firebaseApp.ts'), 'utf8').match(/apiKey:\s*'([^']*)'/) || [])[1] || '').trim();
+  // Depoya gömülü anahtar var mı? (setup:supabase bunu config/supabaseApp.ts'e yazar)
+  const repoKey = ((fs.readFileSync(path.join(REPO, 'config', 'supabaseApp.ts'), 'utf8').match(/DEFAULT_SUPABASE_ANON_KEY = '([^']*)'/) || [])[1] || '').trim();
   ok(html.length > 8000, `ayarlar ekranı çökmeden render edildi (${(html.length / 1024) | 0} KB)`);
-  if (process.env.UI_DUMP) console.log('DUMP>>>', vis.slice(vis.indexOf('Firebase Auth (kimlik'), vis.indexOf('Firebase Auth (kimlik') + 2200));
-  ok(vis.includes('Firebase Auth (kimlik doğrulama)'), 'Firebase Auth bölümü görünüyor');
+  if (process.env.UI_DUMP) console.log('DUMP>>>', vis.slice(vis.indexOf('Supabase Auth (kimlik'), vis.indexOf('Supabase Auth (kimlik') + 2200));
+  ok(vis.includes('Supabase Auth (kimlik doğrulama)'), 'Supabase Auth bölümü görünüyor');
+  ok(vis.includes('SQL — tablolar ve RLS'), 'SQL kartı panelde görünüyor');
   ok(!vis.includes('Web API anahtarı (apiKey)'), 'apiKey yapıştırma alanı ekranda YOK');
   ok(!/placeholder="AIza[^"]*"/.test(html), 'AIza… placeholder’lı input basılmıyor');
-  ok(vis.includes('config/firebaseApp.ts'), 'ekran anahtarın depodan geldiğini söylüyor');
+  ok(vis.includes('config/supabaseApp.ts'), 'ekran anahtarın depodan geldiğini söylüyor');
   ok(!/Kaydet \| Kaldır/.test(vis), '“Kaydet / Kaldır” anahtar formu kaldırıldı');
   if (repoKey) {
-    ok(vis.includes('firebase-auth') && vis.includes('depoya gömülü config'), 'depoda anahtar var → kaynak “repo” gösteriliyor');
+    ok(vis.includes('depoya gömülü config (config/supabaseApp.ts)'), 'depoda anahtar var → kaynak “repo” gösteriliyor');
     ok(vis.includes('Kaynak:'), 'anahtar kaynağı satırı basılıyor');
   } else {
     ok(vis.includes('Yerel mod'), 'depoda anahtar yok → yerel mod açıkça söyleniyor');
     ok(vis.includes('geliştiriciye iletmek'), 'kullanıcıya “yapıştır” değil “ilet” deniyor');
   }
-  ok(!vis.includes('EXPO_PUBLIC_FIREBASE_API_KEY'), 'panel kullanıcıya ortam değişkeni ezberletmiyor');
+  ok(!/EXPO_PUBLIC_SUPABASE_ANON_KEY=/.test(vis), 'panel kullanıcıya ortam değişkeni ezberletmiyor');
   ok(!/Bu cihazda kayıtlı eski anahtar/.test(vis), 'cihaz anahtarı yoksa o satır da görünmüyor');
   ok(!vis.includes('Erişim tanısı ve kurallar'), 'tanı bölümü panelden kaldırıldı');
   ok(!vis.includes('Yazma sınaması') && !vis.includes('Raporu göster'), 'sınama/rapor satırları kaldırıldı');
   ok(!vis.includes('Bulut kuyruğu') && !vis.includes('Şimdi dene'), 'bekletme/kuyruk arayüzü kaldırıldı — yazma anlık');
-  ok(vis.includes('cihazda kopya tutulmaz'), 'verinin tek kaynağının Firestore olduğu satırda yazıyor');
+  ok(vis.includes('cihazda kopya tutulmaz'), 'verinin tek kaynağının Supabase olduğu satırda yazıyor');
   ok(vis.includes('kod member-'), 'hangi derlemede olduğu satırda yazıyor');
 }
 
@@ -324,7 +326,7 @@ console.log('\x1b[1m[bulut] anlık yazı + politika belgesi bağlantıları\x1b[
   const qs = fs.readFileSync(path.join(REPO, 'screens/AdminQuestionsScreen.tsx'), 'utf8');
   const ms = fs.readFileSync(path.join(REPO, 'screens/AdminMembershipScreen.tsx'), 'utf8');
   const ac = fs.readFileSync(path.join(REPO, 'lib/AdminContext.tsx'), 'utf8');
-  ok(/Firestore’a yazıldı/.test(qs) && /Buluta yazılamadı/.test(qs), 'soru ekranı yazmanın sonucunu tek satırda söylüyor');
+  ok(/Supabase.e yazıldı/.test(qs) && /Buluta yazılamadı/.test(qs), 'soru ekranı yazmanın sonucunu tek satırda söylüyor');
   ok(/retryCloudWrites\?\.\(\)/.test(qs), 'hata satırında tek dokunuşla yeniden deneme var');
   ok(!/yerel taslak|sonra gönderilir|bekletiliyor/.test(qs), 'soru ekranı “sonra gönderilir” demiyor');
   ok(/meta\/membership_policy/.test(ms), 'politika kartı belgenin adını söylüyor');
@@ -333,6 +335,29 @@ console.log('\x1b[1m[bulut] anlık yazı + politika belgesi bağlantıları\x1b[
   ok(/Buluta gönder/.test(ms), 'politikayı elle gönderme düğmesi var');
   ok(/cloudWrite,/.test(ac) && /policySource,/.test(ac), 'context yazım durumunu panele açıyor');
   ok(/useSyncExternalStore\(subscribeCloudWrite/.test(ac), 'yazım durumu aboneyle akıyor');
+}
+
+console.log('\x1b[1m[sqldelivery] `?sql=1` teslim sayfası[0m');
+{
+  const entry = [
+    "import React from 'react';",
+    "import { renderToString } from 'react-dom/server';",
+    "import { SqlDeliveryScreen, sqlDeliveryRequested } from '../screens/SqlDeliveryScreen';",
+    "export function render() {",
+    "  return renderToString(<SqlDeliveryScreen />) + '<!--' + String(sqlDeliveryRequested()) + '-->';",
+    "}",
+    '',
+  ].join('\n');
+  const f = 'screens/_uishadow-sqldelivery.tsx';
+  fs.writeFileSync(path.join(REPO, f), entry, 'utf8');
+  written.push(f);
+  const { html, vis } = await renderOf(f);
+  ok(html.length > 400, `sayfa çökmeden render edildi (${(html.length / 1024) | 0} KB)`);
+  ok(vis.includes('SQL — tablolar ve RLS'), 'başlık görünüyor');
+  ok(vis.includes('create table if not exists public.members'), 'SQL metni sayfanın içinde');
+  ok(vis.includes('Kopyala') || vis.includes('kopyala'), 'kopyalama eylemi var');
+  ok(!/AIza|apiKey/.test(vis), 'anahtar/çevresel döküm sayfada yok');
+  ok(!/function/.test(vis.slice(0, 200)), 'başlık düz metin basılıyor');
 }
 
 cleanup();

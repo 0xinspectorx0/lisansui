@@ -11,7 +11,7 @@ import { AdminButton } from './ui';
 
 /**
  * True when the admin switched this gate on and the current member is not VIP.
- * VIP state comes from the Firestore membership document (or the local admin
+ * VIP state comes from the Supabase membership document (or the local admin
  * profile when the panel disables cloud VIP), never from a cached flag.
  */
 export function useVipLocked(gate: VipGateKey): boolean {

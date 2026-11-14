@@ -82,7 +82,7 @@ const emptyUser = (): AdminUser => ({
   note: '',
 });
 
-/** Maps an edited panel row back onto its Firestore member document. */
+/** Maps an edited panel row back onto its Supabase member document. */
 function memberFromRow(row: AdminUser, doc: MemberDoc): MemberDoc {
   return {
     ...doc,
@@ -116,10 +116,10 @@ export const AdminUsersScreen: React.FC = () => {
 
   const [vipDays, setVipDays] = useState(30);
 
-  /** Firestore is the source of truth: a row that mirrors a member document is
+  /** Supabase is the source of truth: a row that mirrors a member document is
    *  written back to `memberships/{id}` instead of only living in the panel. */
   const cloudError = (message: string) => {
-    Alert.alert('Firestore yazılamadı', message);
+    Alert.alert('Supabase yazılamadı', message);
   };
 
   const setVipFor = useCallback(
@@ -174,6 +174,26 @@ export const AdminUsersScreen: React.FC = () => {
     [admin, membership, users, vipDays]
   );
 
+  /**
+   * Rol değişimi de ANINDA buluta gider: BULUT satırında `members.role` PATCH'lenir,
+   * yalnız-ca-cihaz satırlarında yerel liste güncellenir. Red durumunda işlem
+   * yapılmış sayılmaz ve panel nedeni gösterir.
+   */
+  const setRoleFor = useCallback(
+    async (row: AdminUser) => {
+      const next = row.role === 'user' ? 'editor' : 'user';
+      if (row.remoteId) {
+        const res = await membership.adminSetRole(row.remoteId, next === 'editor' ? 'admin' : 'user');
+        if (!res.ok) {
+          cloudError(res.error);
+          return;
+        }
+      }
+      admin.setUserRole(row.id, next);
+    },
+    [admin, membership]
+  );
+
   const deleteFor = useCallback(
     async (row: AdminUser) => {
       if (row.remoteId) {
@@ -224,7 +244,7 @@ export const AdminUsersScreen: React.FC = () => {
     if (!draft.name.trim()) return;
     const next = { ...draft, name: draft.name.trim(), email: draft.email.trim() };
 
-    // Cloud rows must be written back to their Firestore document first;
+    // Cloud rows must be written back to their Supabase document first;
     // the panel row is only updated when the write succeeded.
     if (next.remoteId) {
       const { members } = await membership.adminListMembers();
@@ -232,7 +252,7 @@ export const AdminUsersScreen: React.FC = () => {
       if (!doc) {
         Alert.alert(
           'Üye bulunamadı',
-          'Bu satırın Firestore belgesi okunamadı. Listeyi yenileyip tekrar dene.'
+          'Bu satırın Supabase belgesi okunamadı. Listeyi yenileyip tekrar dene.'
         );
         return;
       }
@@ -434,7 +454,7 @@ export const AdminUsersScreen: React.FC = () => {
                   <AdminIconButton
                     icon={u.role === 'user' ? 'shield-checkmark-outline' : 'person-outline'}
                     size={17}
-                    onPress={() => admin.setUserRole(u.id, u.role === 'user' ? 'editor' : 'user')}
+                    onPress={() => void setRoleFor(u)}
                   />
                   <AdminIconButton
                     icon={u.status === 'active' ? 'ban-outline' : 'checkmark-circle-outline'}

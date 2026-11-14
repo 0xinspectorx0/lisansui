@@ -2,7 +2,7 @@
  * Admin store — device-local management layer for all app content.
  *
  * Model: "materialize on first write".
- *  - By default the app shows live Firestore / bundled seed content (no override).
+ *  - By default the app shows live Supabase / bundled seed content (no override).
  *  - The first time an admin touches a course's topic list, a topic's question
  *    list, or the daily tips list, the currently effective list is copied into
  *    `state.content` and becomes the authoritative source for that scope.
@@ -52,7 +52,7 @@ export interface AdminUser {
   /** Marks the profile that belongs to this device (drives VIP gating in-app). */
   isLocal?: boolean;
   /**
-   * Firestore document id when this row mirrors a real cloud member
+   * Supabase document id when this row mirrors a real cloud member
    * (`memberships/{remoteId}`). Undefined = local-only fixture row.
    */
   remoteId?: string;
@@ -67,7 +67,7 @@ export interface MembershipConfig {
   enforce: boolean;
   freeTestsPerCourse: number;
   /**
-   * Read the VIP flag from the signed-in member's Firestore document instead of
+   * Read the VIP flag from the signed-in member's Supabase document instead of
    * the local device profile. Turn off to test gates on a device without an account.
    */
   cloudVip: boolean;
@@ -77,7 +77,7 @@ export interface MembershipConfig {
   defaultTrialDays: number;
   /**
    * When true a sign-up also has to be approved (status = pending) by an admin.
-   * Cihazda değil, Firestore'da durur (`meta/membership_policy`): panelde
+   * Cihazda değil, Supabase'da durur (`meta/membership_policy`): panelde
    * değiştirildiği anda yazılır, her cihaz oradan okur.
    */
   requireApproval: boolean;
@@ -116,7 +116,7 @@ export interface AdminSettings {
     shuffleQuestions: boolean;
     shuffleOptions: boolean;
   };
-  /** Membership + quota policy; the member records themselves live in Firestore. */
+  /** Membership + quota policy; the member records themselves live in Supabase. */
   membership: MembershipConfig;
 }
 
@@ -701,7 +701,7 @@ export function writeAdminState(next: AdminState): void {
 /** How many scopes are currently overridden — used by the dashboard. */
 /**
  * Mirror a finished test onto the local device profile so the admin panel's
- * own row shows real usage (cloud members get their numbers from Firestore).
+ * own row shows real usage (cloud members get their numbers from Supabase).
  */
 export function bumpLocalUsage(
   users: AdminUser[],
@@ -742,7 +742,7 @@ export function countOverrides(s: AdminState = state): {
 }
 
 /**
- * Mirrors the Firestore `memberships` collection into the admin user list so the
+ * Mirrors the Supabase `memberships` collection into the admin user list so the
  * panel edits/creates real cloud records (id stays addressable via `remoteId`).
  * Local demo rows that do not exist in the cloud are dropped.
  */
@@ -795,7 +795,7 @@ export function syncMembersIntoAdmin(
   const next = local ? [local, ...mapped] : mapped;
   updateAdminState(s => ({ ...s, users: next }), {
     icon: 'cloud-upload-outline',
-    label: `Üyelikler Firestore’dan senkronize edildi (${mapped.length} kayıt)`,
+    label: `Üyelikler Supabase’dan senkronize edildi (${mapped.length} kayıt)`,
   });
   return { keptLocal: local ? 1 : 0, cloud: mapped.length };
 }

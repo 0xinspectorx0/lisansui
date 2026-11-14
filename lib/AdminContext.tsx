@@ -139,7 +139,7 @@ interface AdminContextValue {
   grantVip: (id: string, plan: VipPlan, days: number) => void;
   revokeVip: (id: string) => void;
   setUserRole: (id: string, role: AdminRole) => void;
-  /** Mirrors the Firestore `memberships` collection into the panel user list. */
+  /** Mirrors the Supabase `memberships` collection into the panel user list. */
   syncCloudMembers: (
     members: {
       id: string;
@@ -163,7 +163,7 @@ interface AdminContextValue {
   syncCloudMemberPatch: (
     remoteId: string,
     patch: Partial<
-      Pick<AdminUser, 'vip' | 'vipPlan' | 'status' | 'note'> & { vipExpiresAt: string | null }
+      Pick<AdminUser, 'vip' | 'vipPlan' | 'status' | 'note' | 'role'> & { vipExpiresAt: string | null }
     >
   ) => void;
   dropCloudMember: (remoteId: string) => void;
@@ -334,18 +334,30 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       next.splice(idx + 1, 0, clone);
       writeTopicsOverride(courseId, next);
       const questions = getQuestionsOverride(courseId, docId) ?? [];
-      writeQuestionsOverride(
-        courseId,
-        newDocId,
-        questions.map((q, i) => ({
+      const stamp = Date.now().toString(36);
+      const copyList = questions.map((q, i) => ({
+        ...q,
+        id: `dup_${stamp}_${i}`,
+        topicDocId: newDocId,
+        topicName: clone.name,
+        options: [...q.options],
+      }));
+      writeQuestionsOverride(courseId, newDocId, copyList);
+      touch({ icon: 'copy-outline', label: `“${source.name}” kopyalandı` });
+      // ANINDA Supabase: kaynak sorular henüz indirilmediyse buluttan okunur,
+      // sonra kopya konu + soruları olduğu gibi yazılır (cihazda kalmaz).
+      void (async () => {
+        const base = getQuestionsOverride(courseId, docId) ?? (await fetchTopicQuestions(courseId, docId, source.name));
+        const list = (base || []).map((q, i) => ({
           ...q,
-          id: `dup_${Date.now().toString(36)}_${i}`,
+          id: `dup_${stamp}_${i}`,
           topicDocId: newDocId,
           topicName: clone.name,
           options: [...q.options],
-        }))
-      );
-      touch({ icon: 'copy-outline', label: `“${source.name}” kopyalandı` });
+        }));
+        if (list.length) writeQuestionsOverride(courseId, newDocId, list);
+        await writeTopicDoc(courseId, newDocId, { ...clone, questionCount: list.length }, list, idx + 1);
+      })();
     },
     [touch, topicsFor]
   );
@@ -361,6 +373,13 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       else next.push(item);
       writeTopicsOverride(courseId, next);
       touch();
+      // ANINDA Supabase: yerini değiştiren HER konunun `order` değeri yazılır.
+      const lo = Math.min(idx, where === 'top' ? 0 : next.length - 1);
+      const hi = Math.max(idx, where === 'top' ? 0 : next.length - 1);
+      for (let i = lo; i <= hi; i++) {
+        const t = next[i];
+        if (t && topics[i]?.docId !== t.docId) writeTopicMeta(courseId, t.docId, t, i);
+      }
     },
     [touch, topicsFor]
   );
@@ -375,6 +394,14 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       next.splice(target, 0, moved);
       writeTopicsOverride(courseId, next);
       touch();
+      // ANINDA Supabase: yer değiştiren konuların `order` alanı buluta yazılır;
+      // aksi hâlde sıralama yalnız bu cihazda geçerli olurdu.
+      const lo = Math.min(from, target);
+      const hi = Math.max(from, target);
+      for (let i = lo; i <= hi; i++) {
+        const t = next[i];
+        if (t && topics[i]?.docId !== t.docId) writeTopicMeta(courseId, t.docId, t, i);
+      }
     },
     [touch, topicsFor]
   );
@@ -434,7 +461,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       writeQuestionsOverride(courseId, docId, next);
       syncCounts(courseId, docId);
       touch(activity);
-      // ANINDA Firestore: soru düzenlemesi cihazda bekletilmez, belge hemen yazılır.
+      // ANINDA Supabase: soru düzenlemesi cihazda bekletilmez, belge hemen yazılır.
       const topics = topicsFor(courseId);
       const index = topics.findIndex(t => t.docId === docId);
       void writeTopicDoc(
@@ -446,6 +473,23 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       );
     },
     [syncCounts, touch, topicsFor]
+  );
+
+  /**
+   * Bir konunun belgesini (sorularıyla birlikte) ANINDA buluta yazar.
+   * Panelin tüm konu düzeyi eylemleri bu yardımcıdan geçer — hiçbir düzenleme
+   * cihazda bekletilmez; belge ya yazılır ya da ekran hatayı gösterir.
+   */
+  const pushTopicDocFor = useCallback(
+    (courseId: CourseId, docId: string, order?: number) => {
+      const topics = topicsFor(courseId);
+      const index = topics.findIndex(t => t.docId === docId);
+      if (index < 0) return;
+      const topic = topics[index];
+      const list = getQuestionsOverride(courseId, docId) ?? [];
+      void writeTopicDoc(courseId, docId, topic, list, order ?? index);
+    },
+    [topicsFor]
   );
 
   const createQuestion = useCallback(
@@ -579,6 +623,14 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       syncCounts(courseId, fromDocId);
       syncCounts(courseId, toDocId);
       touch({ icon: 'arrow-forward-outline', label: 'Soru başka konuya taşındı' });
+      // ANINDA Supabase: TAŞIMA iki belgeyi birden değiştirir — ikisi de yazılır,
+      // yoksa buluttaki liste soruyu hâlâ eski konuda gösterir.
+      const fromIndex = topics.findIndex(t => t.docId === fromDocId);
+      const toIndex = topics.findIndex(t => t.docId === toDocId);
+      if (fromIndex >= 0)
+        void writeTopicDoc(courseId, fromDocId, topics[fromIndex], source.filter(q => String(q.id) !== String(id)), fromIndex);
+      if (toIndex >= 0)
+        void writeTopicDoc(courseId, toDocId, topics[toIndex], [...targetList, { ...moving, topicDocId: toDocId, topicName: targetName }], toIndex);
     },
     [loadQuestions, syncCounts, touch, topicsFor]
   );
@@ -605,6 +657,27 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       hidden: (st.content.hiddenCourses || []).includes(courseId),
     });
   }, []);
+
+  /**
+   * Toplu içerik değişimlerinden SONRA (yedekten dönüş, toplu yazım) her belgeyi
+   * sırayla buluta gönderir. Soru listesi YALNIZ yerel taslak varsa yazılır;
+   * taslağı olmayan konuda buluttaki liste korunur (writeTopicMeta önce okur) —
+   * böylece "geri yükle" buluttaki soruları silmez.
+   */
+  const pushAllContentToCloud = useCallback(async () => {
+    const st = getAdminState();
+    for (const courseId of ALL_COURSE_IDS) {
+      pushCourseDoc(courseId);
+      const topics = topicsFor(courseId);
+      for (let i = 0; i < topics.length; i++) {
+        const t = topics[i];
+        const draft = getQuestionsOverride(courseId, t.docId);
+        if (draft) await writeTopicDoc(courseId, t.docId, t, draft, i);
+        else await writeTopicMeta(courseId, t.docId, t, i);
+      }
+    }
+    await writeTipsDoc(st.content.tips ?? []);
+  }, [pushCourseDoc, topicsFor]);
 
   /**
    * Politika buluttan okunur ve yerel ayara UYGULANIR (updateAdminSettings buluta
@@ -830,7 +903,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [mutateUsers]
   );
 
-  /** Mirrors the Firestore memberships collection into the panel user list. */
+  /** Mirrors the Supabase memberships collection into the panel user list. */
   const syncCloudMembers = useCallback<AdminContextValue['syncCloudMembers']>(
     members => {
       const res = syncMembersIntoAdmin(members as any);
@@ -874,7 +947,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const patchSettings = useCallback(
     (patch: Partial<AdminSettings>) => {
       updateAdminSettings(patch);
-      // Politika Firestore'da durur: değiştiği anda yazılır, böylece başka cihazdan
+      // Politika Supabase'da durur: değiştiği anda yazılır, böylece başka cihazdan
       // açılan kayıt da AYNI onay/kota kuralını görür (eskiden yalnız bu cihazın
       // ayarıydı → yönetici “onay zorunlu” yapsa bile diğer cihazlar bilmiyordu).
       if (patch.membership || 'registrationOpen' in patch) pushMembershipPolicy();
@@ -929,8 +1002,10 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return { ...s, content: { ...s.content, courseTitles: titles } };
       });
       touch({ icon: 'create-outline', label: 'Ders başlığı güncellendi' });
+      // ANINDA Supabase: başlık ders belgesinde durur (sıra/gizlilikle aynı satır).
+      pushCourseDoc(courseId);
     },
-    [touch]
+    [pushCourseDoc, touch]
   );
 
   const resetAllContent = useCallback(async () => {
@@ -954,6 +1029,9 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         activity: Array.isArray(parsed.activity) ? parsed.activity : [],
       });
       clearKpssCaches();
+      // ANINDA Supabase: geri yükleme bulutu da eski hâline getirir (yerel kopya
+      // bırakmama ilkesi yedekten dönüşte de geçerlidir).
+      void pushAllContentToCloud();
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };

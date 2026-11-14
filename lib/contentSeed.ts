@@ -1,5 +1,5 @@
 /**
- * Firestore içerik tohumlaması (bootstrap).
+ * Supabase içerik tohumlaması (bootstrap).
  *
  * Yeni bir projede klasör/koleksiyon isimlerini Console'da tek tek açmak yerine
  * yapıyı uygulama yazar:
@@ -9,13 +9,12 @@
  *   {root}/daily_tips/main             → hap bilgi listesi
  *   {root}/memberships/{e-posta}       → üyeliği UYGULAMA oluşturur (kayıt anında)
  *
- * Yazma yetkisi `firestore.rules` içindeki `contentWriteOk` ile sınırlandırılmıştır:
- * `meta/content_lock` belgesi Console'dan oluşturulana kadar içerik koleksiyonlarına
- * yazılabilir, sonra kilitlenir. Kilit belgesini uygulama YAZAMAZ (rules izin vermez),
- * bu yüzden buton yalnızca yolu gösterir.
+ * Yazma yetkisi Supabase RLS (`courses_write`, `topics_write`, `questions_write`,
+ * `tips_write`) ve `kpss_guard_content_write` tetikleyicisi ile korunur:
+ * `membership_policy.contentLock` açık olmadıkça yönetici içerik yazabilir.
  *
  * Yazılan sorular "uygulamanın şu anda gördüğü" içeriklerdir: paneldeki
- * override'lar → canlı Firestore → repodaki yedek sorular (seçmeli).
+ * override'lar → canlı Supabase → repodaki yedek sorular (seçmeli).
  */
 import { COURSES } from './theme';
 import {
@@ -36,8 +35,8 @@ import {
   str,
   type CloudOutcome,
   type FbValue,
-} from './firestoreApi';
-import { collectionPath, firestoreTarget } from './firebaseConfig';
+} from './cloudApi';
+import { collectionPath, cloudTarget } from './supabaseConfig';
 import type { CourseId, TopicMeta } from './types';
 
 export const CONTENT_LOCK_PATH = collectionPath('meta/content_lock');
@@ -48,7 +47,7 @@ export { questionFields, topicDocFields, topicDocPathFor } from './contentDoc';
 export const TIPS_DOC_PATH = collectionPath('daily_tips/main');
 
 export interface SeedDoc {
-  /** Tam belge yolu (root dahil) — Firestore REST yolu. */
+  /** Tam belge yolu (root dahil) — Supabase REST yolu. */
   path: string;
   label: string;
   kind: 'course' | 'topic' | 'tips';
@@ -96,7 +95,7 @@ async function contentUnlocked(): Promise<boolean | null> {
 /** Yazılacak belge listesini hazırlar; hiçbir ağ yazımı yapmaz. */
 export async function buildSeedPlan(opts: SeedOptions = {}): Promise<SeedPlan> {
   const notes: string[] = [];
-  const target = firestoreTarget();
+  const target = cloudTarget();
   const catalog = getInitialCatalog();
   const state = getAdminState();
   const titles = state.content.courseTitles || {};
@@ -106,7 +105,7 @@ export async function buildSeedPlan(opts: SeedOptions = {}): Promise<SeedPlan> {
     id => !!catalog[id]
   );
   if (!opts.courseIds?.length && hidden.length) {
-    notes.push(`panelde gizli ${hidden.length} ders de plana dahil (Firestore listesi görünür)`);
+    notes.push(`panelde gizli ${hidden.length} ders de plana dahil (Supabase listesi görünür)`);
   }
 
   const docs: SeedDoc[] = [];
@@ -183,12 +182,18 @@ export async function buildSeedPlan(opts: SeedOptions = {}): Promise<SeedPlan> {
     questions,
     tips: tips.length,
     unlocked: await contentUnlocked(),
-    target: `${target.projectId}${target.root ? ` • ${target.root}` : ' • (kök)'}`,
+    target: describeSeedTarget(target),
     notes: notes.slice(0, 12),
   };
 }
 
-/** Planı sınırlı eşzamanlılıkla Firestore'a yazar. */
+function describeSeedTarget(t: { url?: string; schema?: string }): string {
+  const url = String(t?.url || '').replace(/^https?:\/\//, '');
+  if (!url) return '(bulut bağlı değil)';
+  return `${url.split('.')[0]} • şema:${t?.schema || 'public'}`;
+}
+
+/** Planı sınırlı eşzamanlılıkla Supabase'a yazar. */
 export async function runSeed(
   docs: SeedDoc[],
   onProgress?: (p: SeedProgress) => void

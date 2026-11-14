@@ -26,6 +26,15 @@ import {
 } from './kpssApi';
 import { applyAdminTips, ALL_COURSE_IDS, getAdminState, subscribeAdmin } from './adminStore';
 import { INITIAL_DAILY_TIPS } from './seedData';
+import {
+  STORAGE_KIND,
+  currentBinding,
+  pullUserData,
+  pushUserData,
+  pushUserTests,
+  subscribeUserData,
+  type UserDataKind,
+} from './userDataSync';
 import { calcKpssNet } from './textUtils';
 
 const STORAGE_KEYS = {
@@ -71,7 +80,7 @@ const DEFAULT_SETTINGS: UserSettings = {
  * another member's used quota. MembershipContext keeps this value current.
  */
 let localMemberId: string | null = null;
-/** Membership layer registers itself here so every finished test is mirrored to Firestore. */
+/** Membership layer registers itself here so every finished test is mirrored to Supabase. */
 let testCompletionListener:
   | ((courseId: CourseId | 'genel', summary: { total: number; correct: number; wrong: number }) => void)
   | null = null;
@@ -169,6 +178,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [adminRevision, setAdminRevision] = useState(0);
   const tipsBaseRef = useRef<string[]>(INITIAL_DAILY_TIPS);
+
+  /**
+   * TEK yazma kapısı: yerel anahtar yalnız OKUMA ÖNBELLEĞİDİR; veri aynı anda
+   * Supabase'e de gider (üye bağlıysa). Kuyruk/bekletme yok — yazma anlık istektir
+   * ve reddedilirse durum akışından görünür olur.
+   */
+  const pendingRef = useRef<Record<string, unknown>>({});
+  const persistLocal = useCallback((key: string, value: unknown) => {
+    const raw = typeof value === 'string' ? value : JSON.stringify(value);
+    AsyncStorage.setItem(key, raw).catch(() => {});
+    const kind = STORAGE_KIND[key] as UserDataKind | undefined;
+    pendingRef.current[key] = value;
+    if (kind) void pushUserData(kind, value);
+    if (key === STORAGE_KEYS.RESULTS && value && typeof value === 'object') {
+      void pushUserTests(Object.values(value as Record<string, unknown>) as never);
+    }
+  }, []);
+
+  // Üyelik oturumu bağlandığında bulut asıldır: önbellek buluttakiyle yenilenir.
+  // (Bağlantıyı MembershipContext kurar; buradan import YOK — döngü olmaz.)
+  const [cloudTick, setCloudTick] = useState(0);
+  useEffect(() => subscribeUserData(() => setCloudTick(t => t + 1)), []);
+  useEffect(() => {
+    let cancelled = false;
+    const binding = currentBinding();
+    (async () => {
+      if (!binding?.email) return;
+      const res = await pullUserData();
+      if (cancelled || !res.ok || !res.data) return;
+      const d = res.data;
+      const apply = (key: string, value: unknown, set: (v: never) => void) => {
+        if (value === undefined || value === null) return;
+        set(value as never);
+        AsyncStorage.setItem(key, JSON.stringify(value)).catch(() => {});
+      };
+      apply(STORAGE_KEYS.MISTAKES, d.mistakes, setMistakes as never);
+      apply(STORAGE_KEYS.FAVORITES, d.favorites, setFavorites as never);
+      apply(STORAGE_KEYS.STUDIED_TOPICS, d.studiedTopics, setStudiedTopics as never);
+      apply(STORAGE_KEYS.LEARNED_TIPS, d.learnedTips, setLearnedTips as never);
+      apply(STORAGE_KEYS.SAVED_TIPS, d.savedTips, setSavedTips as never);
+      apply(STORAGE_KEYS.DAILY_STATS, d.dailyStats, setTodayStats as never);
+      apply(STORAGE_KEYS.SETTINGS, d.settings, setSettings as never);
+      if (Array.isArray(d.results)) {
+        const map: Record<string, TestResult> = {};
+        for (const row of d.results) if (row?.key) map[row.key] = row;
+        setResults(map);
+        persistLocal(STORAGE_KEYS.RESULTS, map);
+      } else if (Object.keys(pendingRef.current).length === 0) {
+        // Bulutta hiç satır yoksa bu cihazdaki ilk kullanım olabilir: bir kez yukarı
+        // yüklenir, sonra kaynak her zaman bulut olur.
+        for (const [key, value] of Object.entries(pendingRef.current)) {
+          const kind = STORAGE_KIND[key] as UserDataKind | undefined;
+          if (kind) void pushUserData(kind, value);
+        }
+      }
+    })().catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [cloudTick]);
 
   useEffect(() => {
     (async () => {
@@ -311,7 +380,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const next = exists
         ? prev.filter(item => String(item.id) !== String(q.id))
         : [{ ...q, savedAt: new Date().toISOString() }, ...prev];
-      AsyncStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.FAVORITES, next);
       return next;
     });
   }, []);
@@ -324,7 +393,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const removeMistake = useCallback((questionId: string) => {
     setMistakes(prev => {
       const next = prev.filter(m => String(m.id) !== String(questionId));
-      AsyncStorage.setItem(STORAGE_KEYS.MISTAKES, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.MISTAKES, next);
       return next;
     });
   }, []);
@@ -332,7 +401,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const clearMistakesByCourse = useCallback((courseId?: CourseId) => {
     setMistakes(prev => {
       const next = courseId ? prev.filter(m => m.courseId !== courseId) : [];
-      AsyncStorage.setItem(STORAGE_KEYS.MISTAKES, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.MISTAKES, next);
       return next;
     });
   }, []);
@@ -340,9 +409,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleTopicStudied = useCallback((topicDocId: string) => {
     setStudiedTopics(prev => {
       const next = { ...prev, [topicDocId]: !prev[topicDocId] };
-      AsyncStorage.setItem(STORAGE_KEYS.STUDIED_TOPICS, JSON.stringify(next)).catch(
-        () => {}
-      );
+      persistLocal(STORAGE_KEYS.STUDIED_TOPICS, next);
       return next;
     });
   }, []);
@@ -355,7 +422,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           delete next[k];
         }
       });
-      AsyncStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.RESULTS, next);
       return next;
     });
   }, []);
@@ -363,7 +430,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleTipLearned = useCallback((tip: string) => {
     setLearnedTips(prev => {
       const next = { ...prev, [tip]: !prev[tip] };
-      AsyncStorage.setItem(STORAGE_KEYS.LEARNED_TIPS, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.LEARNED_TIPS, next);
       return next;
     });
   }, []);
@@ -371,7 +438,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleTipSaved = useCallback((tip: string) => {
     setSavedTips(prev => {
       const next = { ...prev, [tip]: !prev[tip] };
-      AsyncStorage.setItem(STORAGE_KEYS.SAVED_TIPS, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.SAVED_TIPS, next);
       return next;
     });
   }, []);
@@ -382,7 +449,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       Object.entries(incoming).forEach(([key, value]) => {
         if (!next[key]) next[key] = value;
       });
-      AsyncStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.RESULTS, next);
       return next;
     });
   }, []);
@@ -390,7 +457,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateSettings = useCallback((patch: Partial<UserSettings>) => {
     setSettings(prev => {
       const next = { ...prev, ...patch };
-      AsyncStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.SETTINGS, next);
       return next;
     });
   }, []);
@@ -408,7 +475,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         best: nextBest,
         lastDate: today,
       };
-      AsyncStorage.setItem(STORAGE_KEYS.STREAK, JSON.stringify(next)).catch(() => {});
+      persistLocal(STORAGE_KEYS.STREAK, next);
       return next;
     });
   }, []);
@@ -419,7 +486,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bumpStreakIfNeeded();
       setTotalFocusMinutes(prev => {
         const next = prev + minutes;
-        AsyncStorage.setItem(STORAGE_KEYS.FOCUS_TOTAL, String(next)).catch(() => {});
+        persistLocal(STORAGE_KEYS.FOCUS_TOTAL, next);
         return next;
       });
       const today = getTodayKey();
@@ -429,7 +496,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ? prev
             : { date: today, solved: 0, correct: 0, wrong: 0, focusMinutes: 0 };
         const next = { ...base, focusMinutes: base.focusMinutes + minutes };
-        AsyncStorage.setItem(STORAGE_KEYS.DAILY_STATS, JSON.stringify(next)).catch(() => {});
+        persistLocal(STORAGE_KEYS.DAILY_STATS, next);
         return next;
       });
     },
@@ -481,7 +548,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           correct: base.correct + correct,
           wrong: base.wrong + wrong,
         };
-        AsyncStorage.setItem(STORAGE_KEYS.DAILY_STATS, JSON.stringify(next)).catch(() => {});
+        persistLocal(STORAGE_KEYS.DAILY_STATS, next);
         return next;
       });
 
@@ -508,7 +575,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
         setResults(prev => {
           const next = { ...prev, [saveKey]: newResult };
-          AsyncStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(next)).catch(() => {});
+          persistLocal(STORAGE_KEYS.RESULTS, next);
           return next;
         });
         testCompletionListener?.(session.courseId, {
@@ -530,7 +597,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         let nextList = [...prev];
 
         if (!mistakesEnabled) {
-          AsyncStorage.setItem(STORAGE_KEYS.MISTAKES, JSON.stringify(nextList)).catch(() => {});
+          persistLocal(STORAGE_KEYS.MISTAKES, nextList);
           return nextList;
         }
 
@@ -559,7 +626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         // Cap at 500 to keep storage light and fast
         const trimmed = nextList.slice(0, 500);
-        AsyncStorage.setItem(STORAGE_KEYS.MISTAKES, JSON.stringify(trimmed)).catch(() => {});
+        persistLocal(STORAGE_KEYS.MISTAKES, trimmed);
         return trimmed;
       });
 

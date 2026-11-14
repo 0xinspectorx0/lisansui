@@ -1,13 +1,15 @@
 /**
- * Firestore REST client for membership data (read + write).
+ * Bulut API'si — üyeliğin ve içeriğin TEK kaynağı: Supabase (Postgres).
  *
- * Everything about membership lives in Firestore under
- * `artifacts/kpss-asistani/public/data/memberships/{memberId}` so the admin panel,
- * the app and any other device share one source of truth.
+ * Eski hâli Supabase REST üzerindeydi; artık her çağrı `lib/sbGateway.ts`
+ * üzerinden Supabase RPC'sine gider ve Postgres satırlara dağıtır
+ * (`courses` → `topics` → `questions`, `members`, `membership_policy`, `tips`,
+ * `user_tests`, `user_data`). Yetki denetimi de orada: RLS + yazma bekçileri
+ * (supabase/migrations/0001_init.sql).
  *
- * The same `FIRESTORE_PUBLIC_BASE` that already serves content is used for writes,
- * which means the project's security rules must allow writes on `memberships`
- * (see firestore.rules at the repo root).
+ * Bu modülün sözleşmesi değişmedi: çağrılar belge diliyle konuşur, red anında
+ * `CloudOutcome` döner ve İŞLEM REDDEDİLMİŞ SAYILIR — cihazda kuyruk, bekletilen
+ * yazma ya da yerel hesap/profil oluşmaz.
  */
 import {
   checkMemberFields,
@@ -26,34 +28,35 @@ import {
 
 import {
   MEMBERSHIPS_COLLECTION_NAME,
+  cloudTarget,
   collectionPath,
-  documentsBase,
-  firestoreTarget,
-} from './firebaseConfig';
+} from './supabaseConfig';
+import {
+  consumedForeignTokenNotice,
+  consumeTokenRefreshNotice,
+  docUrl,
+  fieldsToJson,
+  jsonToFields,
+  request,
+  restFetch,
+  SbResponse,
+  SbValue,
+} from './sbGateway';
 import * as auth from './authClient';
 
-/** Çözümlenmiş hedef (panelde gösterilir; lib/firebaseConfig.ts tek kaynak). */
-export const FIRESTORE_TARGET = firestoreTarget();
-export const FIRESTORE_PROJECT = FIRESTORE_TARGET.projectId;
-export const FIRESTORE_DATABASE = FIRESTORE_TARGET.databaseId;
+/** Çözümlenmiş hedef (panelde gösterilir; lib/supabaseConfig.ts tek kaynak). */
+export const CLOUD_TARGET = cloudTarget();
+/** Eski proje/kimlik satırı — panelde Supabase host'u olarak gösterilir. */
+export const CLOUD_PROJECT_LABEL = (CLOUD_TARGET.url || '').replace(/^https?:\/\/@*/, '').split('.')[0] || '—';
 export const MEMBERSHIPS_COLLECTION = collectionPath(MEMBERSHIPS_COLLECTION_NAME);
 
-const DOCUMENTS_BASE = documentsBase(FIRESTORE_TARGET);
-
-const docUrl = (docPath: string) => `${DOCUMENTS_BASE}/${docPath}`;
-const membersDocUrl = (memberId: string) =>
-  `${docUrl(`${MEMBERSHIPS_COLLECTION}/${encodeURIComponent(memberId)}`)}`;
+export const membersDocPath = (memberId: string) =>
+  `${MEMBERSHIPS_COLLECTION}/${encodeURIComponent(String(memberId).toLowerCase())}`;
 
 /* ------------------------------------------------------------ value types */
 
-export type FbValue =
-  | { stringValue: string }
-  | { integerValue: string }
-  | { doubleValue: number }
-  | { booleanValue: boolean }
-  | { nullValue: null }
-  | { mapValue: { fields: Record<string, FbValue> } }
-  | { arrayValue: { values: FbValue[] } };
+/** Değer zarfı tipi Supabase geçidinde tanımlıdır (biçim eskiyle aynı). */
+export type FbValue = SbValue;
 
 export const str = (v: string): FbValue => ({ stringValue: v });
 export const int = (v: number): FbValue => ({ integerValue: String(Math.round(v || 0)) });
@@ -68,10 +71,10 @@ export const fbMap = (fields: Record<string, FbValue>): FbValue => ({ mapValue: 
 /* ------------------------------------------------------------------ fetch */
 
 /**
- * Firebase Auth bağlıysa (config/firebaseApp.ts ya da EXPO_PUBLIC_FIREBASE_API_KEY)
+ * Supabase Auth bağlıysa (config/supabaseApp.ts ya da EXPO_PUBLIC_SUPABASE_ANON_KEY)
  * her isteğe idToken eklenir;
- * böylece firestore.rules üyelik belgelerini `request.auth.uid` ile koruyabilir.
- * Token alınamazsa istek kimliksiz gider (eski davranış) ve kurallar izin verirse çalışır.
+ * böylece Supabase RLS kuralları üyelik satırlarını oturum kimliği ile koruyabilir.
+ * Token alınamazsa istek kimliksiz gider ve RLS izin verirse çalışır.
  */
 /**
  * Oturum token'ı sorununa işaret eden yanıt metinleri. Bunlar KURAL reddinden
@@ -79,131 +82,43 @@ export const fbMap = (fields: Record<string, FbValue>): FbValue => ({ mapValue: 
  * "kural engelledi" saymadan önce bunu bir kez kendimiz deniyoruz — kalıcı çözüm
  * burada, çünkü bayat token cihazda sessizce birikiyor ve tek belirtisi 403.
  */
-const TOKEN_STALE_HINT =
-  /TOKEN_EXPIRED|AUTHENTICATION_FAILED|INVALID_CREDENTIAL|Invalid Credential|INVALID_LOGIN_TOKEN|auth failure|Bad Request: Token/i;
+/* ------------------------------------------------------------------------- */
+/* Geçiş katmanı (token, hata eşlemesi, RPC zarfı) lib/sbGateway.ts'te durur. */
+/* ------------------------------------------------------------------------- */
 
-/** Token yenileyip yeniden denedi mi? (bir kez bildirilir, sonra sıfırlanır.) */
-let tokenRefreshNotice = false;
-export function consumeTokenRefreshNotice(): boolean {
-  const v = tokenRefreshNotice;
-  tokenRefreshNotice = false;
-  return v;
-}
-
-async function authHeaders(opts: { forceRefresh?: boolean } = {}): Promise<Record<string, string>> {
-  try {
-    const token = await auth.currentIdToken(opts);
-    if (!token) return {};
-    // Token Firestore hedefinin projesinden değilse (cihazda kalmış eski anahtar)
-    // HİÇ göndermeyiz: yanlış token her isteği 401'e çevirirken, kimliksiz istek
-    // kilitsiz kurallarda çalışmaya devam eder.
-    if (await auth.isForeignSessionToken()) return {};
-    return { Authorization: `Bearer ${token}` };
-  } catch {
-    return {};
-  }
-}
-
-/** Yanlış projeden token yakalandı mı? (panel/akış bir kez bildirir, sonra sıfırlanır.) */
-export function consumedForeignTokenNotice(): boolean {
-  return auth.consumeForeignTokenNotice();
-}
-
-async function request(url: string, init?: RequestInit): Promise<Response> {
-  const authHeader = await authHeaders();
-  const headers = {
-    'Content-Type': 'application/json',
-    ...((init?.headers as object) || {}),
-    ...authHeader,
-  };
-  const key = auth.webApiKey();
-  const withKey = (u: string) => `${u}${u.includes('?') ? '&' : '?'}key=${encodeURIComponent(key)}`;
-  if (key && useApiKeyParam) return fetch(withKey(url), { ...init, headers });
-  const res = await fetch(url, { ...init, headers });
-  // Bayat oturum token'ı 403 üretir ve “kural engelledi” gibi görünür: token'ı
-  // ZORLA tazeleyip aynı isteği bir kez daha gönderiyoruz. Yazma bu yüzden
-  // kullanıcıya hiç düşmüyor — kendi kendine geçen tek sınıf budur.
-  if (!res.ok && (await isTokenStale(res))) {
-    try {
-      const fresh = await authHeaders({ forceRefresh: true });
-      if (fresh.Authorization) {
-        const retry = await fetch(useApiKeyParam && key ? withKey(url) : url, {
-          ...init,
-          headers: { ...headers, ...fresh },
-        });
-        if (retry.ok) {
-          tokenRefreshNotice = true;
-          return retry;
-        }
-      }
-    } catch {
-      /* ilk yanıtı döndürürüz */
-    }
-  }
-  // Kimliksiz istekler bazı kurulumlarda API geçidinden geçmez (`403/401`) — kuralla
-  // karışır ve kullanıcı boşuna “kural engelledi” görür. Varsaymak yerine DENERİZ:
-  // red alırsak anahtarlı yeniden dener, çalışırsa artık hep anahtarla gideriz.
-  if (!res.ok && key && (res.status === 401 || res.status === 403) && !(await isRulesDenial(res))) {
-    try {
-      const retry = await fetch(withKey(url), { ...init, headers });
-      if (retry.ok) {
-        useApiKeyParam = true;
-        apiKeyParamNotice = true;
-        return retry;
-      }
-    } catch {
-      /* ilk yanıtı döndürürüz */
-    }
-  }
-  return res;
-}
+/** Bayat oturum token’ı tazelenip istek yeniden denendi mi? (bir kez bildirilir.) */
+export { consumeTokenRefreshNotice, consumedForeignTokenNotice };
 
 /**
- * `Missing or insufficient permissions` Firestore KURALLARINDAN gelir ve anahtarla
- * ilgisizdir — böyle bir yanıtta anahtarlı yeniden denemenin anlamı yok (boşuna
- * gidiş-dönüş yapmayız). Gövdeyi okumak için `clone()` kullanılır: yanıt gövdesi
- * çağıran tarafa dokunulmadan kalır.
+ * Supabase’de anahtar URL parametresi diye bir şey yoktur (`apikey` başlığı yeter);
+ * eski panel satırları bu yüzden daima `false` döner — arayüz bozulmasın diye durur.
  */
-async function responseText(res: Response): Promise<string> {
+export function consumeApiKeyParamNotice(): boolean {
+  return false;
+}
+export function isApiKeyParamPreferred(): boolean {
+  return false;
+}
+
+/** Panelin yoklama satırı: bu belge yolu hangi RPC'ye düşüyor (kopyalanabilir). */
+export function cloudRequestUrl(path: string, query?: string): string {
+  const base = docUrl(path);
+  return query ? `${base}?${query}` : base;
+}
+
+/** Yanıt metnini çağıranı bozmadan okur (gövde bir kez tüketilebilir). */
+async function responseText(res: SbResponse): Promise<string> {
   try {
-    const clone = typeof (res as any)?.clone === 'function' ? (res as any).clone() : null;
-    if (!clone) return '';
-    return String(await clone.text());
+    return String(await res.text());
   } catch {
     return '';
   }
 }
 
-/** Kuralla ilgili red mi (anahtar/token sorunu değil)? */
-async function isRulesDenial(res: Response): Promise<boolean> {
-  return /Missing or insufficient permissions/i.test(await responseText(res));
-}
-
-/** Yanıt bayat/bad id token'a mı işaret ediyor? */
-async function isTokenStale(res: Response): Promise<boolean> {
-  if (res.status !== 401 && res.status !== 403) return false;
-  return TOKEN_STALE_HINT.test(await responseText(res));
-}
-
-let useApiKeyParam = false;
-let apiKeyParamNotice = false;
-
-/** Anahtar parametresi zorunlu oldu mu? (bir kez bildirilir) */
-export function consumeApiKeyParamNotice(): boolean {
-  const v = apiKeyParamNotice;
-  apiKeyParamNotice = false;
-  return v;
-}
-
-/** Teşhis: anahtarlı gönderim tercih edildi mi? (raporda gösterilir) */
-export function isApiKeyParamPreferred(): boolean {
-  return useApiKeyParam;
-}
-
-/** Firestore REST isteğinin gövdesiz yoklaması (panel raporunda kullanılır). */
-export function firestoreRequestUrl(path: string, query?: string): string {
-  const base = docUrl(path);
-  return query ? `${base}?${query}` : base;
+/** Red, kural/RLS kaynaklı mı (anahtar ya da token sorunu değil)? */
+async function isRulesDenial(res: SbResponse): Promise<boolean> {
+  const t = await responseText(res);
+  return /row-level security|insufficient priv|permission denied|kural|not writable|admin-only|locked/i.test(t);
 }
 
 export type CloudFailure = {
@@ -215,44 +130,83 @@ export type CloudFailure = {
 
 export type CloudOutcome<T> = { ok: true; data: T } | CloudFailure;
 
-function classify(err: unknown, res?: Response): CloudFailure {
+/** Yanıt gövdesindeki KISA sebep (PostgREST `message`, SQL `raise exception`). */
+function reasonOf(res?: SbResponse): string {
+  const raw = String(res?.raw || '');
+  if (!raw) return '';
+  try {
+    const j = JSON.parse(raw);
+    const m = j?.message || j?.error?.message || j?.msg || (typeof j?.error === 'string' ? j.error : '') || j?.error_description || '';
+    return String(m).replace(/\s+/g, ' ').trim().slice(0, 180);
+  } catch {
+    return raw.replace(/\s+/g, ' ').trim().slice(0, 180);
+  }
+}
+
+function classify(err: unknown, res?: SbResponse): CloudFailure {
   const msg = err instanceof Error ? err.message : String(err);
   if (res) {
     if (res.status === 404) return { ok: false, error: 'Kayıt bulunamadı', code: 404, reason: 'notfound' };
-    if (res.status === 403 || res.status === 401)
+    if (res.status === 403 || res.status === 401) {
+      const why = reasonOf(res);
       return {
         ok: false,
         code: res.status,
         reason: 'denied',
-        // Nedeni UYGULAMA ölçüyor (lib/accessDiag.ts); burada hüküm vermek yerine
-        // ölçüme devrediyoruz. Çağrı tarafı `denied` görürse tanının cümlesini gösterir.
+        // Neden yanıt gövdesinden gelir (PostgREST, `code: 42501` → HTTP 403);
+        // burada hüküm uydurmuyoruz — çağıran taraf `denied` görürse o cümleyi gösterir.
         error:
           res.status === 401
-            ? 'Oturum token’ı kabul edilmedi (HTTP 401).'
-            : 'Firestore bu işlemi kural yüzünden gerçekleştirmedi (HTTP 403).',
+            ? `Oturum token’ı kabul edilmedi (HTTP 401)${why ? ` — ${why}` : ''}.`
+            : `Supabase bu işlemi kural (RLS) yüzünden gerçekleştirmedi (HTTP 403)${why ? `: ${why}` : '.'}`,
       };
+    }
+    if (res.status === 0) {
+      return {
+        ok: false,
+        error: 'Supabase hedefi tanımlı değil — `npm run setup:supabase` gerekir.',
+        reason: 'error',
+      };
+    }
     return {
       ok: false,
       error:
         res.status >= 500
-          ? `Firestore sunucusu hata verdi (HTTP ${res.status})${msg ? ` — ${msg}` : ''}`
-          : `Firestore HTTP ${res.status}${msg ? ` — ${msg}` : ''}`,
+          ? `Supabase hata verdi (HTTP ${res.status})${msg ? ` — ${msg}` : ''}`
+          : `Supabase HTTP ${res.status}${msg ? ` — ${msg}` : ''}`,
       code: res.status,
       reason: 'error',
     };
   }
   return {
     ok: false,
-    error: `Ağ erişimi yok — Firestore’una ulaşılamadı${msg ? ` (${msg})` : ''}`,
+    error: `Ağ erişimi yok — Supabase’e ulaşılamadı${msg ? ` (${msg})` : ''}`,
     reason: 'offline',
   };
+}
+
+/* ---------------------------------------------------- belge/üye erişim yardımcıları */
+
+/** Doğrudan belge okuma (zarf → FbValue); 404 = { ok: true, data: null }. */
+export async function readDocEnvelope(
+  path: string
+): Promise<CloudOutcome<Record<string, FbValue> | null>> {
+  try {
+    const res = await request(docUrl(path));
+    if (res.status === 404) return { ok: true, data: null };
+    if (!res.ok) return classify(undefined, res);
+    const json = await res.json();
+    return { ok: true, data: json?.fields || null };
+  } catch (e) {
+    return classify(e);
+  }
 }
 
 /* -------------------------------------------------------------- documents */
 
 export async function fetchMemberDoc(memberId: string): Promise<CloudOutcome<MemberDoc | null>> {
   try {
-    const res = await request(membersDocUrl(memberId));
+    const res = await request(docUrl(membersDocPath(memberId)));
     if (res.status === 404) return { ok: true, data: null };
     if (!res.ok) return classify(undefined, res);
     const json = await res.json();
@@ -273,19 +227,35 @@ export async function fetchMemberByEmail(email: string): Promise<CloudOutcome<Me
   if (direct.ok && direct.data) return direct;
   if (!direct.ok && direct.reason !== 'notfound') return direct;
 
-  const q = [
-    `orderBy=fields.emailNormalized`,
-    `where=fields.emailNormalized,${encodeURIComponent('==')},${encodeURIComponent(`"${key}"`)}`,
-    `limit=1`,
-  ].join('&');
+  // Supabase'de belge kimliği kolonun kendisidir (`members.email`), dolayısıyla
+  // tarama/`where` gerekmez: bulunamadıysa kayıt YOKTUR. Eski projeden kopyalanan
+  // satırlar için `npm run migrate:supabase` kimliği e-postaya eşitler.
+  if (!direct.ok) return direct;
+  const exists = await memberExists(key);
+  if (exists.ok && exists.data) {
+    return {
+      ok: false,
+      error: 'Bu e-posta kayıtlı ama satırı beklenen biçimde değil — göçü tekrar çalıştır.',
+      code: 200,
+      reason: 'error',
+    };
+  }
+  return { ok: true, data: null };
+}
+
+/** “Bu e-posta kayıtlı mı?” — tek boolean döner, hiçbir üye alanı sızmaz. */
+export async function memberExists(email: string): Promise<CloudOutcome<boolean>> {
+  const key = String(email || '').trim().toLowerCase();
+  if (!key.includes('@')) return { ok: true, data: false };
   try {
-    const res = await request(`${docUrl(MEMBERSHIPS_COLLECTION)}?${q}`);
+    const res = await restFetch('rpc/kpss_member_exists', '', {
+      method: 'POST',
+      body: JSON.stringify({ p_email: key }),
+    });
     if (!res.ok) return classify(undefined, res);
     const json = await res.json();
-    const doc = (json?.documents || [])[0];
-    if (!doc) return { ok: true, data: null };
-    const id = String(doc.name || '').split('/').pop() || key;
-    return { ok: true, data: memberFromFields(doc.fields || {}, id) };
+    const value = Array.isArray(json) ? json[0] : json;
+    return { ok: true, data: value?.exists === true || value === true };
   } catch (e) {
     return classify(e);
   }
@@ -342,8 +312,8 @@ export async function listMembers(): Promise<MemberListResult> {
 /* ------------------------------------------- üyelik yazmaları (kural aynalı) */
 
 /**
- * memberships yazmalarının tek kapısı. Gövde, `firestore.rules` içindeki
- * `memberShapeOk` denetiminin TypeScript aynasından (`lib/memberShape.ts`) geçer:
+ * memberships yazmalarının tek kapısı. Gövde, SQL'deki `kpss_doc_keys_ok`
+ * ve satır kısıtlarının TypeScript aynasından (`lib/memberShape.ts`) geçer:
  *   • düzeltilebilen sapmalar (bozuk/boş şifre demeti, 80 karakteri aşan ad,
  *     12'den çok kullanım girdisi, ondalık sayaç) YAZMADAN ÖNCE düzeltilir;
  *   • düzeltilemeyenden `create` reddedilir ve hangi ALANIN neden engellediği
@@ -498,7 +468,7 @@ export async function writeMembershipSelf(
 }
 
 /**
- * MemberDoc alanı → Firestore belge alanı eşlemesi. Türetilen alanlar birlikte
+ * MemberDoc alanı → Supabase belge alanı eşlemesi. Türetilen alanlar birlikte
  * yazılır (ör. `email` → `id` + `emailNormalized`), yoksa rules'un `id == email`
  * denetimi yarım kalan güncellemelerde kırılır.
  */
@@ -561,7 +531,7 @@ export function memberPatchToFields(
   return out;
 }
 
-/** Firestore boş belge dönerse (REST bazı sürümlerde) kullanılan güvenli varsayılan. */
+/** Supabase boş belge dönerse (REST bazı sürümlerde) kullanılan güvenli varsayılan. */
 function emptyFieldsFor(memberId: string): Record<string, FbValue> {
   return { id: str(memberId), email: str(memberId), emailNormalized: str(memberId) };
 }
@@ -569,7 +539,7 @@ function emptyFieldsFor(memberId: string): Record<string, FbValue> {
 /**
  * Merge-update of a membership document; only the given fields are touched.
  *
- * Kademeli davranış: belge YOKKEN gönderilen PATCH Firestore'da create'e döner
+ * Kademeli davranış: belge YOKKEN gönderilen PATCH Supabase'da create'e döner
  * ve `memberShapeOk` yarım belgeyi reddeder. Reddi kullanıcıya yansıtmadan önce
  * aynı veriyle tam biçimli create denenir (`created: true` ile döner).
  */
@@ -596,8 +566,8 @@ export async function patchMemberDoc(
     return { ok: false, error: 'Güncellenecek alan yok', code: 400, reason: 'error' };
   }
   try {
-    // updateMask göndermiyoruz: Firestore PATCH = verilen alanları birleştirir.
-    const res = await request(membersDocUrl(memberId), {
+    // updateMask göndermiyoruz: Supabase PATCH = verilen alanları birleştirir.
+    const res = await request(docUrl(membersDocPath(memberId)), {
       method: 'PATCH',
       body: JSON.stringify({ fields }),
     });
@@ -684,7 +654,7 @@ async function patchedOr(
 
 export async function deleteMemberDoc(memberId: string): Promise<CloudOutcome<true>> {
   try {
-    const res = await request(membersDocUrl(memberId), { method: 'DELETE' });
+    const res = await request(docUrl(membersDocPath(memberId)), { method: 'DELETE' });
     if (res.status === 404) return { ok: true, data: true };
     if (!res.ok) return classify(undefined, res);
     return { ok: true, data: true };
@@ -736,6 +706,36 @@ export async function documentExists(path: string): Promise<boolean | null> {
   }
 }
 
+/**
+ * Koleksiyon listeleme: `{documents: [{name, fields}], nextPageToken}`.
+ * Sayfa boyutu küçük tutulur; `kpss_list_docs` bekçi/RLS denetiminden geçer.
+ */
+export async function listDocuments(
+  path: string,
+  opts: { pageSize?: number } = {}
+): Promise<CloudOutcome<{ name: string; fields: Record<string, FbValue> }[]>> {
+  const docs: { name: string; fields: Record<string, FbValue> }[] = [];
+  let pageToken: string | undefined;
+  try {
+    for (let page = 0; page < 20; page++) {
+      const q = new URLSearchParams({ pageSize: String(opts.pageSize || 100) });
+      if (pageToken) q.set('pageToken', pageToken);
+      const res = await request(`${docUrl(path)}?${q.toString()}`);
+      if (res.status === 404) return { ok: true, data: docs };
+      if (!res.ok) return classify(undefined, res);
+      const json = await res.json();
+      for (const doc of json?.documents || []) {
+        docs.push({ name: String(doc?.name || ''), fields: doc?.fields || {} });
+      }
+      pageToken = json?.nextPageToken;
+      if (!pageToken) break;
+    }
+    return { ok: true, data: docs };
+  } catch (e) {
+    return classify(e);
+  }
+}
+
 /** Read a raw document's `fields` object (null when missing). */
 export async function readDocument(
   path: string
@@ -749,110 +749,6 @@ export async function readDocument(
   } catch (e) {
     return classify(e);
   }
-}
-
-/** `probeMembershipWrite` sonucu — tek bakışta "yazma serbest mi" cevabı. */
-export interface WriteProbeResult {
-  email: string;
-  ok: boolean;
-  /** Belge yoktu, tam biçimle oluşturuldu. */
-  created: boolean;
-  /** Belge vardı, dokunulabilen alanlar yenilendi. */
-  updated: boolean;
-  /** Reddin gerekçesi (kullanıcıya gösterilecek cümle). */
-  error?: string;
-  cause?: 'denied' | 'offline' | 'shape' | 'unreadable';
-}
-
-/**
- * "Yazma gerçekten çalışıyor mu?" sorusunun tek güvenilir cevabı: deneme yazması.
- * Yalnızca `email` ile adlandırılan KENDİ üyelik belgesine dokunur —
- *   • belge varsa `lastLoginAt` yenilenir (rules: `usageOnlyChange`),
- *   • belge yoksa tam biçimli create ile oluşturulur.
- * Hak alanlarına (vip / vipPlan / role / status) DOKUNMAZ, yani yetki kazandırmaz.
- * `diagnoseMembershipAccess` okuma tarafını ölçer; bu fonksiyon yazma tarafını
- * ölçtüğü için paneldeki "Yazma sınaması" düğmesi ikisini birleştirir.
- */
-export async function probeMembershipWrite(email: string): Promise<WriteProbeResult> {
-  const key = normalizeEmail(String(email || '').trim());
-  const fail = (
-    error: string,
-    cause: WriteProbeResult['cause'],
-    extra: Partial<WriteProbeResult> = {}
-  ): WriteProbeResult => ({ email: key, ok: false, created: false, updated: false, error, cause, ...extra });
-
-  if (!key.includes('@')) return fail('Geçerli bir e-posta yaz (belge kimliği e-postadır).', 'shape');
-
-  // Kilit açıksa ve bu belge kimliği oturumun e-postası değilse yazma KESİN
-  // reddedilir (kural: selfUpdateOk/selfCreateOk). Boşuna istek atmak yerine
-  // nedeni hemen söylüyoruz — yönetici listesindeki oturumlar hariç.
-  const lock = await readLockdownInfo();
-  if (lock.on) {
-    const idn = await auth.sessionIdTokenInfo();
-    const sessionEmail = String(idn.email || '').toLowerCase();
-    const admins = await readAdminList();
-    const isAdmin = !!sessionEmail && admins.ok && admins.data.emails.includes(sessionEmail);
-    if (!isAdmin) {
-      if (!sessionEmail)
-        return fail(
-          `Üyelik kilidi AÇIK${lock.path ? ` (${lock.path})` : ''}: yazma ancak O e-postayla giriş yapmış cihazdan geçer. ${key} için giriş yap, sonra yeniden dene.`,
-          'denied'
-        );
-      if (sessionEmail !== key)
-        return fail(
-          `Üyelik kilidi AÇIK: yazma yalnız kendi belgen için geçerli (oturum: ${sessionEmail}), ${key} belgesine değil. ` +
-            `Ya ${key} ile giriş yap ya da kilidi kapat: Console → Firestore → Documents → ${lock.path || 'meta/membership_lockdown'} belgesini sil.`,
-          'denied'
-        );
-    }
-  }
-
-  const existing = await fetchMemberDoc(key);
-  if (existing.ok && existing.data) {
-    const res = await patchMemberDoc(key, { lastLoginAt: new Date().toISOString() }, {
-      noCreateFallback: true,
-    });
-    if (res.ok) return { email: key, ok: true, created: false, updated: true };
-    return fail(res.error, res.reason === 'offline' ? 'offline' : 'denied');
-  }
-  if (!existing.ok && existing.reason === 'offline')
-    return fail(existing.error, 'offline');
-
-  // Belge yok (ya da okunamadı): tam biçimle create dene — 409 çıkarsa belge var,
-  // o zaman kısmi yazım denenir (writeMemberDoc'un kademesi bunu halleder).
-  const nowIso = new Date().toISOString();
-  const draft: MemberDoc = {
-    ...emptyMember(key),
-    email: key,
-    emailNormalized: key,
-    displayName: key.split('@')[0] || 'Üye',
-    status: 'pending',
-    createdAt: nowIso,
-    lastLoginAt: nowIso,
-    note: 'Erişim sınaması: belge yoktu, oluşturuldu.',
-  };
-  const written = await writeMemberDoc(draft);
-  if (written.outcome.ok)
-    return { email: key, ok: true, created: !written.adopted && !written.degraded, updated: !!written.adopted || !!written.degraded };
-  const outcome = written.outcome;
-  if (outcome.reason === 'offline') return fail(outcome.error, 'offline');
-  if (outcome.code === 409)
-    return fail(
-      'Belge var ama okunamıyor: kural kendi belgeni okumana izin vermiyor (token ya da yol uyuşmuyor).',
-      'unreadable'
-    );
-  if (outcome.reason !== 'denied') return fail(outcome.error, 'shape');
-  // Gövde uygulama tarafında kural aynasından geçtiği için reddedilecek bir biçim
-  // yoktu → kalan açıklama ya kilit ya da YAYINDAKİ kuralların bayat olmasıdır.
-  if (lock.on)
-    return fail(
-      `${outcome.error} Kilit açık${lock.path ? ` (${lock.path})` : ''}: kendi belgen ya da yönetici oturumu şart.`,
-      'denied'
-    );
-  return fail(
-    'Belge biçimi uygulamanın beklediği kurallara uygun, kilit de kapalı — yine de reddediliyorsa YAYINDAKİ kurallar bu sürümden ESKİ. Admin → Ayarlar → “firestore.rules metnini kopyala” → Console → Firestore → Rules → yapıştır → Publish.',
-    'denied'
-  );
 }
 
 export async function probeCloud(): Promise<{ online: boolean; error?: string }> {
@@ -879,13 +775,16 @@ export type { MembershipStatus, VipPlanId };
  * TEK yol bakışı "kilit yok" der, oysa kurallar kilitli sayar → tüm üyelik
  * yazmaları sebepsiz reddedilmiş gibi görünür. Bu yüzden istemci de iki yolu görür.
  */
-export const LEGACY_ARTIFACTS_ROOT = 'artifacts/kpss-asistani/public/data';
+/**
+ * Supabase'de tek yerleşim düzeni vardır (`public` şeması): eski Supabase
+ * "legacy artifacts yolu" ikiliği bitti. `metaDocPaths()` arayüzü korunur ki
+ * panel/kilitle okuyan taraflar aynı kalsın.
+ */
+export const LEGACY_ARTIFACTS_ROOT = '';
 
-/** Denetlenmesi gereken tam belge yolları (sıra = öncelik). */
+/** Denetlenmesi gereken tam belge yolları (tek düzen → tek yol). */
 export function metaDocPaths(name: string): string[] {
-  const primary = collectionPath(name);
-  const legacy = `${LEGACY_ARTIFACTS_ROOT}/${name}`;
-  return primary === legacy ? [primary] : [primary, legacy];
+  return [collectionPath(name)];
 }
 
 /** Panelde gösterilecek birincil yol. */
@@ -976,7 +875,7 @@ export async function addAdminEmail(
       return {
         ok: false,
         reason: 'denied',
-        error: `Yönetici listesi yazılamadı: üyelik kilidi AÇIK (${lock.path} belgesi var). Önce Console → Firestore → Documents → ${lock.path} belgesini sil, listeyi güncelle, sonra istersen kilidi tekrar aç.`,
+        error: `Yönetici listesi yazılamadı: üyelik kilidi AÇIK (${lock.path} belgesi var). Önce Console → Supabase → Documents → ${lock.path} belgesini sil, listeyi güncelle, sonra istersen kilidi tekrar aç.`,
       };
     return res;
   }

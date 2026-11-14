@@ -206,7 +206,7 @@ export const AdminTopicsScreen: React.FC = () => {
               style={{ alignSelf: 'stretch' }}
             />
             <Text style={[styles.resetHint, { color: colors.textMuted }]}>
-              Yerel tüm konu ve soru düzenlemeleri silinir, Firestore içeriği geri gelir.
+              Yerel tüm konu ve soru düzenlemeleri silinir, Supabase içeriği geri gelir.
             </Text>
           </View>
         )}

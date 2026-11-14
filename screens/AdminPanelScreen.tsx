@@ -49,7 +49,7 @@ const SHORTCUTS: {
   {
     id: 'membership',
     label: 'Üyelik Paneli',
-    desc: 'Firestore üyeleri, plan/durum, test limiti',
+    desc: 'Supabase üyeleri, plan/durum, test limiti',
     icon: 'person-badge-outline',
     route: 'AdminMembership',
   },
@@ -244,7 +244,7 @@ export const AdminPanelScreen: React.FC = () => {
 
         <AdminSectionTitle
           label="İçerik kaynağı"
-          hint="Bir alanı düzenlediğinde içeriğin kopyası cihaza alınır ve uygulama onu kullanır. “Buluttan geri yükle” ile canlı Firestore içeriğine dönersin."
+          hint="Bir alanı düzenlediğinde içeriğin kopyası cihaza alınır ve uygulama onu kullanır. “Buluttan geri yükle” ile canlı Supabase içeriğine dönersin."
         />
         <AdminCard pad={4}>
           <AdminRow
@@ -286,7 +286,7 @@ export const AdminPanelScreen: React.FC = () => {
             subtitle={
               overrides.questions
                 ? `${overrides.questions} konuda yerel soru listesi`
-                : 'Sorular canlı Firestore’dan geliyor'
+                : 'Sorular canlı Supabase’dan geliyor'
             }
             right={
               <AdminChip

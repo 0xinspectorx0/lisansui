@@ -1,10 +1,9 @@
 /**
- * `firestore.rules` içindeki `memberShapeOk` + `memberCreateOk` yardımcılarının
+ * Supabase `public.members` şemasının ve `kpss_doc_keys_ok` yardımcısının
  * TypeScript aynası — memberships belgesinin **kabul edilen** tek biçimi.
  *
- * Neden gerekli: kural reddi (`403 Missing or insufficient permissions`) hangi
- * alanın yüzünden olduğunu SÖYLEMEZ. İstemci bu aynayı yazmadan hemen önce
- * çalıştırınca iki şey kazanılır:
+ * Neden gerekli: sunucu reddi hangi alanın yüzünden olduğunu her zaman ayrıntılı
+ * söylemeyebilir. İstemci bu aynayı yazmadan hemen önce çalıştırınca iki şey kazanılır:
  *
  *   1. `coerceMemberFields` — kuralın tolere edebileceği sapmalar (boş/eksik
  *      şifre demeti, 80 karakteri aşan ad, `x.y` tarih biçimi, 12'den çok
@@ -14,10 +13,12 @@
  *   2. `checkMemberFields` — düzeltilemeyen bir şey kaldıysa kullanıcı
  *      "kural engelledi" değil, `alan: sebep` cümlesini görür.
  *
- * Sabitler `firestore.rules` dosyasından `npm run test:auth` ile denetlenir
- * (scripts/auth-contract.test.mjs §16): listelerden biri elle değişirse test
- * patlar, böylece kural ile istemci asla ayrılmaz.
+ * Sabitler `supabase/migrations/0001_init.sql` dosyasından `npm run test:db` ile
+ * denetlenir: listelerden biri elle değişirse test patlar, böylece SQL ile istemci
+ * asla ayrılmaz.
  */
+
+import { CLOUD_AUTH_ALGOS } from './crypto';
 
 export type FbValue = any;
 
@@ -31,7 +32,7 @@ const VALUE_KINDS = [
   'arrayValue',
 ] as const;
 
-/* --------------------------- kural sabitleri (firestore.rules ile senkron) */
+/* ------------------------- kural sabitleri (0001_init.sql ile senkron) */
 
 /** `memberShapeOk` → `data.keys().hasAll([...])` */
 export const MEMBER_REQUIRED_KEYS = [
@@ -115,7 +116,7 @@ const take = (s: string, n: number): string => {
   const chars = Array.from(s);
   return chars.length <= n ? s : chars.slice(0, n).join('');
 };
-/** Firestore `String.lower()` karşılığı (ASCII güvenli, locale'den bağımsız). */
+/** Supabase `String.lower()` karşılığı (ASCII güvenli, locale'den bağımsız). */
 export const ruleLower = (s: string): string => s.toLowerCase();
 
 const S = (v: string): FbValue => ({ stringValue: v });
@@ -134,7 +135,7 @@ const bad = (field: string, why: string): ShapeProblem => ({ field, why });
 
 /**
  * Payload'ı kurala karşı denetler; **reddedilecek alanları** döner (boş dizi =
- * Firestore bu belgeyi kabul eder). `mode: 'create'` ile `memberCreateOk`
+ * Supabase bu belgeyi kabul eder). `mode: 'create'` ile `memberCreateOk`
  * kısıtları da denetlenir.
  */
 export function checkMemberFields(
@@ -172,12 +173,12 @@ export function checkMemberFields(
   const verifier = sVal(fields.verifier) ?? '';
   const salt = sVal(fields.salt) ?? '';
   const iterations = iVal(fields.iterations);
-  if (algo === 'firebase-auth') {
+  if (CLOUD_AUTH_ALGOS.includes(algo)) {
     if (verifier !== '' || salt !== '' || iterations !== 0)
       out.push(
         bad(
           'verifier',
-          'algo "firebase-auth" iken verifier/salt boş, iterations 0 olmalı (parola Firebase Auth’ta durur)'
+          'bulut doğrulamasında (algo: supabase-auth) verifier/salt boş, iterations 0 olmalı — parola Supabase Auth’ta durur'
         )
       );
   } else {
@@ -185,7 +186,7 @@ export function checkMemberFields(
     if (!MEMBER_SALT_RE.test(salt)) out.push(bad('salt', '32 haneli onaltılık olmalı'));
     if (iterations === null || iterations < MEMBER_ITERATIONS_MIN)
       out.push(bad('iterations', `en az ${MEMBER_ITERATIONS_MIN} olmalı`));
-    if (algo !== 'pbkdf2-sha256') out.push(bad('algo', 'yalnız "firebase-auth" ya da "pbkdf2-sha256"'));
+    if (algo !== 'pbkdf2-sha256') out.push(bad('algo', 'yalnız "supabase-auth" ya da "pbkdf2-sha256"'));
   }
 
   const role = sVal(fields.role) ?? '';
@@ -255,7 +256,7 @@ function stringField(fields: Record<string, FbValue>, field: string, fallback = 
 
 /**
  * Yazmadan hemen önce payload'ı kuralın kabul edeceği hale getirir.
- * Kayıp veri yok: yalnızca Firestore'un zaten reddedeceği taşmalar kırpılıyor
+ * Kayıp veri yok: yalnızca Supabase'un zaten reddedeceği taşmalar kırpılıyor
  * ve boş/eksik yardımcı alanlar güvenli varsayılana çekiliyor.
  * @param memberId hedef belge kimliği (genelde normalize e-posta)
  */
@@ -265,7 +266,7 @@ export function coerceMemberFields(
 ): Record<string, FbValue> {
   const f: Record<string, FbValue> = { ...input };
   const fill = opts.fill === true;
-  /** PATCH gövdesinde olmayan alanı uydurmayız — Firestore onları elle tutar. */
+  /** PATCH gövdesinde olmayan alanı uydurmayız — Supabase onları elle tutar. */
   const touch = (k: string, v: FbValue) => {
     if (fill || k in f) f[k] = v;
   };
@@ -289,24 +290,24 @@ export function coerceMemberFields(
     touch(field, S(take(v.stringValue, limit)));
   }
 
-  // 3) şifre demeti: boş/eksik üçlü = parola Firebase Auth’ta demektir
+  // 3) şifre demeti: boş/eksik üçlü = parola Supabase Auth’ta demektir
   const verifier = read('verifier');
   const salt = read('salt');
   const iterations = iVal(f.iterations) ?? 0;
   const algoRaw = read('algo');
   const tripleEmpty = verifier === '' && salt === '' && iterations === 0;
-  if (algoRaw === 'firebase-auth' || tripleEmpty) {
+  if (CLOUD_AUTH_ALGOS.includes(algoRaw) || tripleEmpty) {
     touch('verifier', S(''));
     touch('salt', S(''));
     touch('iterations', I(0));
-    touch('algo', S('firebase-auth'));
+    touch('algo', S('supabase-auth'));
   } else if (!MEMBER_VERIFIER_RE.test(verifier) || !MEMBER_SALT_RE.test(salt) || iterations < MEMBER_ITERATIONS_MIN) {
-    // Bozuk pbkdf2 demeti (ör. eski sürüm verisi): Firestore bunu zaten reddeder.
+    // Bozuk pbkdf2 demeti (ör. eski sürüm verisi): Supabase bunu zaten reddeder.
     // Bulutta parolayı bırak, yerel doğrulama çalışmaya devam etsin.
     touch('verifier', S(''));
     touch('salt', S(''));
     touch('iterations', I(0));
-    touch('algo', S('firebase-auth'));
+    touch('algo', S('supabase-auth'));
   } else {
     touch('verifier', S(verifier));
     touch('salt', S(salt));
@@ -361,7 +362,7 @@ export function coerceMemberFields(
   }
 
   // 9) create: zorunlu ama hiç gönderilmemiş alanlar güvenli varsayılanla tamamlanır
-  //    (kısmi PATCH'te bunlar uydurulmaz — Firestore'da zaten duruyorlar).
+  //    (kısmi PATCH'te bunlar uydurulmaz — Supabase'da zaten duruyorlar).
   if (fill) {
     for (const key of MEMBER_REQUIRED_KEYS) {
       if (key in f) continue;

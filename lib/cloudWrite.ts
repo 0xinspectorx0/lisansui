@@ -2,13 +2,13 @@
  * Anlık bulut yazıları — panel düzenlemeleri ve üyelik politikası için tek yol.
  *
  * Kural: hiçbir şey cihazda "sonra gönderilmek üzere" bekletilmez. Panelde bir
- * soru/profil listesi değiştiği anda ilgili Firestore belgesine yazılır; politika
+ * soru/profil listesi değiştiği anda ilgili Supabase belgesine yazılır; politika
  * (kayıt açık mı, onay zorunlu mu, kotada kaç test) değiştiği anda
  * `meta/membership_policy` belgesine yazılır. Yazma başarısızsa ekranın üstünde
  * tek satır gerçek neden yazar ve "Yeniden dene" ile aynı işekrarlanır — böylece
  * "yalnızca bu cihazda var olan" veri birikmez.
  *
- * Yarış koruması: aynı belgeye üst üste gelen yazmalar bir kuyrukta
+ * Yarış koruması: aynı belgeye üst üste gelen yazmalar bir zincirde
  * SIRAYA alınır (eşzamanlı PUT son yazanı belirsizleştirirdi). Gecikme yok,
  * yalnızca sıralama var.
  */
@@ -23,8 +23,8 @@ import {
   putDocument,
   readDocument,
   str,
-} from './firestoreApi';
-import { collectionPath } from './firebaseConfig';
+} from './cloudApi';
+import { collectionPath } from './supabaseConfig';
 import { topicDocFields, topicDocPathFor } from './contentDoc';
 import { fetchTopicQuestions } from './kpssApi';
 import { DEFAULT_MEMBERSHIP, MembershipConfig } from './adminStore';
@@ -48,7 +48,7 @@ export interface CloudWriteStatus {
   reason: 'denied' | 'offline' | 'error' | null;
   /** Son başarılı yazmanın ISO zamanı. */
   lastOkAt: string | null;
-  /** Kaç iş kuyrukta/başarısız durumda (panelde tek sayı). */
+  /** Kaç iş bekliyor/başarısız durumda (panelde tek sayı). */
   failed: number;
 }
 
@@ -98,7 +98,7 @@ function enqueue(key: string, kind: CloudWriteKind, label: string, run: () => Pr
     } else {
       failures.set(
         key,
-        `${label} → Firestore’a yazılamadı (${res.reason || 'bilinmiyor'}): ${res.error || 'neden ölçülemedi'}`
+        `${label} → Supabase’e yazılamadı (${res.reason || 'bilinmiyor'}): ${res.error || 'neden ölçülemedi'}`
       );
       status = { ...status, reason: res.reason === 'offline' ? 'offline' : 'denied' };
     }

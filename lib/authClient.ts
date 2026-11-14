@@ -1,114 +1,140 @@
 /**
- * Firebase Authentication (Email/Password) istemcisi — Firebase SDK'sız.
+ * Supabase Auth (GoTrue, e-posta/parola) istemcisi — Supabase SDK'sız.
  *
- * Firestore tarafında olduğu gibi doğrudan REST kullanılıyor
- * (`identitytoolkit.googleapis.com/v1/accounts:*`), böylece Expo Go'da, web'de ve
- * native derlemelerde aynı kod çalışıyor ve yeni bir bağımlılık eklenmiyor.
+ * Veri tarafında olduğu gibi doğrudan REST kullanılıyor (`/auth/v1/*`), böylece
+ * Expo Go'da, web'de ve native derlemelerde aynı kod çalışır ve yeni bir bağımlılık
+ * eklenmez. Parola HİÇBİR ZAMAN Postgres'e yazılmaz: `members` satırında yalnız
+ * `authUid` işaretçisi durur. Eski Supabase Auth döneminden kalan cihaz hesapları
+ * için yerel PBKDF2 doğrulaması (lib/crypto.ts) yalnızca burada yapılandırma
+ * YOKKEN devreye girer.
  *
- * Yapılandırma KULLANICIDAN İSTENMEZ: normal kurulumda anahtar depodaki
- * `config/firebaseApp.ts` içinden okunur (bir kez yazılır, commit'lenir).
+ * Yapılandırma KULLANICIDAN İSTENMEZ: normal kurulumda değerler depodaki
+ * `config/supabaseApp.ts` içinden okunur (bir kez yazılır, commit'lenir):
+ *   npm run setup:supabase -- --url https://xxxx.supabase.co --anon-key eyJ...
  * Geliştirici istersen override edebilir:
- *   EXPO_PUBLIC_FIREBASE_API_KEY=...      Console → Project settings → Web app SDK config
- *   EXPO_PUBLIC_FIRESTORE_PROJECT=...     (yoksa projeyi oradan alıyoruz)
- *   EXPO_PUBLIC_FIREBASE_PROJECT_ID=...   (opsiyonel override)
+ *   EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY
  *
- * Hiçbir kaynakta anahtar yoksa `isAuthConfigured()` false döner ve üyelikler
- * eski yerel doğrulama (PBKDF2 + Firestore belgesi) ile çalışmaya devam eder.
+ * Hiçbir kaynakta hedef yoksa `isAuthConfigured()` false döner ve üyelikler eski
+ * yerel doğrulama (PBKDF2 + bulut belgesi) ile çalışmaya devam eder.
  *
  * Oturum native'de expo-secure-store, web'de AsyncStorage içinde saklanır;
- * idToken ~1 saat sonra `refresh_token` ile sessizce yenilenir.
+ * access token ~1 saat sonra `refresh_token` ile sessizce yenilenir.
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
-import { firestoreTarget } from './firebaseConfig';
-import { FIREBASE_WEB_CONFIG } from '../config/firebaseApp';
+import { cloudTarget } from './supabaseConfig';
+import { SUPABASE_APP_CONFIG } from '../config/supabaseApp';
 
-const IK_API = 'https://identitytoolkit.googleapis.com/v1/accounts';
-const SESSION_KEY = 'kpss.firebaseAuth.session.v1';
+/** GoTrue kökü: https://<ref>.supabase.co/auth/v1 */
+function authRoot(): string {
+  const url = resolveAuthConfig()?.url || cloudTarget().url || '';
+  return `${String(url).replace(/\/+$/, '')}/auth/v1`;
+}
+
+const SESSION_KEY = 'kpss.supabaseAuth.session.v1';
 const REFRESH_MARGIN_MS = 60_000;
 
 /* ------------------------------------------------------------- config */
 
 const ENV_KEYS = [
-  'EXPO_PUBLIC_FIREBASE_API_KEY',
-  'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',
-  'EXPO_PUBLIC_FIREBASE_PROJECT_ID',
-  'EXPO_PUBLIC_FIREBASE_APP_ID',
+  'EXPO_PUBLIC_SUPABASE_ANON_KEY',
+  'EXPO_PUBLIC_SUPABASE_URL',
+  'EXPO_PUBLIC_SUPABASE_SCHEMA',
 ] as const;
 
 function envValue(name: (typeof ENV_KEYS)[number]): string {
   // Metro yalnızca literal `process.env.X` erişimini gömer.
   switch (name) {
-    case 'EXPO_PUBLIC_FIREBASE_API_KEY':
-      return process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? '';
-    case 'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN':
-      return process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ?? '';
-    case 'EXPO_PUBLIC_FIREBASE_PROJECT_ID':
-      return process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? '';
-    case 'EXPO_PUBLIC_FIREBASE_APP_ID':
-      return process.env.EXPO_PUBLIC_FIREBASE_APP_ID ?? '';
+    case 'EXPO_PUBLIC_SUPABASE_ANON_KEY':
+      return process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+    case 'EXPO_PUBLIC_SUPABASE_URL':
+      return process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
     default:
-      return '';
+      return process.env.EXPO_PUBLIC_SUPABASE_SCHEMA ?? '';
   }
 }
 
+/**
+ * `apiKey` alanı GERİYE DÖNÜK olarak durur ve Supabase `anon` anahtarını taşır
+ * (public key — RLS korur). `url` ise proje adresidir.
+ */
 export interface AuthConfig {
   apiKey: string;
+  /** https://<ref>.supabase.co */
+  url: string;
   projectId: string;
   authDomain: string;
   appId: string;
-  /** 'repo' = depoya gömülü config, 'env' = .env.local, 'device' = eski cihaz kaydı */
+  /** 'repo' = depoya gömülü config, 'env' = .env.local, 'device' = eski kurulum kaydı (yalnız yedek) */
   source: 'env' | 'device' | 'repo';
 }
 
+/** `https://abc123.supabase.co` → `abc123` */
+export function refOfUrl(url: string): string {
+  const host = String(url || '').replace(/^https?:\/\//, '').split('.')[0];
+  return host || '';
+}
+
 /**
- * Tek birleştirme noktası: eksik alanları Firestore hedefinden/proje adından
- * tamamlar. `apiKey` boşsa null döner (yani o kaynak devre dışı).
+ * Tek birleştirme noktası: eksik alanlar Supabase hedefinden tamamlanır.
+ * `url` ya da `anonKey` yoksa null döner (yani o kaynak devre dışı).
  */
 export function buildAuthConfig(
-  raw: Partial<Pick<AuthConfig, 'apiKey' | 'projectId' | 'authDomain' | 'appId'>> | null | undefined,
+  raw: (Partial<Pick<AuthConfig, 'apiKey' | 'url' | 'projectId' | 'authDomain' | 'appId'>> & {
+    anonKey?: string;
+  }) | null | undefined,
   source: AuthConfig['source']
 ): AuthConfig | null {
-  const apiKey = String(raw?.apiKey || '').trim();
-  if (!apiKey) return null;
-  const projectId = String(raw?.projectId || '').trim() || firestoreTarget().projectId;
+  const url = String(raw?.url || '').trim().replace(/\/+$/, '');
+  const apiKey = String(raw?.anonKey || raw?.apiKey || '').trim();
+  if (!url || !apiKey) return null;
   return {
     apiKey,
-    projectId,
-    authDomain: String(raw?.authDomain || '').trim() || `${projectId}.firebaseapp.com`,
+    url,
+    projectId: String(raw?.projectId || '').trim() || refOfUrl(url),
+    authDomain: String(raw?.authDomain || '').trim() || url,
     appId: String(raw?.appId || '').trim(),
     source,
   };
 }
 
-/** Depoya gömülü yapılandırma (config/firebaseApp.ts) — kullanıcının bir şey girmesi gerekmez. */
+/** Depoya gömülü yapılandırma (config/supabaseApp.ts) — kullanıcının bir şey girmesi gerekmez. */
 export function repoAuthConfig(): AuthConfig | null {
-  return buildAuthConfig(FIREBASE_WEB_CONFIG, 'repo');
+  return buildAuthConfig(
+    { url: SUPABASE_APP_CONFIG.url, anonKey: SUPABASE_APP_CONFIG.anonKey },
+    'repo'
+  );
 }
 
 /**
- * Panelde girilen anahtar bu anahtarla saklanır (cihaza özel, `--clear` gerekmez).
- * Public web anahtarı olduğu için depolama güvenlik açısından sorun değil; yine de
+ * Panelde girilen değer bu anahtarla saklanır (cihaza özel, `--clear` gerekmez).
+ * `anon` anahtar public olduğu için depolama güvenlik açısından sorun değil; yine de
  * üretim derlemelerinde `.env.local`/EAS değişkeni tercih edilir.
  */
-const CONFIG_KEY = 'kpss.firebaseAuth.config.v1';
+const CONFIG_KEY = 'kpss.supabaseAuth.config.v1';
 
 let cachedConfig: AuthConfig | null | undefined;
 let deviceOverride: AuthConfig | null = null;
 let deviceConfigLoaded = false;
 
 function fromEnv(): AuthConfig | null {
-  return buildAuthConfig(
-    {
-      apiKey: envValue('EXPO_PUBLIC_FIREBASE_API_KEY').trim(),
-      projectId: envValue('EXPO_PUBLIC_FIREBASE_PROJECT_ID').trim(),
-      authDomain: envValue('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN').trim(),
-      appId: envValue('EXPO_PUBLIC_FIREBASE_APP_ID').trim(),
-    },
-    'env'
-  );
+  // Yalnız GERÇEKTEN ortam değişkeni varsa 'env' de. Eskiden `|| cloudTarget()`
+  // ile depodaki değerleri de 'env' olarak etiketliyordu; panel "kaynak:
+  // .env.local" diyordu ve kişi olmayan dosyayı arıyordu.
+  const url = envValue('EXPO_PUBLIC_SUPABASE_URL').trim();
+  const anonKey = envValue('EXPO_PUBLIC_SUPABASE_ANON_KEY').trim();
+  if (!url || !anonKey) return null;
+  return buildAuthConfig({ url, anonKey }, 'env');
+}
+
+/** Değerler hangimizde duruyor? Panel bu dosya adını gösterir (yanlış dosya aratma). */
+export function repoConfigFile(): string {
+  const src = cloudTarget().source;
+  if (src === 'app.json') return 'app.json → expo.extra.supabase';
+  if (src === 'env') return '.env.local';
+  return 'config/supabaseApp.ts';
 }
 
 /** Modül yüklendiğinde bir kez oku; `ensureAuthConfigLoaded()` ile beklenebilir. */
@@ -119,18 +145,15 @@ export async function ensureAuthConfigLoaded(): Promise<void> {
   cachedConfig = undefined; // cihaz değeri geldiyse çözümü tazele
   if (raw) {
     try {
-      const parsed = JSON.parse(raw) as { apiKey?: string };
-      const key = String(parsed?.apiKey || '').trim();
-      if (key) {
-        const projectId = firestoreTarget().projectId;
-        deviceOverride = {
-          apiKey: key,
-          projectId,
-          authDomain: `${projectId}.firebaseapp.com`,
-          appId: '',
-          source: 'device',
-        };
-      }
+      const parsed = JSON.parse(raw) as { apiKey?: string; anonKey?: string; url?: string };
+      const built = buildAuthConfig(
+        {
+          url: parsed?.url || '',
+          anonKey: parsed?.anonKey || parsed?.apiKey || '',
+        },
+        'device'
+      );
+      if (built) deviceOverride = built;
     } catch {
       deviceOverride = null;
     }
@@ -138,13 +161,17 @@ export async function ensureAuthConfigLoaded(): Promise<void> {
 }
 
 /**
- * Çözümleme sırası: eski cihaz kaydı → `.env.local` → depoya gömülü config.
- * (Cihazda elle girilen değer yalnız geriye dönük uyumluluk için en üstte
- * durur; “Kaldır” ile config değerine dönülür.)
+ * Çözümleme sırası: `.env.local`/derleme ortamı → depoya gömülü config → cihaz kaydı.
+ *
+ * Cihazda kayıtlı değer EN SONDA gelir: eski kurulumlarda (depo config'i boşken
+ * panele bir kez yapıştırılmış) oturumların çalışmaya devam etmesi için tutulur,
+ * ama depoda hedef varken hiçbir zaman onu gölgelemez. Böylece "cihazda kalmış
+ * yanlış anahtar" sınıfı hata yapısal olarak mümkün değildir; uygulama kimseye
+ * anahtar sormaz.
  */
 export function resolveAuthConfig(): AuthConfig | null {
   if (cachedConfig !== undefined) return cachedConfig;
-  cachedConfig = deviceOverride ?? fromEnv() ?? repoAuthConfig();
+  cachedConfig = fromEnv() ?? repoAuthConfig() ?? deviceOverride;
   return cachedConfig;
 }
 
@@ -152,27 +179,31 @@ export function resetAuthConfigCache(): void {
   cachedConfig = undefined;
 }
 
-/** Panel → “Kaydet”. Boş/geçersiz değer reddedilir. */
+/**
+ * Panel → “Kaydet”. `value` tek başına anon anahtar, `url` ile birlikte de
+ * "https://…supabase.co <anonKey>" biçiminde verilebilir. Boş/red.
+ */
 export async function setDeviceApiKey(
-  apiKey: string
+  value: string,
+  url?: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const key = String(apiKey || '').trim();
-  if (!key) return { ok: false, error: 'Boş bırakma; Console’daki apiKey değerini yapıştır.' };
-  if (/\s/.test(key)) return { ok: false, error: 'Anahtar boşluk içeremez — tamamını kopyala.' };
-  if (key.length < 20) return { ok: false, error: 'Anahtar kısa görünüyor (genelde 39 karakter).' };
-  if (!/^[A-Za-z0-9_-]+$/.test(key))
-    return { ok: false, error: 'Anahtar beklenmeyen karakter içeriyor (yalnız harf/rakam/-/_).' };
-  const projectId = firestoreTarget().projectId;
-  deviceOverride = {
-    apiKey: key,
-    projectId,
-    authDomain: `${projectId}.firebaseapp.com`,
-    appId: '',
-    source: 'device',
-  };
+  const parts = String(value || '').trim().split(/[\s,;]+/).filter(Boolean);
+  let key = '';
+  let host = String(url || '').trim();
+  for (const p of parts) {
+    if (/^https?:\/\//i.test(p) && !host) host = p;
+    else if (!key) key = p;
+  }
+  if (!key) return { ok: false, error: 'Boş bırakma; Dashboard → Settings → API → `anon public` değerini yapıştır.' };
+  if (!host) host = String(cloudTarget().url || '').trim();
+  if (!/^https?:\/\//i.test(host))
+    return { ok: false, error: 'Proje adresi de gerekli: https://<ref>.supabase.co' };
+  const built = buildAuthConfig({ url: host, anonKey: key }, 'device');
+  if (!built) return { ok: false, error: 'Adres ya da anahtar çözümlenemedi — ikisini de tam kopyala.' };
+  deviceOverride = built;
   cachedConfig = undefined;
   deviceConfigLoaded = true;
-  await storeSet(CONFIG_KEY, JSON.stringify({ apiKey: key, projectId, savedAt: new Date().toISOString() }));
+  await storeSet(CONFIG_KEY, JSON.stringify({ url: built.url, anonKey: built.apiKey, savedAt: new Date().toISOString() }));
   return { ok: true };
 }
 
@@ -190,10 +221,14 @@ export async function readDeviceApiKey(): Promise<string | null> {
   return deviceOverride?.apiKey ?? null;
 }
 
-/** Çözümlenmiş web API anahtarı (yoksa boş string). Firestore REST isteklerinin
- *  `?key=` yoklaması için — kullanıcıya asla sorulmaz, kaynak yine config/.env. */
+/** Çözümlenmiş public anahtar (yoksa boş string) — her isteğin `apikey` başlığı. */
 export function webApiKey(): string {
   return resolveAuthConfig()?.apiKey || '';
+}
+
+/** Çözümlenmiş Supabase projesi (yoksa boş string). */
+export function cloudUrl(): string {
+  return resolveAuthConfig()?.url || '';
 }
 
 export function authConfigSource(): AuthConfig['source'] | null {
@@ -327,7 +362,11 @@ function b64urlDecode(input: string): string {
 }
 
 export interface IdTokenInfo {
-  /** `iss: https://securetoken.google.com/<projectId>` — okunamazsa null. */
+  /**
+   * Token'ı VEREN proje. Supabase JWT'lerinde `iss: https://<ref>.supabase.co`.
+   * Yanlış projeden bir oturumla tüm istekleri reddedilir hâlde dolaşmamak için
+   * kullanılır. Okunamazsa null.
+   */
   projectId: string | null;
   email: string;
   uid: string;
@@ -342,7 +381,7 @@ export function decodeIdToken(token: string): IdTokenInfo {
   try {
     const payload = JSON.parse(b64urlDecode(parts[1])) as Record<string, unknown>;
     const iss = String(payload.iss || '');
-    const fromIss = iss.match(/securetoken\.google\.com\/([^/]+)/);
+    const fromIss = iss.match(/^https?:\/\/([a-z0-9-]+)\.supabase\.(co|in)$/i);
     const pid = fromIss
       ? fromIss[1]
       : typeof payload.project_id === 'string'
@@ -351,7 +390,7 @@ export function decodeIdToken(token: string): IdTokenInfo {
     return {
       projectId: pid || null,
       email: String(payload.email || ''),
-      uid: String(payload.user_id || payload.local_id || ''),
+      uid: String(payload.sub || payload.user_id || payload.local_id || ''),
       exp: typeof payload.exp === 'number' ? payload.exp : null,
     };
   } catch {
@@ -367,10 +406,12 @@ export async function sessionIdTokenInfo(): Promise<IdTokenInfo & { token: strin
   return { token, ...decodeIdToken(token) };
 }
 
-/** Firestore hedefiyle oturum token'ının projesi farklı mı? */
+/** Supabase hedefiyle oturum token'ının projesi (ref) farklı mı? */
 export function tokenProjectMismatches(projectId: string | null): boolean {
   if (!projectId) return false;
-  return projectId !== firestoreTarget().projectId;
+  const want = refOfUrl(cloudTarget().url || resolveAuthConfig()?.url || '');
+  if (!want) return false;
+  return String(projectId).toLowerCase() !== want.toLowerCase();
 }
 
 let foreignCheckedToken: string | null = null;
@@ -427,14 +468,12 @@ export const AUTH_SESSION_KEY = SESSION_KEY;
 async function refresh(session: AuthSession): Promise<AuthSession | null> {
   const cfg = resolveAuthConfig();
   if (!cfg) return null;
-  const data = await postJson(`${IK_API}:token?key=${encodeURIComponent(cfg.apiKey)}`, {
-    grant_type: 'refresh_token',
+  const data = await postJson(`${cfg.url.replace(/\/+$/, '')}/auth/v1/token?grant_type=refresh_token`, {
     refresh_token: session.refreshToken,
   });
   if (data.error) {
-    if (data.error.message === 'TOKEN_EXPIRED' || data.error.message === 'USER_DISABLED') {
-      await persist(null);
-    }
+    const msg = String(data.error.message || '');
+    if (/invalid refresh token|expired|user not found/i.test(msg)) await persist(null);
     return null;
   }
   const next: AuthSession = {
@@ -447,7 +486,7 @@ async function refresh(session: AuthSession): Promise<AuthSession | null> {
   return next;
 }
 
-/** Firestore isteklerine eklenecek bearer token; oturum yoksa null. */
+/** Supabase isteklerine eklenecek bearer token; oturum yoksa null. */
 export async function currentIdToken(opts?: { forceRefresh?: boolean }): Promise<string | null> {
   await ensureAuthConfigLoaded();
   const session = await restoreSession();
@@ -457,11 +496,14 @@ export async function currentIdToken(opts?: { forceRefresh?: boolean }): Promise
   }
   const next = await refresh(session);
   if (next) return next.idToken;
-  // Yenileme olmadı: TOKEN_EXPIRED/USER_DISABLED'da oturum kapatıldı → token verme,
-  // ağ hatası gibi geçici durumlarda mevcut (muhtemelen hâlâ geçerli) token'ı kullan.
+  // Yenileme olmadı: token geçersizse oturum kapatıldı → token verme; ağ hatası gibi
+  // geçici durumlarda mevcut (muhtemelen hâlâ geçerli) token'ı kullan.
   const still = await restoreSession();
   return still?.idToken ?? null;
 }
+
+/** `currentIdToken` eş anlamlısı: geçiş katmanı bu adı kullanıyor. */
+export const currentAccessToken = currentIdToken;
 
 /* ------------------------------------------------------------ REST call */
 
@@ -470,22 +512,43 @@ interface IkError {
   errors?: { message?: string }[];
 }
 
-async function postJson(url: string, body: unknown): Promise<any> {
+async function postJson(url: string, body: unknown, extra?: { method?: string; bearer?: string }): Promise<any> {
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      apikey: webApiKey(),
+    };
+    if (extra?.bearer) headers.Authorization = `Bearer ${extra.bearer}`;
     const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      method: extra?.method || 'POST',
+      headers,
+      body: body === undefined || body === null ? undefined : JSON.stringify(body),
     });
     const text = await res.text();
     const json = text ? safeParse(text) : {};
     if (!res.ok) {
-      return { error: { message: String(json?.error?.message || `HTTP ${res.status}`) } as IkError };
+      // GoTrue hataları birkaç biçimde gelir: {msg}, {message}, {error:{message}},
+      // {error_description}, {error: "kısa_kod"} — hepsini tek metinde topla.
+      const msg = String(
+        json?.error_msg ||
+          json?.error?.message ||
+          json?.message ||
+          json?.msg ||
+          json?.error_description ||
+          json?.error_code ||
+          (typeof json?.error === 'string' ? json.error : '') ||
+          `HTTP ${res.status}`
+      );
+      return { error: { message: msg } as GoTrueError, status: res.status };
     }
     return json ?? {};
   } catch (e) {
-    return { error: { message: 'NETWORK_REQUEST_FAILED' } as IkError, thrown: String(e) };
+    return { error: { message: 'NETWORK_REQUEST_FAILED' } as GoTrueError, thrown: String(e) };
   }
+}
+
+interface GoTrueError {
+  message: string;
 }
 
 function safeParse(text: string): any {
@@ -496,14 +559,21 @@ function safeParse(text: string): any {
   }
 }
 
+/** GoTrue yanıtından oturum; `user` yoksa (e-posta doğrulama açık) boş döner. */
 function toSession(data: any, fallbackEmail: string): AuthSession {
+  const user = data?.user || {};
   return {
-    uid: String(data.localId || ''),
-    email: String(data.email || fallbackEmail || ''),
-    idToken: String(data.idToken || ''),
-    refreshToken: String(data.refreshToken || ''),
-    expiresAt: Date.now() + Number(data.expiresIn || 3600) * 1000,
+    uid: String(user.id || data?.uid || ''),
+    email: String(user.email || data?.email || fallbackEmail || ''),
+    idToken: String(data.access_token || ''),
+    refreshToken: String(data.refresh_token || ''),
+    expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000,
   };
+}
+
+/** GoTrue hata metnini kısa koda çevirir (authErrorMessage ikisini de tanır). */
+function codeOf(message: unknown): string {
+  return String(message ?? '').split(':')[0].trim();
 }
 
 /**
@@ -511,39 +581,29 @@ function toSession(data: any, fallbackEmail: string): AuthSession {
  * Panelde ve formlarda aynı metinler kullanılıyor.
  */
 export function authErrorMessage(raw: string): string {
-  const code = (raw || '').split(' : ')[0].trim().toUpperCase();
-  switch (code) {
-    case 'EMAIL_NOT_FOUND':
-      return 'Bu e-posta ile kayıtlı bir hesap yok. Önce üye ol.';
-    case 'INVALID_LOGIN_CREDENTIALS':
-    case 'WRONG_PASSWORD':
-    case 'INVALID_PASSWORD':
-    case 'PASSWORD_MISMATCH':
-    case 'MISSING_PASSWORD':
-      return 'E-posta veya parola hatalı.';
-    case 'EMAIL_EXISTS':
-      return 'Bu e-posta ile kayıtlı bir hesap var. Giriş yapmayı dene.';
-    case 'WEAK_PASSWORD':
-    case 'WEAK_PASSWORD_PASSWORD_TOO_WEAK':
-      return 'Parola çok zayıf (en az 6 karakter).';
-    case 'TOO_MANY_ATTEMPTS_TRY_LATER':
-      return 'Çok fazla deneme. Bir süre sonra tekrar dene (Firebase hesabı geçici olarak kilitledi).';
-    case 'USER_DISABLED':
-      return 'Hesap devre dışı bırakılmış. Yönetici ile iletişime geç.';
-    case 'OPERATION_NOT_ALLOWED':
-      return 'Firebase Console → Authentication → Sign-in method → “Email/Password” açık değil. Önce onu etkinleştir.';
-    case 'NETWORK_REQUEST_FAILED':
-      return 'Firebase Auth sunucusuna ulaşılamadı. İnternet bağlantını kontrol et.';
-    case 'API_KEY_INVALID':
-    case 'KEY_INVALID':
-    case 'INVALID_ARGUMENT':
-      return 'Firebase web API anahtarı geçersiz görünüyor. Depoda `config/firebaseApp.ts` (yoksa .env.local) içindeki apiKey değerini kontrol et.';
-    case 'CREDENTIAL_TOO_OLD_LOGIN_AGAIN':
-    case 'TOKEN_EXPIRED':
-      return 'Oturum süresi doldu. Yeniden giriş yap.';
-    default:
-      return `Kimlik doğrulama hatası: ${raw || 'bilinmiyor'}`;
-  }
+  const text = String(raw || '');
+  const lower = text.toLowerCase();
+  if (/user already registered|already been registered|email already/i.test(lower))
+    return 'Bu e-posta ile kayıtlı bir hesap var. Giriş yapmayı dene.';
+  if (/invalid login credentials|invalid credentials|wrong password|password is invalid/i.test(lower))
+    return 'E-posta veya parola hatalı.';
+  if (/email not confirmed|confirm.*email|verification/i.test(lower))
+    return 'E-posta doğrulaması açık: Supabase → Authentication → Providers → Email → “Confirm email” kapalı olmalı (ya da maildeki bağlantıya dokun).';
+  if (/rate limit|too many requests/i.test(lower))
+    return 'Çok fazla deneme. Bir süre sonra tekrar dene (Supabase Auth geçici olarak kilitledi).';
+  if (/unauthorized|api key|apikey|invalid jwt|jwt expired/i.test(lower))
+    return 'Oturum ya da public anahtar reddedildi. `npm run setup:supabase` ile hedefi yenile.';
+  if (/for security purposes|recent login|required/i.test(lower))
+    return 'Bu işlem için yeniden giriş yapman gerekiyor.';
+  if (/at least 6 characters|weak password/i.test(lower))
+    return 'Parola en az 6 karakter olmalı.';
+  if (/user not found|invalid email/i.test(lower)) return 'Bu e-posta ile kayıtlı bir hesap yok. Önce üye ol.';
+  if (/network_request_failed/i.test(lower))
+    return 'Supabase Auth sunucusuna ulaşılamadı. İnternet bağlantını kontrol et.';
+  if (/disabled|banned/i.test(lower)) return 'Hesap devre dışı bırakılmış. Yönetici ile iletişime geç.';
+  const code = codeOf(text).toUpperCase();
+  if (code === 'NOT_CONFIGURED') return 'Supabase hedefi tanımlı değil — `npm run setup:supabase` gerekir.';
+  return `Kimlik doğrulama hatası: ${text || 'bilinmiyor'}`;
 }
 
 /* ------------------------------------------------------------ operations */
@@ -555,16 +615,30 @@ export interface AuthResult {
   code?: string;
 }
 
+/** Üyelik = Auth hesabı + `members` satırı; bu fonksiyon yalnız hesabı açar. */
 export async function signUp(email: string, password: string): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
-  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış — config/firebaseApp.ts içindeki apiKey boş.' };
-  const data = await postJson(`${IK_API}:signUp?key=${encodeURIComponent(cfg.apiKey)}`, {
+  if (!cfg)
+    return {
+      ok: false,
+      code: 'NOT_CONFIGURED',
+      error: 'Supabase hedefi tanımlı değil — `npm run setup:supabase` ile url + anon anahtarı bir kez yaz.',
+    };
+  const data = await postJson(`${authRoot()}/signup`, {
     email,
     password,
-    returnSecureToken: true,
+    // Uygulama kendi hesabını açar; doğrulama akışı yok (Console'da kapalı olmalı).
+    data: { email_verified: true },
   });
-  if (data.error) return { ok: false, code: String(data.error.message).split(' : ')[0], error: authErrorMessage(data.error.message) };
+  if (data.error)
+    return { ok: false, code: codeOf(data.error.message), error: authErrorMessage(String(data.error.message)) };
+  if (!data.access_token)
+    return {
+      ok: false,
+      code: 'EMAIL_CONFIRMATION_REQUIRED',
+      error: authErrorMessage('email not confirmed'),
+    };
   const session = toSession(data, email);
   await persist(session);
   return { ok: true, session };
@@ -573,102 +647,110 @@ export async function signUp(email: string, password: string): Promise<AuthResul
 export async function signIn(email: string, password: string): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
-  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış — config/firebaseApp.ts içindeki apiKey boş.' };
-  const data = await postJson(`${IK_API}:signInWithPassword?key=${encodeURIComponent(cfg.apiKey)}`, {
-    email,
-    password,
-    returnSecureToken: true,
-  });
-  if (data.error) return { ok: false, code: String(data.error.message).split(' : ')[0], error: authErrorMessage(data.error.message) };
+  if (!cfg)
+    return {
+      ok: false,
+      code: 'NOT_CONFIGURED',
+      error: 'Supabase hedefi tanımlı değil — `npm run setup:supabase` ile url + anon anahtarı bir kez yaz.',
+    };
+  const data = await postJson(`${authRoot()}/token?grant_type=password`, { email, password });
+  if (data.error)
+    return { ok: false, code: codeOf(data.error.message), error: authErrorMessage(String(data.error.message)) };
   const session = toSession(data, email);
   await persist(session);
   return { ok: true, session };
 }
 
-/** Parola değişimi: önce Firebase'de güncelle, sonra belgeyi senkron tut. */
+/** Parola değişimi: önce Supabase Auth'ta güncelle, sonra üyeyi senkron tut. */
 export async function updatePassword(newPassword: string): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
-  const cfg = resolveAuthConfig();
   const session = await restoreSession();
-  if (!cfg || !session) return { ok: false, code: 'NO_SESSION', error: 'Oturum bulunamadı.' };
-  const data = await postJson(`${IK_API}:update?key=${encodeURIComponent(cfg.apiKey)}`, {
-    idToken: session.idToken,
-    password: newPassword,
-    returnSecureToken: true,
-  });
-  if (data.error) return { ok: false, code: String(data.error.message).split(' : ')[0], error: authErrorMessage(data.error.message) };
-  await persist({
-    ...session,
-    idToken: String(data.idToken || session.idToken),
-    refreshToken: String(data.refreshToken || session.refreshToken),
-    expiresAt: Date.now() + Number(data.expiresIn || 3600) * 1000,
-  });
+  if (!session) return { ok: false, code: 'NO_SESSION', error: 'Oturum bulunamadı.' };
+  const token = (await currentIdToken()) || session.idToken;
+  const data = await postJson(
+    `${authRoot()}/user`,
+    { password: newPassword },
+    { method: 'PUT', bearer: token }
+  );
+  if (data.error)
+    return { ok: false, code: codeOf(data.error.message), error: authErrorMessage(String(data.error.message)) };
+  const merged = { ...session, ...(data.access_token ? toSession(data, session.email) : {}) };
+  await persist(merged);
   return { ok: true };
 }
 
-/** Console → Authentication → Email link template'i üzerinden sıfırlama maili. */
+/** Supabase → Authentication → URL Configuration → redirect template'i üzerinden sıfırlama maili. */
 export async function sendPasswordResetEmail(email: string): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
-  if (!cfg) return { ok: false, code: 'NOT_CONFIGURED', error: 'Firebase Auth yapılandırılmamış — config/firebaseApp.ts içindeki apiKey boş.' };
-  const data = await postJson(`${IK_API}:sendOobCode?key=${encodeURIComponent(cfg.apiKey)}`, {
-    requestType: 'PASSWORD_RESET',
+  if (!cfg)
+    return { ok: false, code: 'NOT_CONFIGURED', error: 'Supabase hedefi tanımlı değil.' };
+  const data = await postJson(`${authRoot()}/recover`, {
     email,
+    redirect_to: cfg.url,
   });
-  if (data.error) return { ok: false, code: String(data.error.message).split(' : ')[0], error: authErrorMessage(data.error.message) };
+  if (data.error)
+    return { ok: false, code: codeOf(data.error.message), error: authErrorMessage(String(data.error.message)) };
   return { ok: true };
 }
 
+/**
+ * Hesap kapatma: `members` satırını uygulama silebilir (RLS: yalnız yönetici),
+ * Auth kaydını silmek ise service_role ister. Service key istemcide bulunmadığı
+ * için burada oturum kapatılır ve Admin'in Dashboard → Authentication → Users
+ * üzerinden hesabı kaldırması gerekir; panel bu yüzden bu işlemi "yönetici onayında"
+ * olarak işaretler. (Yerel kopya bırakılmıyor.)
+ */
 export async function deleteAccount(): Promise<AuthResult> {
   await ensureAuthConfigLoaded();
-  const cfg = resolveAuthConfig();
   const session = await restoreSession();
-  if (!cfg || !session) return { ok: false, code: 'NO_SESSION', error: 'Oturum bulunamadı.' };
-  const data = await postJson(`${IK_API}:delete?key=${encodeURIComponent(cfg.apiKey)}`, {
-    idToken: session.idToken,
-  });
+  if (!session) return { ok: false, code: 'NO_SESSION', error: 'Oturum bulunamadı.' };
   await persist(null);
-  if (data.error) return { ok: false, code: String(data.error.message).split(' : ')[0], error: authErrorMessage(data.error.message) };
-  return { ok: true };
+  return {
+    ok: false,
+    code: 'ADMIN_REQUIRED',
+    error: 'Oturum kapatıldı. Auth hesabı Supabase Dashboard → Authentication → Users içinden silinir.',
+  };
 }
 
-/** Panel “test et” düğmesi: anahtar geçerli mi, Email/Password açık mı? */
+/** Panel “test et” düğmesi: hedef erişilebilir mi, auth açıksa yanıt alınıyor mu? */
 export async function probeAuth(): Promise<{ ok: boolean; note: string }> {
   await ensureAuthConfigLoaded();
   const cfg = resolveAuthConfig();
   if (!cfg)
     return {
       ok: false,
-      note: 'API anahtarı tanımlı değil — `config/firebaseApp.ts` içine yazılınca kendiliğinden aktifleşir (kullanıcıdan bir şey istenmez).',
+      note: 'Supabase hedefi tanımlı değil — `npm run setup:supabase` çalıştırılınca kendiliğinden aktifleşir (kullanıcıdan bir şey istenmez).',
     };
-  // E-posta biçimi geçerli, parola kasıtlı zayıf → kullanıcı OLUŞMAZ; ama yanıt
-  // kodu hem anahtarı hem Email/Password sağlayıcısını ayırt ettirir.
-  const data = await postJson(`${IK_API}:signUp?key=${encodeURIComponent(cfg.apiKey)}`, {
-    email: 'baglanti-testi@example.com',
-    password: 'x',
-    returnSecureToken: true,
-  });
-  const message = String(data?.error?.message || '');
-  if (!data.error) return { ok: true, note: 'Beklenmedik: test kullanıcısı oluştu, hemen sil.' };
-  const code = message.split(' : ')[0].trim().toUpperCase();
-  if (code === 'WEAK_PASSWORD' || code === 'INVALID_PASSWORD') {
-    return { ok: true, note: `API anahtarı geçerli, Email/Password sağlayıcısı açık (yanıt: ${code}).` };
-  }
-  if (code === 'INVALID_EMAIL') {
-    return { ok: true, note: 'API anahtarı geçerli; sağlayıcı durumu bu yanıttan anlaşılmıyor.' };
-  }
-  return { ok: false, note: authErrorMessage(message) };
+  const res = await fetch(`${authRoot()}/health`, { headers: { apikey: cfg.apiKey } })
+    .then(r => ({ status: r.status, ok: r.ok }))
+    .catch(() => ({ status: 0, ok: false }));
+  if (res.ok) return { ok: true, note: `Supabase Auth erişilebilir (HTTP ${res.status}); anon anahtar kabul ediliyor.` };
+  if (res.status === 401 || res.status === 403)
+    return { ok: false, note: `Hedef erişildi ama anon anahtar reddedildi (HTTP ${res.status}).` };
+  return { ok: false, note: `Supabase Auth yanıt vermedi (HTTP ${res.status || 'ağ hatası'}).` };
 }
 
-/** idToken'ı doğrula ve uid/e-posta bilgisini döndür (panel durumu için). */
-export async function lookupSelf(): Promise<{ ok: boolean; uid?: string; email?: string; emailVerified?: boolean; error?: string }> {
+/** Oturum token'ını doğrula ve uid/e-posta bilgisini döndür (panel durumu için). */
+export async function lookupSelf(): Promise<{
+  ok: boolean;
+  uid?: string;
+  email?: string;
+  emailVerified?: boolean;
+  error?: string;
+}> {
   const cfg = resolveAuthConfig();
   const session = await restoreSession();
   if (!cfg || !session) return { ok: false, error: 'Oturum yok.' };
   const token = (await currentIdToken()) || session.idToken;
-  const data = await postJson(`${IK_API}:lookup?key=${encodeURIComponent(cfg.apiKey)}`, { idToken: token });
-  if (data.error) return { ok: false, error: authErrorMessage(data.error.message) };
-  const user = Array.isArray(data.users) ? data.users[0] : null;
-  if (!user) return { ok: false, error: 'Kullanıcı bulunamadı (silinmiş olabilir).' };
-  return { ok: true, uid: String(user.localId || ''), email: String(user.email || ''), emailVerified: !!user.emailVerified };
+  const data = await postJson(`${authRoot()}/user`, null, { method: 'GET', bearer: token });
+  if (data.error) return { ok: false, error: authErrorMessage(String(data.error.message)) };
+  const user = data?.user || data;
+  if (!user?.id) return { ok: false, error: 'Kullanıcı bulunamadı (silinmiş olabilir).' };
+  return {
+    ok: true,
+    uid: String(user.id),
+    email: String(user.email || ''),
+    emailVerified: user.email_confirmed_at != null || !!user.email_verified,
+  };
 }
