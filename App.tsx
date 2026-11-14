@@ -8,6 +8,8 @@ import {
   NavigationContainer,
   DefaultTheme,
   DarkTheme,
+  LinkingOptions,
+  getStateFromPath as defaultGetStateFromPath,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -43,6 +45,50 @@ import { SqlDeliveryScreen, sqlDeliveryRequested } from './screens/SqlDeliverySc
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
+
+const linking: LinkingOptions<RootStackParamList> = {
+  prefixes: ['https://lisansui.vercel.app', 'http://localhost:8081', 'http://localhost:3000'],
+  config: {
+    screens: {
+      MainTabs: {
+        screens: {
+          HomeTab: '',
+          TipsTab: 'ipuclari',
+          ReviewTab: 'tekrar',
+          FocusStatsTab: 'istatistik',
+        },
+      },
+      CourseTopics: 'ders/:courseId?',
+      Quiz: 'test',
+      QuizResult: 'sonuc',
+      Auth: 'giris/:mode?',
+      Profile: 'profil',
+      MembershipPaywall: 'vip',
+      AdminPanel: 'admin',
+      AdminLogin: 'admin/giris',
+      AdminTopics: 'admin/konular/:courseId?',
+      AdminQuestions: 'admin/sorular/:courseId?/:topicDocId?',
+      AdminUsers: 'admin/uyeler',
+      AdminMembership: 'admin/vip',
+      AdminTips: 'admin/ipuclari',
+      AdminCourses: 'admin/dersler',
+      AdminSettings: 'admin/ayarlar',
+    },
+  },
+  getStateFromPath(path, options) {
+    const raw = String(path || '/');
+    const qIdx = raw.indexOf('?');
+    const pathname = (qIdx >= 0 ? raw.slice(0, qIdx) : raw).replace(/^\/+|\/+$/g, '');
+    const search = qIdx >= 0 ? raw.slice(qIdx) : '';
+    let mapped = `/${pathname}`;
+    if (pathname === 'uye-ol' || pathname === 'kayit') mapped = '/giris/uye-ol';
+    else if (pathname === 'sifremi-unuttum') mapped = '/giris/sifremi-unuttum';
+    else if (pathname === 'yeni-sifre') mapped = '/giris/yeni-sifre';
+    else if (pathname === 'hesabim') mapped = '/profil';
+    else if (pathname === 'yonetici') mapped = '/admin';
+    return defaultGetStateFromPath(`${mapped}${search}`, options);
+  },
+};
 
 function MainTabsNavigator() {
   const { colors } = useAppTheme();
@@ -236,7 +282,7 @@ function RootNavigator() {
           },
         ]}
       >
-        <NavigationContainer theme={navTheme}>
+        <NavigationContainer theme={navTheme} linking={linking}>
           <StatusBar style={colors.isDark ? 'light' : 'dark'} />
           <Stack.Navigator
             initialRouteName={hasPendingAuthRedirect() ? 'Auth' : 'MainTabs'}

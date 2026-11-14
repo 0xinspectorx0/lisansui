@@ -26,7 +26,21 @@ type Props = NativeStackScreenProps<RootStackParamList, 'QuizResult'>;
 const OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E'];
 
 export const QuizResultScreen: React.FC<Props> = ({ route, navigation }) => {
-  const { result } = route.params;
+  const result = route.params?.result || {
+    session: {
+      title: 'Test Sonucu',
+      courseId: 'genel' as const,
+      mode: 'normal' as const,
+      questions: [],
+    },
+    answers: {},
+    correct: 0,
+    wrong: 0,
+    blank: 0,
+    net: 0,
+    durationSec: 0,
+    clearedMistakeCount: 0,
+  };
   const { session, answers, correct, wrong, blank, net, durationSec, clearedMistakeCount } =
     result;
   const { colors } = useAppTheme();

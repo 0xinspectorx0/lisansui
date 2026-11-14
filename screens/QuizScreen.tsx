@@ -24,7 +24,16 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Quiz'>;
 const OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E'];
 
 export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
-  const { session } = route.params;
+  const session = route.params?.session || {
+    title: 'Test',
+    courseId: 'genel' as const,
+    mode: 'normal' as const,
+    questions: [],
+  };
+  const goBackSafe = useCallback(() => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('MainTabs');
+  }, [navigation]);
   const { colors } = useAppTheme();
   const admin = useAdmin();
   const {
@@ -114,7 +123,7 @@ export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
 
   const handleClosePress = () => {
     if (Object.keys(answers).length === 0) {
-      navigation.goBack();
+      goBackSafe();
       return;
     }
     setExitModalVisible(true);
@@ -128,7 +137,7 @@ export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
             Soru bulunamadı.
           </Text>
           <Pressable
-            onPress={() => navigation.goBack()}
+            onPress={goBackSafe}
             style={[styles.primaryBtn, { backgroundColor: colors.primary, marginTop: 14 }]}
           >
             <Text style={styles.primaryBtnText}>Geri Dön</Text>
@@ -543,7 +552,7 @@ export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
               <Pressable
                 onPress={() => {
                   setExitModalVisible(false);
-                  navigation.goBack();
+                  goBackSafe();
                 }}
                 style={[
                   styles.secondaryBtn,

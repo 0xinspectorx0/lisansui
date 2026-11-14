@@ -151,7 +151,11 @@ export const AdminLoginScreen: React.FC = () => {
             )}
           </View>
 
-          <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.backRow}>
+          <Pressable
+            onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('MainTabs' as never))}
+            hitSlop={10}
+            style={styles.backRow}
+          >
             <Ionicons name="chevron-back" size={14} color={colors.textMuted} />
             <Text style={[styles.backText, { color: colors.textMuted }]}>Uygulamaya dön</Text>
           </Pressable>

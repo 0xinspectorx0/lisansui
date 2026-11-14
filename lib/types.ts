@@ -91,11 +91,13 @@ export interface QuizResultPayload {
   clearedMistakeCount: number;
 }
 
+export type AuthRouteMode = 'giris' | 'uye-ol' | 'sifremi-unuttum' | 'yeni-sifre';
+
 export type RootStackParamList = {
   MainTabs: undefined;
-  CourseTopics: { courseId: CourseId };
-  Quiz: { session: QuizSessionPayload };
-  QuizResult: { result: QuizResultPayload };
+  CourseTopics: { courseId?: CourseId } | undefined;
+  Quiz: { session?: QuizSessionPayload } | undefined;
+  QuizResult: { result?: QuizResultPayload } | undefined;
   AdminLogin: undefined;
   AdminPanel: undefined;
   AdminTopics: { courseId?: CourseId; focusDocId?: string } | undefined;
@@ -105,7 +107,7 @@ export type RootStackParamList = {
   AdminCourses: undefined;
   AdminSettings: undefined;
   AdminMembership: undefined;
-  Auth: undefined;
+  Auth: { mode?: AuthRouteMode } | undefined;
   Profile: undefined;
   MembershipPaywall: undefined;
 };
