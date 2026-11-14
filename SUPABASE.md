@@ -31,9 +31,10 @@ deklare etmez, **bulamazsa hata verir** ve yazdıktan sonra dosyayı geri okuyup
 
 Anahtarın doğru projeye ait olduğu da dosyadan denetleniyor: JWT biçimindeyse `payload.ref`
 adresi, `payload.role` `anon`'u olmak zorunda (`bash scripts/db-contract.sh`, blok [1b]).
-`service_role`/secret anahtarı hiçbir yere yazılmaz; **elle** yazılırsa panel uyarır
-(`Kaynak: … • YANLIŞ ANAHTAR: service_role`), cihazda yazılırsa Auth istemcisini kurcalamadan
-dururur (`Bu anahtar yalnızca doğrulama komutları içindir`).
+`service_role`/secret anahtarı hiçbir yere yazılmaz: kurulum komutu böyle bir anahtarı
+**reddeder**, repo kopyasında bulunursa panel uyarır (`Kaynak: … • YANLIŞ ANAHTAR:
+service_role`), cihazda `EXPO_PUBLIC_*` olarak verilirse Auth istemcisi kuruluma dokunmadan
+durur (`Bu anahtar yalnızca doğrulama komutları içindir`).
 
 `npm run check:supabase` adres/anahtar sormaz: `.env.local` → `config/supabaseApp.ts`
 sırasıyla okur; hiçbir kurulum yoksa tek komutu gösterir ve 2 ile çıkar.
