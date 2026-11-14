@@ -25,7 +25,7 @@ import {
   documentsBase,
   firestoreTarget,
 } from './firebaseConfig';
-import { currentIdToken } from './authClient';
+import * as auth from './authClient';
 
 /** Çözümlenmiş hedef (panelde gösterilir; lib/firebaseConfig.ts tek kaynak). */
 export const FIRESTORE_TARGET = firestoreTarget();
@@ -70,11 +70,21 @@ export const fbMap = (fields: Record<string, FbValue>): FbValue => ({ mapValue: 
  */
 async function authHeaders(): Promise<Record<string, string>> {
   try {
-    const token = await currentIdToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    const token = await auth.currentIdToken();
+    if (!token) return {};
+    // Token Firestore hedefinin projesinden değilse (cihazda kalmış eski anahtar)
+    // HİÇ göndermeyiz: yanlış token her isteği 401'e çevirirken, kimliksiz istek
+    // kilitsiz kurallarda çalışmaya devam eder.
+    if (await auth.isForeignSessionToken()) return {};
+    return { Authorization: `Bearer ${token}` };
   } catch {
     return {};
   }
+}
+
+/** Yanlış projeden token yakalandı mı? (panel/akış bir kez bildirir, sonra sıfırlanır.) */
+export function consumedForeignTokenNotice(): boolean {
+  return auth.consumeForeignTokenNotice();
 }
 
 async function request(url: string, init?: RequestInit): Promise<Response> {

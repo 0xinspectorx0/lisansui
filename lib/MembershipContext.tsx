@@ -33,6 +33,7 @@ import {
   validateMembership,
 } from './membership';
 import { AUTH_PASSWORD_BUNDLE, hashPassword, isFirebaseAuthBundle, verifyPassword } from './crypto';
+import { diagnoseMembershipAccess } from './accessDiag';
 import * as auth from './authClient';
 import {
   CloudOutcome,
@@ -210,6 +211,18 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         // ilk Firestore isteğinin Authorization başlığıyla gitmesi için önce yükle.
         await auth.ensureAuthConfigLoaded();
         await auth.currentIdToken().catch(() => null);
+        // Cihazda kalmış eski anahtar BAŞKA projeden token veriyorsa tüm Firestore
+        // istekleri reddedilir. Fark edildiği anda temizlenir — kullanıcıdan bir şey
+        // istenmez, sonraki açılış/istek depodaki doğru config ile gider.
+        const healed = await auth.healForeignAuthProject().catch(() => ({ healed: false as const }));
+        if (healed.healed) {
+          await sessionStore.remove(SESSION_KEY);
+          applyMember(null);
+          setCloudStatus('online');
+          setCloudMessage(
+            'Cihazda kayıtlı kimlik başka bir Firebase projesine aitti; temizlendi. Yeniden giriş yapman yeterli.'
+          );
+        }
         const cached = await AsyncStorage.getItem(MEMBER_CACHE_KEY);
         const id = await sessionStore.get(SESSION_KEY);
         if (cached && !id) {
@@ -296,6 +309,20 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const clearError = useCallback(() => setError(null), []);
 
+  /**
+   * Reddedilen üyelik yazımının NEDENİNİ sorar ve tek cümle + ilk adımla döner.
+   * (Boş bir “kural engelledi” uyarısı yerine ne yapacağını söyler.)
+   */
+  const membershipDeniedMessage = useCallback(async (email?: string) => {
+    try {
+      const diag = await diagnoseMembershipAccess(email);
+      const step = diag.steps?.[0] ? ` ${diag.steps[0]}` : '';
+      return `${diag.headline}${step}`;
+    } catch {
+      return 'Firestore yazma kuralı izin vermedi: firestore.rules yayınlanmamış ya da bayat olabilir (npm run deploy:rules → Console → Rules → Publish).';
+    }
+  }, []);
+
   const signUp = useCallback<MembershipContextValue['signUp']>(
     async input => {
       setError(null);
@@ -330,6 +357,18 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             return { ok: false, reason: 'auth' };
           }
           authUid = account.session?.uid || '';
+          // Açılan hesap Firestore hedefinin projesinden mi? Değilse belge yazımı
+          // 401/403 alır; hesabı geri al + cihazdaki eski anahtarı sil.
+          if (await auth.isForeignSessionToken()) {
+            await auth.deleteAccount().catch(() => undefined);
+            const healed = await auth.healForeignAuthProject().catch(() => ({ healed: false }));
+            setError(
+              healed.healed
+                ? 'Kayıt geri alındı: cihazda kayıtlı eski Firebase anahtarı başka bir projeye aitmiş, o kayıt silindi. Şimdi tekrar “Üye ol” diyebilirsin.'
+                : 'Kayıt geri alındı: API anahtarı başka bir Firebase projesine ait. Geliştirici `config/firebaseApp.ts` içindeki anahtarı hedef projeyle eşleştirmeli.'
+            );
+            return { ok: false, reason: 'auth' };
+          }
         } else {
           const existing = await fetchMemberByEmail(emailKey);
           if (existing.ok && existing.data) {
@@ -376,9 +415,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           if (authMode) await auth.deleteAccount();
           noteCloud(created);
           if (created.reason === 'denied') {
-            setError(
-              'Firestore yazma kuralı izin vermedi. Üyelikler yalnızca Firestore’da tutulduğu için kayıt ancak `firestore.rules` içindeki memberships izni yayınlandığında çalışır.'
-            );
+            setError(await membershipDeniedMessage(emailKey));
           } else {
             setError(created.error);
           }
@@ -469,7 +506,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             noteCloud(created);
             setError(
               missingDoc && created.reason === 'denied'
-                ? 'Üyelik belgen yok ve yazma kuralı da izin vermedi: firestore.rules yayınlanmamış olabilir (npm run deploy:rules → Console → Rules → Publish).'
+                ? await membershipDeniedMessage(emailKey)
                 : created.error
             );
             return { ok: false, reason: created.reason };

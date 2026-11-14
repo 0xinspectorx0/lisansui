@@ -61,6 +61,7 @@ import {
 import {
   authConfigSource,
   clearDeviceApiKey,
+  healForeignAuthProject,
   currentSession,
   ensureAuthConfigLoaded,
   isAuthConfigured,
@@ -72,6 +73,9 @@ import {
   signOut as authSignOut,
 } from '../lib/authClient';
 import { hasRepoApiKey } from '../config/firebaseApp';
+import { FIRESTORE_RULES_LINES, FIRESTORE_RULES_TEXT } from '../config/firestoreRulesCopy';
+import { diagnoseMembershipAccess, type AccessDiag } from '../lib/accessDiag';
+import { copyText } from '../lib/clipboard';
 
 export const AdminSettingsScreen: React.FC = () => {
   const { colors } = useAppTheme();
@@ -141,6 +145,43 @@ export const AdminSettingsScreen: React.FC = () => {
       hasRepoApiKey()
         ? 'Cihaz kaydı silindi — depodaki anahtar (config/firebaseApp.ts) kullanılmaya devam ediyor.'
         : 'Cihaz kaydı silindi. Depoda anahtar yoksa yerel PBKDF2 moduna dönülür.'
+    );
+  };
+
+  /* erişim tanısı: “kural engelledi” uyarısının GERÇEK nedeni */
+  const [diag, setDiag] = useState<{ busy: boolean; data: AccessDiag | null }>({
+    busy: false,
+    data: null,
+  });
+  const [rulesCopied, setRulesCopied] = useState<string | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
+
+  const runAccessDiag = async () => {
+    setDiag({ busy: true, data: null });
+    try {
+      // Önce kendi kendine iyileşebilen durumu (yanlış projeden token) temizle, sonra ölç.
+      const healed = await healForeignAuthProject().catch(() => ({
+        healed: false as const,
+        note: undefined as string | undefined,
+      }));
+      resetAuthConfigCache();
+      await ensureAuthConfigLoaded();
+      if (healed.healed) setRulesCopied(healed.note || 'Cihazdaki yabancı projeli anahtar kaydı temizlendi.');
+      const data = await diagnoseMembershipAccess();
+      setDiag({ busy: false, data });
+    } catch (e) {
+      setDiag({ busy: false, data: null });
+      setRulesCopied(`Tanı yapılamadı: ${String(e)}`);
+    }
+  };
+
+  const copyRulesText = async () => {
+    const res = await copyText(FIRESTORE_RULES_TEXT);
+    setRulesOpen(true);
+    setRulesCopied(
+      res === 'copied'
+        ? `${FIRESTORE_RULES_LINES} satırlık kural metni panoya kopyalandı — Console → Firestore → Rules → yapıştır → Publish.`
+        : 'Panoya kopyalanamadı. Aşağıdaki metne uzun bas, tümünü seç ve kopyala.'
     );
   };
 
@@ -601,6 +642,91 @@ export const AdminSettingsScreen: React.FC = () => {
               />
             }
           />
+        </AdminCard>
+
+        {/* Erişim tanısı + kuralları yayınla */}
+        <AdminSectionTitle
+          label="Erişim tanısı ve kurallar"
+          hint="Üyelik okuma/yazma reddedilirse nedeni burada ölçülür: kural yayınlanmamış mı, bayat mı, kimlik başka projeden mi, kilit mi açık. Hiçbir şey yazılmaz, yalnızca üç okuma yapılır."
+        />
+        <AdminCard>
+          <AdminRow
+            icon="medkit-outline"
+            title="Neden engellendi?"
+            subtitle={
+              diag.busy
+                ? 'Ölçülüyor…'
+                : diag.data
+                  ? diag.data.headline
+                  : 'Test edince yazar: içerik okuması, üyelik okuması ve kilit durumu ayrı ayrı denenir.'
+            }
+            right={
+              <AdminButton
+                small
+                tone={
+                  !diag.data || diag.data.cause === 'ok'
+                    ? 'primary'
+                    : diag.data.cause === 'offline'
+                      ? 'neutral'
+                      : 'danger'
+                }
+                label={diag.busy ? 'Ölçülüyor' : 'Tanı'}
+                disabled={diag.busy}
+                onPress={() => void runAccessDiag()}
+              />
+            }
+          />
+          {diag.data && diag.data.cause !== 'ok' ? (
+            <View style={{ paddingHorizontal: 2, gap: 2, marginBottom: 6 }}>
+              {diag.data.steps.map((step, i) => (
+                <Text key={`step-${i}`} style={{ fontSize: 10.5, color: colors.textSecondary, lineHeight: 16 }}>
+                  {i + 1}) {step}
+                </Text>
+              ))}
+              <Text style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 15 }}>
+                {`proje ${diag.data.detail.projectId} • db ${diag.data.detail.databaseId} • ${diag.data.detail.membershipsPath} • içerik ${diag.data.detail.contentStatus} • üyelik ${diag.data.detail.membershipStatus} • kilit ${diag.data.detail.lockdown}`}
+              </Text>
+            </View>
+          ) : null}
+          {diag.data && diag.data.cause === 'ok' ? (
+            <Text style={{ fontSize: 11, color: colors.success, lineHeight: 16, marginBottom: 6 }}>
+              Okuma/yazma yolu açık görünüyor.
+            </Text>
+          ) : null}
+          <AdminRow
+            icon="copy-outline"
+            title="firestore.rules metnini kopyala"
+            subtitle="Console → Firestore → Rules → yapıştır → Publish. Uygulamadaki kuralların aynısı; telefondayken de tek adımla yayınlanır."
+            right={
+              <AdminButton small tone="neutral" label="Kopyala" onPress={() => void copyRulesText()} />
+            }
+          />
+          <AdminRow
+            icon="document-text-outline"
+            title="Kural metnini göster"
+            subtitle={`${FIRESTORE_RULES_LINES} satır — kopyalanamıyorsa uzun basıp seçebilirsin`}
+            right={
+              <AdminButton
+                small
+                tone="neutral"
+                label={rulesOpen ? 'Gizle' : 'Göster'}
+                onPress={() => setRulesOpen(v => !v)}
+              />
+            }
+          />
+          {rulesOpen ? (
+            <Text
+              selectable
+              style={{ fontSize: 9.5, color: colors.text, fontFamily: 'monospace', lineHeight: 14, marginBottom: 6 }}
+            >
+              {FIRESTORE_RULES_TEXT}
+            </Text>
+          ) : null}
+          {rulesCopied ? (
+            <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16, marginBottom: 6 }}>
+              {rulesCopied}
+            </Text>
+          ) : null}
         </AdminCard>
 
         {/* Firebase Auth */}

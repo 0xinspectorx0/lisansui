@@ -312,6 +312,12 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
   }
   ok(!vis.includes('EXPO_PUBLIC_FIREBASE_API_KEY'), 'panel kullanıcıya ortam değişkeni ezberletmiyor');
   ok(!/Bu cihazda kayıtlı eski anahtar/.test(vis), 'cihaz anahtarı yoksa o satır da görünmüyor');
+  ok(vis.includes('Erişim tanısı ve kurallar'), '“Erişim tanısı ve kurallar” bölümü var');
+  ok(vis.includes('Neden engellendi?'), 'tanı satırı görünüyor');
+  ok(vis.includes('firestore.rules metnini kopyala'), 'kuralları kopyalama girişi var');
+  ok(vis.includes('Kural metnini göster'), 'kural metni gizli-göster satırı var');
+  ok(!vis.includes('rules_version'), 'kural metni varsayılan olarak basılmıyor (sadece “Göster” deyince)');
+  ok(!vis.includes('API anahtarını'), 'tanı bölümü kullanıcıdan anahtar istemiyor');
 }
 
 cleanup();
