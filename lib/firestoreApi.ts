@@ -93,15 +93,70 @@ export function consumedForeignTokenNotice(): boolean {
 }
 
 async function request(url: string, init?: RequestInit): Promise<Response> {
-  const auth = await authHeaders();
-  return fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...((init?.headers as object) || {}),
-      ...auth,
-    },
-  });
+  const authHeader = await authHeaders();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...((init?.headers as object) || {}),
+    ...authHeader,
+  };
+  const key = auth.webApiKey();
+  const withKey = (u: string) => `${u}${u.includes('?') ? '&' : '?'}key=${encodeURIComponent(key)}`;
+  if (key && useApiKeyParam) return fetch(withKey(url), { ...init, headers });
+  const res = await fetch(url, { ...init, headers });
+  // Kimliksiz istekler bazı kurulumlarda API geçidinden geçmez (`403/401`) — kuralla
+  // karışır ve kullanıcı boşuna “kural engelledi” görür. Varsaymak yerine DENERİZ:
+  // red alırsak anahtarlı yeniden dener, çalışırsa artık hep anahtarla gideriz.
+  if (!res.ok && key && (res.status === 401 || res.status === 403) && !(await isRulesDenial(res))) {
+    try {
+      const retry = await fetch(withKey(url), { ...init, headers });
+      if (retry.ok) {
+        useApiKeyParam = true;
+        apiKeyParamNotice = true;
+        return retry;
+      }
+    } catch {
+      /* ilk yanıtı döndürürüz */
+    }
+  }
+  return res;
+}
+
+/**
+ * `Missing or insufficient permissions` Firestore KURALLARINDAN gelir ve anahtarla
+ * ilgisizdir — böyle bir yanıtta anahtarlı yeniden denemenin anlamı yok (boşuna
+ * gidiş-dönüş yapmayız). Gövdeyi okumak için `clone()` kullanılır: yanıt gövdesi
+ * çağıran tarafa dokunulmadan kalır.
+ */
+async function isRulesDenial(res: Response): Promise<boolean> {
+  try {
+    const clone = typeof (res as any)?.clone === 'function' ? (res as any).clone() : null;
+    if (!clone) return false;
+    const text = String(await clone.text());
+    return /Missing or insufficient permissions/i.test(text);
+  } catch {
+    return false;
+  }
+}
+
+let useApiKeyParam = false;
+let apiKeyParamNotice = false;
+
+/** Anahtar parametresi zorunlu oldu mu? (bir kez bildirilir) */
+export function consumeApiKeyParamNotice(): boolean {
+  const v = apiKeyParamNotice;
+  apiKeyParamNotice = false;
+  return v;
+}
+
+/** Teşhis: anahtarlı gönderim tercih edildi mi? (raporda gösterilir) */
+export function isApiKeyParamPreferred(): boolean {
+  return useApiKeyParam;
+}
+
+/** Firestore REST isteğinin gövdesiz yoklaması (panel raporunda kullanılır). */
+export function firestoreRequestUrl(path: string, query?: string): string {
+  const base = docUrl(path);
+  return query ? `${base}?${query}` : base;
 }
 
 export type CloudFailure = {
