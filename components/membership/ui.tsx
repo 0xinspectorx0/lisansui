@@ -69,9 +69,9 @@ export const CloudStatusBanner: React.FC<{ compact?: boolean }> = ({ compact }) 
         )}
         {!compact && denied && (
           <Text style={[styles.bannerText, { color: colors.textMuted }]}>
-            Repo’daki `firestore.rules` dosyasındaki bloğu Supabase Konsol → Supabase → Rules
-            bölümüne kopyalayıp “Publish” yapman yeterli. Üyelik kayıtları yalnızca Supabase’da
-            tutulduğu için bu izin olmadan kayıt açılamaz.
+            Admin → Ayarlar → “SQL — tablolar ve RLS” bölümündeki SQL metnini Supabase SQL
+            Editor’de çalıştırman yeterli. Üyelik kayıtları yalnızca Supabase’de tutulduğu için
+            tablolar ve RLS kuralları olmadan kayıt açılamaz.
           </Text>
         )}
       </View>

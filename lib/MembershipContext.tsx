@@ -450,7 +450,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const draft: MemberDoc = {
           ...emptyMember(emailKey),
           // Belge id'si normalize e-posta olduğu için alanı da normalize tutuyoruz;
-          // firestore.rules `id == email` eşitliğini denetliyor.
+          // SQL kısıtı (`members_id_is_email`) `id = email` eşitliğini denetliyor.
           email: emailKey,
           emailNormalized: emailKey,
           ...(authUid ? { authUid } : {}),

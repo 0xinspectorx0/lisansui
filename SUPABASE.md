@@ -1,8 +1,7 @@
-# Supabase kurulumu (Firestore bırakıldı)
+# Supabase kurulumu
 
 Uygulamanın **tüm** verisi ve **tüm** ayarı Supabase'de: üyeler, onay/kota politikası,
-ders/konu/soru içeriği, test sonuçları ve kişisel ilerleme. Firestore, `firestore.rules`,
-`firebase.json` ve Console'dan "Publish" akışı depodan kaldırıldı; yetki kuralları artık
+ders/konu/soru içeriği, test sonuçları ve kişisel ilerleme. Yetki kuralları
 `supabase/migrations/0001_init.sql` içinde (RLS + bekçi fonksiyonları).
 
 ## 1) Bir kez: hedefi depoya yaz
@@ -147,7 +146,7 @@ npx expo start --clear
 ## Üye hesabı ve parola
 
 Kimlik doğrulama Supabase Auth'dadır; uygulamada parola hash'i tutulmaz.
-Firestore döneminde oluşturulmuş hesaplarda parola bizim hash'imizdi; o üyeler
+Eski cihaz hesaplarında parola yerel hash idi; o üyeler
 **bir kez** "Parolamı unuttum" ile Supabase Auth hesabı açar, üyelik satırı
 (`status`, `vip`, sayaçlar) olduğu gibi kalır.
 

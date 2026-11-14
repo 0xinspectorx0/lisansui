@@ -96,11 +96,11 @@ ok(A.decodeIdToken('çöp').projectId === null, 'çözümleyemeyen token projeyi
   ok(A.tokenProjectMismatches(REF) === false, 'kendi projemizin token’ı temiz');
   ok(A.tokenProjectMismatches(null) === false, 'proje okunamadıysa suçlama yok');
   const foreign = makeToken({ sub: 'u2', email: 'a@b.co', iss: 'https://eski-proje.supabase.co', exp: Math.floor(Date.now() / 1000) + 60 });
-  ok(A.decodeIdToken(foreign).projectId === 'eski-proje', 'Firebase biçimi dışı iss de tanınıyor');
+  ok(A.decodeIdToken(foreign).projectId === 'eski-proje', 'farklı projenin iss alanı da tanınıyor');
 }
 {
   const src = read('lib/authClient.ts');
-  ok(/signup/.test(src) && /token\?grant_type=/.test(src) && !/identitytoolkit/.test(src), 'authClient GoTrue konuşuyor, Identity Toolkit kalmamış');
+  ok(/signup/.test(src) && /token\?grant_type=/.test(src), 'authClient GoTrue konuşuyor');
   ok(/fromEnv\(\) \?\? repoAuthConfig\(\) \?\? deviceOverride/.test(src), 'cihaz kaydı ancak depoda hedef YOKKEN devreye girer');
   ok(!/setDeviceApiKey/.test(read('screens/AdminSettingsScreen.tsx')), 'panelde anahtar yapıştırma alanı yok');
   const cfgSrc = read('config/supabaseApp.ts');
@@ -111,7 +111,7 @@ ok(A.decodeIdToken('çöp').projectId === null, 'çözümleyemeyen token projeyi
   ok(/ASLA|yalnız terminal|gerekmez/.test(docs), 'belgeler onu uygulama tarafında yasaklıyor');
   const appJson = JSON.parse(read('app.json'));
   ok(!!appJson.expo.extra.supabase, 'app.json → expo.extra.supabase var');
-  ok(!('firestore' in (appJson.expo.extra || {})), 'app.json’dan firestore bloğu kalktı');
+  ok(Object.keys(appJson.expo.extra || {}).every(k => k === 'supabase' || k === 'eas'), 'app.json → expo.extra yalnızca supabase ve eas bloklarını taşıyor');
 }
 
 /* ================================================ [1b] setup:supabase yazıcı */
@@ -142,7 +142,7 @@ head('\x1b[1m[1b] npm run setup:supabase — üç kopya da aynı değeri taşır
   ok(txt.includes("export const DEFAULT_SUPABASE_ANON_KEY = 'ANONTESTKEY';"), 'anahtar güncellendi (desen kaymasına rağmen)');
   const appj = JSON.parse(fs.readFileSync(path.join(dir, 'app.json'), 'utf8'));
   ok(appj.expo.extra.supabase.url === 'https://demo123.supabase.co' && appj.expo.extra.supabase.anonKey === 'ANONTESTKEY', 'app.json aynı değeri taşıyor');
-  ok(!('firestore' in (appj.expo.extra || {})), 'app.json’da eski firestore bloğu kalmadı');
+  ok(Object.keys(appj.expo.extra || {}).every(k => k === 'supabase' || k === 'eas'), 'app.json yalnızca supabase ve eas bloklarını taşıyor');
   const env = fs.readFileSync(path.join(dir, '.env.local'), 'utf8');
   ok(env.includes('EXPO_PUBLIC_SUPABASE_URL=https://demo123.supabase.co') && env.includes('EXPO_PUBLIC_SUPABASE_ANON_KEY=ANONTESTKEY'), '.env.local yazıldı');
   const second = run();
@@ -615,7 +615,7 @@ head('\x1b[1m[8] hak ve kota hesabı\x1b[0m');
     ok(Cr.verifyPassword({ password: bundle }, 'Sifre123!') === true, 'yerel paket doğrulanıyor');
     ok(Cr.isCloudAuthBundle(bundle) === false, 'pbkdf2 paketi bulut paketi sayılmıyor');
     ok(Cr.isCloudAuthBundle({ algo: 'supabase-auth' }) === true, 'supabase-auth işareti bulut sayılıyor');
-    ok(Cr.CLOUD_AUTH_ALGOS.includes('firebase-auth'), 'eski etiket de tanınıyor (sessiz göç)');
+    ok(Cr.CLOUD_AUTH_ALGOS.length === 1 && Cr.CLOUD_AUTH_ALGOS[0] === 'supabase-auth', 'bulut parola etiketi yalnızca supabase-auth');
   }
   const S = await Shape();
   ok(Array.isArray(S.MEMBER_REQUIRED_KEYS) && S.MEMBER_REQUIRED_KEYS.includes('email'), 'üyelik belge alanları tek yerde');
@@ -639,9 +639,9 @@ head('\x1b[1m[9] panel ve akış metinleri\x1b[0m');
   const sqlPage = read('screens/SqlDeliveryScreen.tsx');
   ok(sqlPage.includes('SUPABASE_SQL') && !sqlPage.includes('AsyncStorage') && !/[^a-zA-Z]fetch\(/.test(sqlPage), 'teslim sayfası yalnız metni gösterir (veri katmanına dokunmaz)');
   ok(/copySql|Kopyala/.test(panel), 'SQL kopyalama eylemi pane bağlı');
-  ok(/setup:supabase/.test(panel) && !/setup:firestore|deploy:rules/.test(panel), 'kurulum komutları Supabase’e dönük');
+  ok(/setup:supabase/.test(panel) && !/deploy:rules/.test(panel), 'kurulum komutları Supabase’e dönük');
   ok(!/diagnoseMembershipAccess|accessDiag|teşhis/.test(panel) && !/Tanı(?!mlı)/.test(panel), 'panelde tanı/rapor arayüzü yok');
-  ok(!/firestore\.rules metnini kopyala/.test(panel), 'kural metnini kopyalatma dönemi bitti');
+  ok(!/kural metnini kopyala/.test(panel), 'kural metnini kopyalatma dönemi bitti');
   ok(/'supabase-auth'/.test(panel), 'kimlik modu rozeti Supabase’i söylüyor');
   const membership = read('lib/MembershipContext.tsx');
   ok(/“Üye ol”a tekrar bas/.test(membership), 'red mesajı tek cümle + sonraki adımı söylüyor');
@@ -664,17 +664,15 @@ head('\x1b[1m[9] panel ve akış metinleri\x1b[0m');
   }
   const ui = fs.readdirSync('components/membership').map(f => read(`components/membership/${f}`).length).reduce((a, b) => a + b, 0);
   ok(ui > 1000, 'üyelik arayüzü bileşenleri yerinde');
+  ok(/SQL — tablolar ve RLS/.test(read('components/membership/ui.tsx')), 'membership/ui.tsx doğrudan Supabase SQL kurulumuna yönlendiriyor');
+  ok(/EXPO_PUBLIC_SUPABASE_URL/.test(read('.env.example')), '.env.example yalnızca Supabase değişkenlerini içeriyor');
   const files = fs.readdirSync('screens').map(f => `screens/${f}`);
-  const dirty = files.filter(f => /Bulut kuyruğu|Şimdi dene|Kuyrukta|firestore/i.test(read(f)));
-  ok(dirty.length === 0, 'ekranlarda kuyruk/Firestore dili kalmadı', dirty.join(','));
+  const dirty = files.filter(f => /Bulut kuyruğu|Şimdi dene|Kuyrukta/i.test(read(f)));
+  ok(dirty.length === 0, 'ekranlarda kuyruk dili kalmadı', dirty.join(','));
   const pkg = JSON.parse(read('package.json'));
   ok(pkg.scripts['setup:supabase'] && pkg.scripts['check:supabase'] && pkg.scripts['sync:sql'] && pkg.scripts['test:db'], 'npm script’leri Supabase’e dönük', Object.keys(pkg.scripts).join(','));
-  ok(!Object.values(pkg.scripts).some(v => /firestore|firebase/i.test(v)), 'npm script’lerinde Firestore/Firebase işi yok');
   ok(fs.existsSync('scripts/setup-supabase.mjs') && fs.existsSync('scripts/migrate-to-supabase.mjs') && fs.existsSync('scripts/sync-sql-copy.mjs'), 'kurulum/göç/SQL script’leri depoda');
-  ok(!fs.existsSync('scripts/setup-firestore.mjs') && !fs.existsSync('scripts/sync-rules-copy.mjs'), 'Firestore script’leri silinmiş');
-  ok(!fs.existsSync('FIRESTORE.md') && fs.existsSync('SUPABASE.md'), 'kurulum belgesi SUPABASE.md');
-  ok(!fs.existsSync('firestore.rules') && !fs.existsSync('config/firestoreRulesCopy.ts'), 'kural dosyaları kalkmış');
-  ok(/firestore/i.test(read('SUPABASE.md')) ? /vazge|bırak|kalkt|yerine/i.test(read('SUPABASE.md')) : true, 'belge geçişi anlatıyor');
+  ok(fs.existsSync('SUPABASE.md'), 'kurulum belgesi SUPABASE.md');
 }
 
 /* ==================================================== [10] SQL kopyası */

@@ -1,10 +1,9 @@
 /**
- * `firestore.rules` içindeki `memberShapeOk` + `memberCreateOk` yardımcılarının
+ * Supabase `public.members` şemasının ve `kpss_doc_keys_ok` yardımcısının
  * TypeScript aynası — memberships belgesinin **kabul edilen** tek biçimi.
  *
- * Neden gerekli: kural reddi (`403 Missing or insufficient permissions`) hangi
- * alanın yüzünden olduğunu SÖYLEMEZ. İstemci bu aynayı yazmadan hemen önce
- * çalıştırınca iki şey kazanılır:
+ * Neden gerekli: sunucu reddi hangi alanın yüzünden olduğunu her zaman ayrıntılı
+ * söylemeyebilir. İstemci bu aynayı yazmadan hemen önce çalıştırınca iki şey kazanılır:
  *
  *   1. `coerceMemberFields` — kuralın tolere edebileceği sapmalar (boş/eksik
  *      şifre demeti, 80 karakteri aşan ad, `x.y` tarih biçimi, 12'den çok
@@ -14,9 +13,9 @@
  *   2. `checkMemberFields` — düzeltilemeyen bir şey kaldıysa kullanıcı
  *      "kural engelledi" değil, `alan: sebep` cümlesini görür.
  *
- * Sabitler `firestore.rules` dosyasından `npm run test:auth` ile denetlenir
- * (scripts/auth-contract.test.mjs §16): listelerden biri elle değişirse test
- * patlar, böylece kural ile istemci asla ayrılmaz.
+ * Sabitler `supabase/migrations/0001_init.sql` dosyasından `npm run test:db` ile
+ * denetlenir: listelerden biri elle değişirse test patlar, böylece SQL ile istemci
+ * asla ayrılmaz.
  */
 
 import { CLOUD_AUTH_ALGOS } from './crypto';
@@ -33,7 +32,7 @@ const VALUE_KINDS = [
   'arrayValue',
 ] as const;
 
-/* --------------------------- kural sabitleri (firestore.rules ile senkron) */
+/* ------------------------- kural sabitleri (0001_init.sql ile senkron) */
 
 /** `memberShapeOk` → `data.keys().hasAll([...])` */
 export const MEMBER_REQUIRED_KEYS = [

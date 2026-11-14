@@ -196,7 +196,6 @@ function patchAppJson(raw, cfg) {
   const json = raw ? JSON.parse(raw) : {};
   json.expo = json.expo || {};
   json.expo.extra = { ...(json.expo.extra || {}), supabase: cfg };
-  delete json.expo.extra?.firestore; // eski düzen artık geçerli değil
   return JSON.stringify(json, null, 2) + '\n';
 }
 

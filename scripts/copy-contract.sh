@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/contentCopy.ts sözleşme testi — sahte Firestore REST, ağ gerekmez.
+# lib/contentCopy.ts sözleşme testi — sahte Supabase REST, ağ gerekmez.
 # Çalıştır: npm run test:copy
 set -e
 cd "$(dirname "$0")/.."

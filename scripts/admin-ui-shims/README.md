@@ -9,7 +9,7 @@ dosyalar yalnızca o test içindir ve uygulamada kullanılmaz:
 | `icons.js` | `@expo/vector-icons/Ionicons` → `data-icon` yazan `<i>` (font yok) |
 | `safe-area.js` | `SafeAreaView` / `useSafeAreaInsets` |
 | `navigation.js` | `useNavigation` / `useRoute` — `globalThis.__UI_ROUTE__` ile param verilir |
-| `async-storage.js` | bellek içi AsyncStorage (firebase/ekosistem yok) |
+| `async-storage.js` | bellek içi AsyncStorage (ağ/ekosistem yok) |
 | `admin-context.js` | `useAdmin()` — sabit 5 soruluk konu + çağıran kaydedici mutasyonlar |
 | `admin-gate.js` | PIN kapısı açılır (çocuklar render edilir) |
 | `plain.js` | iç içe Proxy stub — Ayarlar ekranının bağladığı onlarca alan (`settings.*`, `planCopy()`, `readAdminList()` …) undefined'a çarpmadan render edilir |
@@ -17,6 +17,6 @@ dosyalar yalnızca o test içindir ve uygulamada kullanılmaz:
 
 [5] bölümü `screens/AdminSettingsScreen.tsx` için gölge üretirken stub modülleri
 `TMP/stubs/` içinde otomatik yazıyor: ekranda import edilen her isim `plain.js`
-(veya `use*` ise `neutralHook`) export'una bağlanıyor. Amaç: panelde Firebase
-anahtar giriş alanı kalmadığını, kaynak satırının (`config/firebaseApp.ts`) doğru
+(veya `use*` ise `neutralHook`) export'una bağlanıyor. Amaç: panelde anahtar
+giriş alanı kalmadığını, kaynak satırının (`config/supabaseApp.ts`) doğru
 görüntülendiğini gerçek render üzerinden kanıtlamak.

@@ -4,8 +4,7 @@
  * Panel "Diğer projeden içeriği kopyala" kartı bunu kullanır; terminalde script
  * çalıştırmaya gerek kalmasın diye akış uygulamanın içine alındı.
  *
- * Kapsam: içerik Firestore'dan tamamen koptu. Kalan tek gerçek senaryo aynı
- * şemaya sahip İKİ Supabase projesi arasında taşımadır (geliştirme → üretim).
+ * Kapsam: aynı şemaya sahip İKİ Supabase projesi arasında taşımadır (geliştirme → üretim).
  * Hedef her zaman `config/supabaseApp.ts`'teki projedir; kaynak adresi panele
  * yazılır ve YALNIZ OKUMA için kullanılır. Kaynağın anon anahtarı gerekmez:
  * içerik satırları RLS'de herkese açık okunur (yazma değil).

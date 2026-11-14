@@ -205,7 +205,7 @@ const num = (v: unknown): FbValue => {
 const b = (v: unknown): FbValue => ({ booleanValue: !!v });
 
 /**
- * Kural defteri: çıktı `firestore.rules` içindeki `memberShapeOk` denetiminden
+ * Kural defteri: çıktı Supabase `public.members` şemasının denetiminden
  * geçer (`lib/memberShape.ts` aynası). `coerceMemberFields` yazmadan hemen önce
  * reddedilecek sapmaları düzelttiği için "kural yazmayı reddetti" sınıfı hatalar
  * oluşmaz; düzeltilemeyeni ise `checkMemberFields` alan adıyla bildirir.

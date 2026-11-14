@@ -1,10 +1,9 @@
 /**
  * Self-contained SHA-256 + HMAC + PBKDF2 (no native crypto dependency).
  *
- * Membership secrets must be verifiable by simply reading Firestore documents,
- * so we cannot rely on Firebase Identity Toolkit. This module gives the app the
- * same primitive (password-based key derivation) on web and React Native with
- * identical output, which is what makes the "cloud only" membership possible.
+ * Gives the app password-based key derivation on web and React Native with
+ * identical output for offline/local credential verification when Supabase Auth
+ * is not active.
  *
  * NOTE: this is app-level credential protection, not a hardened KMS. The
  * iteration counts are deliberately modest so Hermes stays responsive.
@@ -181,18 +180,15 @@ export interface PasswordBundle {
   salt: string;
   /** Kept in the record so any device can recompute the same verifier. */
   iterations: number;
-  /** `firebase-auth` = parola Firebase Auth'ta doğrulanır, belgede hash tutulmaz. */
-  algo: 'pbkdf2-sha256' | 'supabase-auth' | 'firebase-auth';
+  /** `supabase-auth` = parola Supabase Auth'ta doğrulanır, belgede hash tutulmaz. */
+  algo: 'pbkdf2-sha256' | 'supabase-auth';
 }
 
 /**
  * Supabase Auth kullanılırken üyelik satırına yazılan işaretçi.
  * Doğrulama GoTrue'da (Supabase Auth) yapılır; Postgres'te hash/salt TUTULMAZ.
- * `algo: 'firebase-auth'` eski satırların işaretçisidir — tanım gereği aynı
- * anlama gelir (bulut doğrulaması), böylece eski projeden taşınan üyeler
- * giriş yapmaya devam edebilir.
  */
-export const CLOUD_AUTH_ALGOS: readonly string[] = ['supabase-auth', 'firebase-auth'];
+export const CLOUD_AUTH_ALGOS: readonly string[] = ['supabase-auth'];
 
 export const AUTH_PASSWORD_BUNDLE: PasswordBundle = {
   verifier: '',
@@ -205,9 +201,6 @@ export const AUTH_PASSWORD_BUNDLE: PasswordBundle = {
 export function isCloudAuthBundle(record?: { algo?: string } | null): boolean {
   return CLOUD_AUTH_ALGOS.includes(String(record?.algo || ''));
 }
-
-/** @deprecated eski ad; `isCloudAuthBundle` ile aynı şey. */
-export const isFirebaseAuthBundle = isCloudAuthBundle;
 
 const ITERATIONS = 1200;
 

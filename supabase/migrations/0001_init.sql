@@ -1,9 +1,8 @@
 -- =============================================================================
 -- KPSS Asistanı — Supabase (Postgres): şema, kısıtlar, yetki kuralları (RLS)
 -- =============================================================================
--- Uygulamanın TEK veri sözleşmesi. Firebase (Firestore + REST kuralları) bırakıldı;
--- yetki denetimi artık burada: RLS politikaları + yazma bekçileri (trigger) +
--- CHECK kısıtları + alan-seti denetimi. `firestore.rules` diye bir şey yok.
+-- Uygulamanın TEK veri sözleşmesi. Yetki denetimi burada: RLS politikaları +
+-- yazma bekçileri (trigger) + CHECK kısıtları + alan-seti denetimi.
 --
 -- Yayına alma (geliştirici işi — depoda CI yok, git push SQL uygulamaz):
 --   A) Supabase Dashboard → SQL Editor → bu dosyanın TAM metnini yapıştır → Run

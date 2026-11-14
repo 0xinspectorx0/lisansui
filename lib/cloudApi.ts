@@ -71,10 +71,10 @@ export const fbMap = (fields: Record<string, FbValue>): FbValue => ({ mapValue: 
 /* ------------------------------------------------------------------ fetch */
 
 /**
- * Supabase Auth bağlıysa (config/supabaseApp.ts ya da EXPO_PUBLIC_FIREBASE_API_KEY)
+ * Supabase Auth bağlıysa (config/supabaseApp.ts ya da EXPO_PUBLIC_SUPABASE_ANON_KEY)
  * her isteğe idToken eklenir;
- * böylece firestore.rules üyelik belgelerini `request.auth.uid` ile koruyabilir.
- * Token alınamazsa istek kimliksiz gider (eski davranış) ve kurallar izin verirse çalışır.
+ * böylece Supabase RLS kuralları üyelik satırlarını oturum kimliği ile koruyabilir.
+ * Token alınamazsa istek kimliksiz gider ve RLS izin verirse çalışır.
  */
 /**
  * Oturum token'ı sorununa işaret eden yanıt metinleri. Bunlar KURAL reddinden
@@ -312,8 +312,8 @@ export async function listMembers(): Promise<MemberListResult> {
 /* ------------------------------------------- üyelik yazmaları (kural aynalı) */
 
 /**
- * memberships yazmalarının tek kapısı. Gövde, `firestore.rules` içindeki
- * `memberShapeOk` denetiminin TypeScript aynasından (`lib/memberShape.ts`) geçer:
+ * memberships yazmalarının tek kapısı. Gövde, SQL'deki `kpss_doc_keys_ok`
+ * ve satır kısıtlarının TypeScript aynasından (`lib/memberShape.ts`) geçer:
  *   • düzeltilebilen sapmalar (bozuk/boş şifre demeti, 80 karakteri aşan ad,
  *     12'den çok kullanım girdisi, ondalık sayaç) YAZMADAN ÖNCE düzeltilir;
  *   • düzeltilemeyenden `create` reddedilir ve hangi ALANIN neden engellediği

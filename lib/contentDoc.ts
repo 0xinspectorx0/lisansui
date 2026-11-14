@@ -3,7 +3,7 @@
  *
  * Tohumlama (`contentSeed`) ile panel düzenlemelerinin anlık yazması
  * (`cloudWrite`) aynı builder'ı kullanır: biçim iki yerde ayrı ayrı tanımlanırsa
- * `firestore.rules → contentWriteOk` ikinci yazmayı reddeder ve panel
+ * `kpss_doc_keys_ok` ikinci yazmayı reddeder ve panel
  * düzenlemesi buluta hiç düşmez. Bu modül RN/Expo'ya dokunmaz; hafiftir.
  */
 import { collectionPath } from './supabaseConfig';

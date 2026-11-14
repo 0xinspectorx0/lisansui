@@ -363,10 +363,9 @@ function b64urlDecode(input: string): string {
 
 export interface IdTokenInfo {
   /**
-   * Token'ı VEREN proje. Supabase JWT'lerinde `iss: https://<ref>.supabase.co`;
-   * eski Firebase kurulumlarında `iss: https://securetoken.google.com/<projectId>`.
-   * İkisini de tanır — amaç aynı: yanlış projeden bir oturumla tüm istekleri
-   * reddedilir hâlde dolaşmamak. Okunamazsa null.
+   * Token'ı VEREN proje. Supabase JWT'lerinde `iss: https://<ref>.supabase.co`.
+   * Yanlış projeden bir oturumla tüm istekleri reddedilir hâlde dolaşmamak için
+   * kullanılır. Okunamazsa null.
    */
   projectId: string | null;
   email: string;
@@ -382,8 +381,7 @@ export function decodeIdToken(token: string): IdTokenInfo {
   try {
     const payload = JSON.parse(b64urlDecode(parts[1])) as Record<string, unknown>;
     const iss = String(payload.iss || '');
-    const fromIss =
-      iss.match(/securetoken\.google\.com\/([^/]+)/) || iss.match(/^https?:\/\/([a-z0-9-]+)\.supabase\.(co|in)$/i);
+    const fromIss = iss.match(/^https?:\/\/([a-z0-9-]+)\.supabase\.(co|in)$/i);
     const pid = fromIss
       ? fromIss[1]
       : typeof payload.project_id === 'string'

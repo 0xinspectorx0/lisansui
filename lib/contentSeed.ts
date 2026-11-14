@@ -9,10 +9,9 @@
  *   {root}/daily_tips/main             → hap bilgi listesi
  *   {root}/memberships/{e-posta}       → üyeliği UYGULAMA oluşturur (kayıt anında)
  *
- * Yazma yetkisi `firestore.rules` içindeki `contentWriteOk` ile sınırlandırılmıştır:
- * `meta/content_lock` belgesi Console'dan oluşturulana kadar içerik koleksiyonlarına
- * yazılabilir, sonra kilitlenir. Kilit belgesini uygulama YAZAMAZ (rules izin vermez),
- * bu yüzden buton yalnızca yolu gösterir.
+ * Yazma yetkisi Supabase RLS (`courses_write`, `topics_write`, `questions_write`,
+ * `tips_write`) ve `kpss_guard_content_write` tetikleyicisi ile korunur:
+ * `membership_policy.contentLock` açık olmadıkça yönetici içerik yazabilir.
  *
  * Yazılan sorular "uygulamanın şu anda gördüğü" içeriklerdir: paneldeki
  * override'lar → canlı Supabase → repodaki yedek sorular (seçmeli).

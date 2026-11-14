@@ -30,6 +30,17 @@ const ok = (cond, label, extra = '') => {
   }
 };
 
+const cleanup = () => {
+  for (const f of written) {
+    try {
+      fs.unlinkSync(path.join(REPO, f));
+    } catch {}
+  }
+  try {
+    fs.rmSync(TMP, { recursive: true, force: true });
+  } catch {}
+};
+
 /** react-native-web yoksa (ör. bağımlılıklar kurulu değil) test anlamsızdır. */
 const skip = reason => {
   console.log(`\x1b[33mATLANDI\x1b[0m ${reason}`);
@@ -46,17 +57,6 @@ for (const f of ['rn.js', 'icons.js', 'safe-area.js', 'navigation.js', 'async-st
     process.exit(1);
   }
 }
-
-const cleanup = () => {
-  for (const f of written) {
-    try {
-      fs.unlinkSync(path.join(REPO, f));
-    } catch {}
-  }
-  try {
-    fs.rmSync(TMP, { recursive: true, force: true });
-  } catch {}
-};
 
 /** Kaynak metni verili değişikliklerle screens/ içine gölge olarak yazar. */
 function shadow(name, source, subs) {
@@ -215,7 +215,7 @@ console.log('\x1b[1m[4] konu seçici ve toplu ekleme hâlâ yerinde\x1b[0m');
   ok(!/Konu seç —/.test(vis), 'konu listesi kapalı başlıyor');
 }
 
-console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan istenmiyor\x1b[0m');
+console.log('\x1b[1m[5] ayarlar ekranı — anahtar kullanıcıdan istenmiyor\x1b[0m');
 {
   const SET_SRC = 'screens/AdminSettingsScreen.tsx';
   const setSrc = fs.readFileSync(path.join(REPO, SET_SRC), 'utf8');
@@ -312,7 +312,7 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
     ok(vis.includes('Yerel mod'), 'depoda anahtar yok → yerel mod açıkça söyleniyor');
     ok(vis.includes('geliştiriciye iletmek'), 'kullanıcıya “yapıştır” değil “ilet” deniyor');
   }
-  ok(!/EXPO_PUBLIC_FIREBASE|EXPO_PUBLIC_FIRESTORE/.test(vis), 'panel kullanıcıya ortam değişkeni ezberletmiyor');
+  ok(!/EXPO_PUBLIC_SUPABASE_ANON_KEY=/.test(vis), 'panel kullanıcıya ortam değişkeni ezberletmiyor');
   ok(!/Bu cihazda kayıtlı eski anahtar/.test(vis), 'cihaz anahtarı yoksa o satır da görünmüyor');
   ok(!vis.includes('Erişim tanısı ve kurallar'), 'tanı bölümü panelden kaldırıldı');
   ok(!vis.includes('Yazma sınaması') && !vis.includes('Raporu göster'), 'sınama/rapor satırları kaldırıldı');
