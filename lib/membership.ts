@@ -6,6 +6,7 @@
  * "1 free test per course" limit enforceable across installs.
  */
 import { TestResult, TopicMeta } from './types';
+import { coerceMemberFields } from './memberShape';
 
 export type VipPlanId = 'free' | 'monthly' | 'yearly' | 'lifetime';
 export type MembershipStatus = 'active' | 'suspended' | 'banned' | 'pending';
@@ -189,9 +190,24 @@ type FbValue = any;
 
 const s = (v: unknown): FbValue => ({ stringValue: v === undefined || v === null ? '' : String(v) });
 const n = (v: unknown): FbValue => ({ integerValue: String(Math.round(Number(v) || 0)) });
+/** Kural `netSum is number` diyor: ondalık değeri doubleValue olarak taşı (integerValue yuvarlardı). */
+const num = (v: unknown): FbValue => {
+  const x = Number(v) || 0;
+  return Number.isInteger(x) ? { integerValue: String(x) } : { doubleValue: x };
+};
 const b = (v: unknown): FbValue => ({ booleanValue: !!v });
 
+/**
+ * Kural defteri: çıktı `firestore.rules` içindeki `memberShapeOk` denetiminden
+ * geçer (`lib/memberShape.ts` aynası). `coerceMemberFields` yazmadan hemen önce
+ * reddedilecek sapmaları düzelttiği için "kural yazmayı reddetti" sınıfı hatalar
+ * oluşmaz; düzeltilemeyeni ise `checkMemberFields` alan adıyla bildirir.
+ */
 export function memberToFields(m: MemberDoc): Record<string, FbValue> {
+  return coerceMemberFields(rawMemberToFields(m), { memberId: m.id, fill: true });
+}
+
+function rawMemberToFields(m: MemberDoc): Record<string, FbValue> {
   return {
     id: s(m.id),
     email: s(m.email),
@@ -214,7 +230,7 @@ export function memberToFields(m: MemberDoc): Record<string, FbValue> {
     note: s(m.note),
     testsCompleted: n(m.testsCompleted),
     questionsSolved: n(m.questionsSolved),
-    netSum: n(Math.round((m.netSum || 0) * 10) / 10),
+    netSum: num(Math.round((m.netSum || 0) * 10) / 10),
     courseUsage: {
       mapValue: {
         fields: Object.fromEntries(

@@ -376,6 +376,17 @@ Nasıl çalışır:
 Sonrası: Console → `meta/content_lock` oluştur (içerik yazma penceresi kapanır) ve
 isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
 
+## 7b) Panel tarafında tek dokunuşla doğrulama
+
+**Admin → Ayarlar → “Erişim tanısı ve kurallar”**:
+
+| Satır | Ne yapar |
+| --- | --- |
+| **Tanı** | Üç okuma (içerik / kilit / üyelik) + yerel biçim denetimi. Hiçbir şey yazmaz. Nedeni tek cümle + sıralı adım olarak verir. |
+| **Yazma sınaması (kendi belgen)** | Yalnızca yazdığın e-postanın belgesine dokunur: belge yoksa kurala tam uygun biçimde oluşturulur, varsa sadece `lastLoginAt` yenilenir. VIP/rol/durum alanlarına dokunmaz — yetki kazandırmaz. Okuma izinleri yazma iznini kanıtlamadığı için tek kesin cevap budur. |
+| **firestore.rules metnini kopyala** | Uygulamanın beklediği kural metninin tamamını panoya kopyalar → Console → Rules → yapıştır → Publish. |
+| **Kilit belge yolunu kopyala** | Kilit hangi yolda duruyorsa (kök ya da legacy) o belge yolunu kopyalar; Console'dan silmek kilidi kapatır, kuralı yeniden yayınlamak gerekmez. |
+
 ## 8) Sık karşılaşılan hatalar
 | Belirti | Sebep / çözüm |
 | --- | --- |
@@ -383,6 +394,10 @@ isteyen `meta/membership_lockdown` ile üyelik kilidini açar.
 | `NOT_FOUND: Database (default) does not exist` | Veritabanını farklı isimle açtın → `EXPO_PUBLIC_FIRESTORE_DATABASE` ile doğru ismi ver veya `(default)` DB oluştur. |
 | Kayıt var ama panel listesi boş | `root` ayarı belge yoluyla uyuşmuyor (kök ↔ artifacts). Kartta görünen “Üyelik koleksiyonu” yolunu Console yoluyla kıyasla. |
 | “Üye ol” derken **“okuma/yazma kuralı engellendi”** | Uygulama nedeni kendisi ölçer: **Admin → Ayarlar → “Erişim tanısı ve kurallar” → Tanı**. Çıkan satırlardan: `kural yok (her şey reddediliyor)` → aynı kartta **“firestore.rules metnini kopyala”** → Console → Firestore → Rules → yapıştır → **Publish**. `yayındaki kurallar ESKİ` → aynı adımla yeniden yayınla. `kimlik doğrulama … projesinden token veriyor` → cihazda kalmış eski anahtar **otomatik silinir**, bir kez daha “Üye ol” de. `Üyelik kilidi AÇIK` → ya giriş yaparak kendi belgeni kullan ya da `meta/membership_lockdown` belgesini sil. |
+| Üye olurken okuma serbest, yazma reddediliyor | Uygulama artık red nedenini **yazmadan önce** biliyor: `lib/memberShape.ts`, `firestore.rules` içindeki `memberShapeOk` denetiminin aynası. Kuralın tolere edemediği sapmalar (bozuk/boş `verifier/salt/iterations` üçlüsü, 80 karakteri aşan ad, `31.12.2030` biçiminde tarih, 12'den çok `courseUsage` girdisi) **düzeltildikten sonra** gönderilir; düzeltilemeyen şey alan adıyla (`email: ...`) bildirilir. |
+| Kısmi güncelleme reddediliyor, tam belge yazılıyor | Firestore REST'te `PATCH`, belge **yokken** create sayar ve `memberShapeOk` eksik alanları reddeder. `lib/firestoreApi.ts → writeMemberDoc` bunu kademe kademe çözer: create → 409 ise kabul edilen alanlarla güncelle (benimsenme) → create reddedildiyse önce belgenin varlığına bak, varsa kısmi yaz. |
+| Panel üyeye VIP verirken yazma reddedildi | `memberUpdateOk` tek PATCH'te **ya** `usageOnlyChange` **ya** `entitlementChange` listesinde kalmayı istiyor. `authUid` yalnız birinci, `vip/vipPlan/vipExpiresAt/status` yalnız ikinci listede → `upsertMemberDoc` bunları **iki ayrı PATCH**'te yazar; `createdAt/id/email/role` hiç PATCH'lenmez. |
+| Kilit "yok" görünüyor ama yazmalar engelli | `meta/membership_lockdown` belgesi **legacy yolda** (`artifacts/kpss-asistani/public/data/...`) duruyor olabilir; kurallar iki yolu da denetliyor. İstemci de öyle: `readLockdownInfo()` / `metaDocPaths()` iki yolu birden yoklar ve panel **silinecek belgenin tam yolunu** söyler (kopyalanabilir). |
 | Kayıt olurken “hesap açılamadı / başka proje” | Firebase anahtarı ile Firestore hedefi farklı projeleri gösteriyor. `config/firebaseApp.ts` içindeki `projectId` ile `app.json → expo.extra.firestore.projectId` (veya `EXPO_PUBLIC_FIRESTORE_PROJECT`) eşit olmalı. |
 | Env değişikliği etkili olmadı | `.env.local` repo kökünde mi, ad `EXPO_PUBLIC_` ile mi başlıyor, ve Metro'yu `npx expo start --clear` ile yeniden başlattın mı? |
 | Panel “root hâlâ legacy” uyarısı veriyor | Sadece proje kimliğini verdin; `EXPO_PUBLIC_FIRESTORE_ROOT=.` satırını ekle (B seçeneğinde `root: "."`). |

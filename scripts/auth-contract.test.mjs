@@ -272,7 +272,14 @@ ok(/export const ADMINS_DOC_PATH = collectionPath\('meta\/admins'\);/.test(apiSr
 ok(/export const MEMBERSHIP_LOCKDOWN_DOC_PATH = collectionPath\('meta\/membership_lockdown'\);/.test(apiSrc), 'kilit belgesi yolu da target’tan');
 ok(/if \(emails\.length > 10\)/.test(apiSrc), 'yönetici listesi 10 kayıtla sınırlı (kuralla aynı)');
 ok(/e\.toLowerCase\(\)/.test(apiSrc) && /normalizeEmail\(email\)/.test(apiSrc), 'e-postalar normalize edilerek yazılıyor');
-ok(/return \{ ok: true, data: exists \};/.test(apiSrc), 'readMembershipLockdown var/yok döndürüyor');
+ok(
+  /export async function readLockdownInfo/.test(apiSrc) &&
+    /metaDocPaths\('meta\/membership_lockdown'\)/.test(apiSrc),
+  'kilit durumu KÖK + legacy yolda birlikte aranıyor (rules lockdownOn ile aynı)'
+);
+ok(/LEGACY_ARTIFACTS_ROOT = 'artifacts\/kpss-asistani\/public\/data'/.test(apiSrc), 'legacy kök sabiti firestore.rules ile aynı');
+ok(/PATCH_FORBIDDEN_KEYS = \['createdAt', 'id'\]/.test(apiSrc), 'createdAt/id PATCH gövdesine konmuyor (memberUpdateOk listelerinde yok)');
+ok(/if \(Object\.keys\(fields\)\.length === 0\)/.test(apiSrc), 'boş PATCH gövdesi ağa gitmeden reddediliyor');
 const panel = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
 ok(/addAdminEmail,[\s\S]*readAdminList,[\s\S]*readMembershipLockdown/.test(panel), 'panel meta/admins + kilit okuyucularını kullanıyor');
 ok(/Kilidi açmak yalnız Console işidir/.test(panel), 'panel, kilidin yalnız Console’tan çevrildiğini söylüyor');
@@ -405,7 +412,7 @@ try {
   let d = await D.diagnoseMembershipAccess();
   ok(d.cause === 'rules-not-published', 'her şey 403 → kurallar hiç yayınlanmamış', d.cause);
   ok(/yayınlanmamış/.test(d.headline), 'başlık “yayınlanmamış” diyor', d.headline);
-  ok(d.steps.length > 0 && /Kuralları kopyala/.test(d.steps[0]), 'ilk adım paneldeki kopyalama düğmesine götürüyor', d.steps[0]);
+  ok(d.steps.length > 0 && /firestore\.rules metnini kopyala/.test(d.steps[0]), 'ilk adım paneldeki kopyalama düğmesine götürüyor', d.steps[0]);
   ok(maxInflight >= 2, 'yoklamalar PARALEL koşuyor (çevrimdışıyken 3×8 sn sürmez)', String(maxInflight));
   ok(fsLog.filter(l => !l.headers.Authorization).length >= 1, 'içerik yoklaması kimliksiz atılıyor');
 
@@ -418,7 +425,8 @@ try {
   d = await D.diagnoseMembershipAccess();
   ok(d.cause === 'lockdown-no-admin', 'kilit AÇIK + yönetici değil → panel işlemleri reddedilir', d.cause);
   ok(/membership_lockdown/.test(d.headline), 'başlık kilidi işaret ediyor', d.headline);
-  ok(d.steps.some(x => /belgesini silmek/.test(x)), 'kilidi geri alma adımı da anlatılıyor');
+  ok(d.steps.some(x => /belgesini sil/.test(x)), 'kilidi geri alma adımı da anlatılıyor');
+  ok(/meta\/membership_lockdown/.test(d.steps.join(' ')), 'kilit belgesinin yolu adımda geçiyor', d.steps.join(' | '));
 
   fsMode = { content: 200, membership: 401, lockdown: 404 };
   d = await D.diagnoseMembershipAccess();
@@ -431,7 +439,12 @@ try {
 
   fsMode = { content: 200, membership: 200, lockdown: 404 };
   d = await D.diagnoseMembershipAccess();
-  ok(d.cause === 'shape-rejected', 'okuma açık + yazma yoksa biçim/kural farkına bakılıyor', d.cause);
+  ok(d.cause === 'write-needs-probe', 'okuma açık + liste boşsa “yazma kapalı” DİYE YAZILMIYOR (kanıt yok)', d.cause);
+  ok(/Yazma sınaması/.test(d.steps.join(' ')), 'tanı, tek kanıt olan deneme yazmasına yönlendiriyor', d.steps.join(' | '));
+  ok(d.detail.membershipEmpty === true, 'boş liste ölçümü detail’e yazılıyor');
+  d = await D.diagnoseMembershipAccess('kötü e-posta');
+  ok(d.cause === 'shape-rejected', 'geçersiz e-posta → ağa gitmeden biçim tanısı', d.cause);
+  ok(/email/.test(d.detail.shapeProblems), 'biçim sorunu alan adıyla birlikte yazılıyor', d.detail.shapeProblems);
   ok(d.steps.every(x => !/anahtar.*yapıştır|API anahtarı gir/i.test(x)), 'tanı adımları kullanıcıdan anahtar istemiyor', JSON.stringify(d.steps));
 
   // --- firestoreApi: yabancı projeden token GÖNDERİLMEZ (hedefin kendi token’ı gider)
@@ -491,7 +504,14 @@ try {
   ok(/if \(await auth\.isForeignSessionToken\(\)\) return \{\};/.test(apiSrc), 'firestoreApi: yabancı token başlığa konmuyor');
   const panel2 = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
   ok(/copyText\(FIRESTORE_RULES_TEXT\)/.test(panel2), 'panel: kuralları tek dokunuşla panoya kopyalama var');
-  ok(/diagnoseMembershipAccess\(\)/.test(panel2), 'panel: “Tanı” düğmesi tanının kendisini çağırıyor');
+  ok(/diagnoseMembershipAccess\(diagKey \|\| undefined\)/.test(panel2), 'panel: “Tanı” düğmesi tanının kendisini çağırıyor');
+  ok(/probeMembershipWrite\(diagKey\)/.test(panel2), 'panel: “Yazma sınaması” deneme yazmasını çağırıyor');
+  ok(/Yazma sınaması \(kendi belgen\)/.test(panel2), 'panel: sınama düğmesi etiketi');
+  ok(/VIP\/rol\/durum alanlarına dokunulmaz/.test(panel2), 'panel: sınamanın yetki kazandırmadığı açıkça yazıyor');
+  ok(/lockdownPath \? ` @\$\{diag\.data\.detail\.lockdownPath\}`/.test(panel2), 'panel: kilidin hangi yolda durduğu ölçüm satırında');
+  ok(/data\.cause === 'write-needs-probe' && diagKey\.includes\('@'\)/.test(panel2), 'panel: okuma temizse sınama kendiliğinden çalışıyor');
+  ok(/await runWriteProbe\(\)/.test(panel2), 'panel: tanı sonrası yazma sınaması çağrılıyor');
+  ok(/yalnızca yazdığın e-postanın belgesine dokunur/.test(panel2) && /VIP\/rol\/durum alanlarına dokunulmaz/.test(panel2), 'panel: sınamanın zararsız olduğu açıkça yazıyor');
   ok(/Neden engellendi\?/.test(panel2), 'panel: sorunun başlığı kullanıcı dilinde');
 } finally {
   globalThis.fetch = realFetch2;
@@ -509,11 +529,350 @@ const required = (rulesRaw.match(/data\.keys\(\)\.hasAll\(\[([\s\S]*?)\]\)/) || 
 const requiredKeys = required.split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean);
 ok(requiredKeys.length > 15, `kural ${requiredKeys.length} zorunlu alan istiyor`);
 const membershipSrc = fs.readFileSync('lib/membership.ts', 'utf8');
-const mtfStart = membershipSrc.indexOf('export function memberToFields');
+const mtfStart = membershipSrc.indexOf('function rawMemberToFields');
+ok(mtfStart > 0 && /coerceMemberFields\(rawMemberToFields\(m\)/.test(membershipSrc), 'memberToFields çıktı kural aynasından geçiyor');
 const written = membershipSrc.slice(mtfStart, membershipSrc.indexOf('\n}', mtfStart));
 const writtenKeys = new Set((written.match(/^\s{4}([A-Za-z][A-Za-z0-9]*):/gm) || []).map(x => x.trim().replace(/:$/, '')));
 const missing = requiredKeys.filter(k => !writtenKeys.has(k));
 ok(missing.length === 0, 'uygulamanın yazdığı alanlar kuralın istediği listeyi kapsıyor', missing.join(', '));
+
+/** authClient belleği modül başına tuttuğu için her senaryo taze örnek istiyor. */
+const freshApi = async () => await import(`/tmp/firestoreApiBundle.mjs?u=${Date.now()}-${Math.random()}`);
+
+console.log('\n\x1b[1m[16] kural aynası: firestore.rules ↔ lib/memberShape.ts\x1b[0m');
+const MS = await import('/tmp/memberShapeBundle.mjs');
+const MB = await import('/tmp/membershipBundle.mjs');
+
+const listFromRules = (fn) => {
+  const m = rulesRaw.match(new RegExp(`function ${fn}\\(data\\) \\{[\\s\\S]*?hasAll\\(\\[([\\s\\S]*?)\\]\\)`));
+  return (m?.[1] || '').split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean);
+};
+const requiredByRules = listFromRules('memberShapeOk');
+ok(requiredByRules.length > 15, 'ayna testi kuralın zorunlu alan listesini okuyabildi', String(requiredByRules.length));
+ok(MS.MEMBER_REQUIRED_KEYS.join('|') === requiredByRules.join('|'), 'aynadaki zorunlu alan listesi kural ile BİREBİR aynı');
+
+const regexFrom = (fn) => {
+  const m = rulesRaw.match(new RegExp(`function ${fn}\\(value\\) \\{[\\s\\S]*?value\\.matches\\("([^"]+)"\\)`));
+  return (m?.[1] || '').replace(/\\\\\\\\/g, '\\').replace(/\\\\s/g, '\\s').replace(/\\\\./g, m2 => m2 === '\\\\.' ? '\\.' : m2);
+};
+ok(MS.MEMBER_VERIFIER_RE.source === '^[0-9a-f]{64}$' && /isVerifier\(value\) \{[\s\S]*\^\[0-9a-f\]\{64\}\$/.test(rulesRaw), 'verifier deseni kural ile aynı');
+ok(MS.MEMBER_SALT_RE.source === '^[0-9a-f]{32}$' && /isSalt\(value\) \{[\s\S]*\^\[0-9a-f\]\{32\}\$/.test(rulesRaw), 'salt deseni kural ile aynı');
+ok(MS.MEMBER_DATE_RE.source === '^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9:.]+Z?)?$', 'tarih deseni kural ile aynı');
+ok(MS.MEMBER_EMAIL_RE.source === '^[^\\s@]+@[^\\s@]+\\.[a-zA-Z]{2,}$', 'e-posta deseni kural ile aynı');
+let limitsOk = true;
+for (const [k, v] of Object.entries(MS.MEMBER_STRING_LIMITS))
+  if (!new RegExp(`data\\.${k} is string\\s*&&\\s*data\\.${k}\\.size\\(\\) <= ${v}`).test(rulesRaw)) { limitsOk = false; console.log('   sınır farkı:', k, v); }
+ok(limitsOk, 'string uzunluk sınırları kuralda aynı değerlerle duruyor');
+ok(/isCounter\(value\) \{[\s\S]*value >= 0 && value <= 1000000/.test(rulesRaw) && MS.MEMBER_COUNTER_MAX === 1000000, 'sayaç aralığı kural ile aynı');
+ok(/data\.courseUsage is map[\s\S]*data\.courseUsage\.size\(\) <= 12/.test(rulesRaw) && MS.MEMBER_USAGE_MAX_ENTRIES === 12, 'courseUsage giriş limiti kural ile aynı');
+ok(/data\.courseUsage\.values\(\)\.all\(v, v is int && v >= 0 && v <= 999\)/.test(rulesRaw) && MS.MEMBER_USAGE_MAX_VALUE === 999, 'courseUsage değer aralığı kural ile aynı');
+ok(/data\.iterations >= 100/.test(rulesRaw) && MS.MEMBER_ITERATIONS_MIN === 100, 'iterations alt sınırı kural ile aynı');
+
+// --- bozuk payload'lar: ayna hangi ALANI reddettiğini söylüyor
+const baseDoc = {
+  ...MB.emptyMember('ornek@kpss.gov.tr'),
+  email: 'ornek@kpss.gov.tr',
+  emailNormalized: 'ornek@kpss.gov.tr',
+  password: { verifier: '', salt: '', iterations: 0, algo: 'firebase-auth' },
+};
+const fieldsOf = (m) => MB.memberToFields(m);
+{
+  const f = fieldsOf(baseDoc);
+  ok(MS.checkMemberFields(f, 'create', f.id.stringValue).length === 0, 'temiz üye belgesi kuralı geçiyor', JSON.stringify(MS.checkMemberFields(f, 'create', f.id.stringValue)));
+  const long = fieldsOf({ ...baseDoc, displayName: 'Ç'.repeat(120), note: 'n'.repeat(600), city: 'ş'.repeat(90) });
+  ok(MS.checkMemberFields(long, 'create', long.id.stringValue).length === 0, 'uzun ad/not/şehir KIRPILARAK yazılıyor (red değil)');
+  ok(long.displayName.stringValue.length === 80 && long.note.stringValue.length === 400, 'kırpma sınır değerlerinde duruyor', `${long.displayName.stringValue.length}/${long.note.stringValue.length}`);
+  const legacy = fieldsOf({ ...baseDoc, password: { verifier: 'abc', salt: 'def', iterations: 1, algo: 'pbkdf2-sha256' } });
+  ok(MS.checkMemberFields(legacy, 'create', legacy.id.stringValue).length === 0, 'bozuk pbkdf2 demeti firebase-auth işaretine çevriliyor (red değil)');
+  ok(legacy.algo.stringValue === 'firebase-auth' && legacy.verifier.stringValue === '' && legacy.iterations.integerValue === '0', 'şifre üçlüsü kuralın istediği gibi boşaltıldı');
+  const real = fieldsOf({ ...baseDoc, password: { verifier: 'a'.repeat(64), salt: 'b'.repeat(32), iterations: 1200, algo: 'pbkdf2-sha256' } });
+  ok(real.algo.stringValue === 'pbkdf2-sha256' && real.verifier.stringValue.length === 64, 'gerçek pbkdf2 demetine dokunulmuyor');
+  const usage = fieldsOf({ ...baseDoc, courseUsage: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`ders${i}`, i + 1])) });
+  ok(Object.keys(usage.courseUsage.mapValue.fields).length === 12, 'courseUsage 12 girişe indirgeniyor', String(Object.keys(usage.courseUsage.mapValue.fields).length));
+  ok(usage.courseUsage.mapValue.fields.ders29.integerValue === '30', 'son girdiler korunuyor');
+  const dec = fieldsOf({ ...baseDoc, netSum: 12.4 });
+  ok(dec.netSum.doubleValue === 12.4, 'ondalık net doubleValue olarak korunuyor (rules: is number)');
+  const badDate = fieldsOf({ ...baseDoc, vipExpiresAt: '31.12.2030', createdAt: 'dün' });
+  ok(MS.checkMemberFields(badDate, 'create', badDate.id.stringValue).length === 0, 'Türkçe tarih / serbest metin tarihleri güvenli değere çekiliyor');
+  ok(badDate.vipExpiresAt.stringValue === '' && /^\d{4}-\d{2}-\d{2}T/.test(badDate.createdAt.stringValue), 'vipExpiresAt boşaltıldı, createdAt bugüne döndü');
+  const badRole = { ...fieldsOf(baseDoc), role: { stringValue: 'sultan' }, status: { stringValue: 'kral' } };
+  const probs = MS.checkMemberFields(badRole, 'create', badRole.id.stringValue).map(p => p.field);
+  ok(probs.includes('role') && probs.includes('status'), 'bilinmeyen rol/durum alan adıyla bildiriliyor', probs.join(','));
+  const noMail = MS.checkMemberFields({ ...fieldsOf(baseDoc), email: { stringValue: 'ayri@yolak.com' } }, 'create', baseDoc.id);
+  ok(noMail.some(p => p.field === 'id' || p.field === 'email'), 'e-posta ≠ belge kimliği ayrı yazılabilecek bir şey değil: reddediliyor', MS.shapeProblemText(noMail));
+  ok(/id:|email:/.test(MS.shapeProblemText(noMail)), 'alan adı metinde geçiyor', MS.shapeProblemText(noMail));
+  const missing = { ...fieldsOf(baseDoc) };
+  delete missing.netSum;
+  ok(MS.checkMemberFields(missing, 'create', missing.id.stringValue).some(p => p.field === 'netSum'), 'eksik zorunlu alan “zorunlu” diye bildiriliyor');
+  ok(MS.MEMBER_CREATE_ROLES.join('|') === 'user|editor' && /request\.resource\.data\.role in \['user', 'editor'\]/.test(rulesRaw), 'create rol listesi kural ile aynı');
+  ok(MS.MEMBER_CREATE_STATUSES.join('|') === 'active|pending' && /request\.resource\.data\.status in \['active', 'pending'\]/.test(rulesRaw), 'create durum listesi kural ile aynı');
+  // coerce → check her durumda temiz çıkmalı (idempotence)
+  const dirty = { ...fieldsOf(baseDoc), iterations: { integerValue: '7' }, algo: { stringValue: 'pbkdf2-sha256' }, vip: { stringValue: 'evet' }, vipPlan: { stringValue: 'haftalik' }, schemaVersion: { integerValue: '2' } };
+  const fixed = MS.coerceMemberFields(dirty, { memberId: baseDoc.id, fill: true });
+  ok(MS.checkMemberFields(fixed, 'create', baseDoc.id).length === 0, 'coerce her bozuk girdiyi kurala uyar hale getiriyor', JSON.stringify(MS.checkMemberFields(fixed, 'create', baseDoc.id)));
+  ok(fixed.vip.booleanValue === false && fixed.vipPlan.stringValue === 'free' && fixed.schemaVersion.integerValue === '1', 'vip/vipPlan/schemaVersion güvenli varsayılana döndü');
+  const patchOnly = MS.coerceMemberFields({ note: { stringValue: 'x'.repeat(500) } }, { memberId: 'a@b.co' });
+  ok(Object.keys(patchOnly).length === 1 && patchOnly.note.stringValue.length === 400, 'PATCH gövdesine eksik alan UYDURULMAZ (yalnız gönderilen kırpılır)', Object.keys(patchOnly).join(','));
+}
+
+// --- kısmi güncelleme gövdesi: kuralın change-set listeleriyle uyum
+const keysOfApi = (name) => {
+  const i = apiSrc.indexOf(`const ${name} = [`);
+  const seg = apiSrc.slice(i, apiSrc.indexOf('] as const;', i));
+  return (seg.match(/'([A-Za-z]+)'/g) || []).map(x => x.replace(/'/g, ''));
+};
+const listFromChangeFn = (fn) => {
+  const m = rulesRaw.match(new RegExp(`function ${fn}\\(\\) \\{[\\s\\S]*?hasOnly\\(\\[([\\s\\S]*?)\\]\\)`));
+  return (m?.[1] || '').split(',').map(x => x.trim().replace(/'/g, '')).filter(Boolean);
+};
+const USAGE_KEYS = listFromChangeFn('usageOnlyChange');
+const ENTITLE_KEYS = listFromChangeFn('entitlementChange');
+ok(USAGE_KEYS.length > 10 && ENTITLE_KEYS.length > 10, 'kuralın change-set listeleri testte okunabildi', `${USAGE_KEYS.length}/${ENTITLE_KEYS.length}`);
+const selfKeys = keysOfApi('SELF_WRITABLE_KEYS');
+const entKeys = keysOfApi('ENTITLEMENT_KEYS');
+ok(selfKeys.length > 10 && selfKeys.every(k => USAGE_KEYS.includes(k)), 'kendi kendine yazma kademesi yalnız usageOnlyChange alanlarını gönderiyor', selfKeys.filter(k => !USAGE_KEYS.includes(k)).join(','));
+ok(entKeys.length > 10 && entKeys.every(k => ENTITLE_KEYS.includes(k)), 'panel yazması yalnız entitlementChange alanlarını gönderiyor', entKeys.filter(k => !ENTITLE_KEYS.includes(k)).join(','));
+ok(!selfKeys.includes('authUid') || USAGE_KEYS.includes('authUid'), 'authUid yalnız izinli listede');
+{
+  const FP = await freshApi();
+  const p = FP.memberPatchToFields({ createdAt: '2020-01-01', note: 'merhaba', email: 'a@b.co' }, 'a@b.co');
+  ok(!('createdAt' in p), 'createdAt PATCH gövdesinden çıkarıldı (rules: memberUpdateOk listelerinde yok)');
+  ok(p.note.stringValue === 'merhaba', 'izinli alan PATCH gövdesinde kalıyor');
+  const bad = await FP.patchMemberDoc('a@b.co', { email: 'baska@ornek.com' });
+  ok(!bad.ok && /kimliği/.test(bad.error), 'e-posta değiştiren PATCH ağa gitmeden açıklama ile duruyor', bad.error);
+}
+
+console.log('\n\x1b[1m[17] kuralı uygulayan sahte Firestore: yazma kademeleri + iki yollu kilit\x1b[0m');
+{
+  const FP = await freshApi();
+  const store = new Map();
+  const rules = { lockdown: false };
+  const wlog = [];
+  const real = globalThis.fetch;
+  const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) });
+  const pathOf = u => decodeURIComponent(String(u).split('/documents/')[1] || '').split('?')[0];
+  const claim = (h, key) => {
+    const t = String(h.Authorization || '').replace('Bearer ', '');
+    const parts = t.split('.');
+    if (parts.length !== 3) return '';
+    try { return JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'))[key] || ''; } catch { return ''; }
+  };
+  const diffKeys = (before, after) => {
+    const out = [];
+    for (const k of new Set([...Object.keys(before || {}), ...Object.keys(after || {})]))
+      if (JSON.stringify(before?.[k]) !== JSON.stringify(after?.[k])) out.push(k);
+    return out;
+  };
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    const method = init?.method || 'GET';
+    const headers = init?.headers || {};
+    const body = init?.body ? JSON.parse(init.body) : {};
+    wlog.push({ url: u, method, body, headers, fields: Object.keys(body.fields || {}) });
+    if (!u.includes('/documents/')) return json(404, { error: { message: `UNHANDLED ${u}` } });
+    // PATCH gövdesi yalnızca diff’te görünen alanları taşır: kısmi yazımın hangi
+    // change-set listesine düştüğünü ayırt edebilmek için önceki belgeyi sakla.
+    let prevBeforePatch = null;
+    // POST create: .../memberships?documentId=<id> → belge yolu sorgudan gelir.
+    const params = new URLSearchParams(String(u).split('?')[1] || '');
+    let path = pathOf(u);
+    if (params.get('documentId')) path = `${path}/${params.get('documentId')}`;
+    // firestore.rules legacy yolu AYNI kurallarla koruyor:
+    // `artifacts/kpss-asistani/public/data/memberships/{memberId}` ↔ `memberships/{memberId}`.
+    const LEGACY_PREFIX = 'artifacts/kpss-asistani/public/data/';
+    const legacy = path.startsWith(LEGACY_PREFIX) ? path.slice(LEGACY_PREFIX.length) : null;
+    const eff = legacy ?? path;
+    const segs = eff.split('/');
+    const collection = segs[0];
+    const id = segs[segs.length - 1];
+    const self = (claim(headers, 'email') || '').toLowerCase();
+    const lockdownOn = rules.lockdown;
+    if (collection === 'meta') {
+      // rules: meta altında `allow get: if true`; meta/admins yazması yalnız
+      // kilit kapalıyken, diğer meta belgeleri ise hiç yazılamaz.
+      if (method === 'GET') return store.has(path) ? json(200, { name: path, fields: store.get(path) }) : json(404, {});
+      if (eff === 'meta/admins' && !lockdownOn) {
+        store.set(path, body.fields);
+        return json(200, { fields: body.fields });
+      }
+      return json(403, { error: { message: lockdownOn ? 'LOCKDOWN' : 'META_WRITE_LOCK' } });
+    }
+    const stored = store.get(path);
+    const selfOk = self && id === self && (!stored || (stored.email?.stringValue || '').toLowerCase() === self);
+    const canWrite = !lockdownOn || selfOk || (Array.isArray(rules.admins) && rules.admins.includes(self));
+    if (method === 'GET') {
+      if (!store.has(path)) return json(404, {});
+      if (lockdownOn && !selfOk) return json(403, { error: { message: 'Missing or insufficient permissions' } });
+      return json(200, { name: path, fields: stored });
+    }
+    if (method === 'DELETE') {
+      if (!canWrite) return json(403, {});
+      store.delete(path);
+      return json(200, {});
+    }
+    const isCreate = !store.has(path);
+    if (method === 'POST' && !isCreate) return json(409, { error: { message: 'ALREADY_EXISTS' } });
+    const nextFields = method === 'PATCH' || method === 'POST' ? { ...(stored || {}), ...(body.fields || {}) } : body.fields || {};
+    if (method === 'PATCH') prevBeforePatch = stored ? { ...stored } : null;
+    if (!canWrite) return json(403, { error: { message: 'Missing or insufficient permissions' } });
+    if (MS.checkMemberFields(nextFields, 'create', id).length)
+      return json(403, { error: { message: `SHAPE ${MS.shapeProblemText(MS.checkMemberFields(nextFields, 'create', id))}` } });
+    if (!isCreate) {
+      if (stored.role?.stringValue !== nextFields.role?.stringValue) return json(403, { error: { message: 'ROLE_LOCK' } });
+      // memberUpdateOk: tek PATCH ya yalnız kullanım/profil alanlarını (usageOnlyChange)
+      // ya yalnız hak alanlarını (entitlementChange) değiştirebilir — ikisi karışmaz.
+      const changed = diffKeys(prevBeforePatch || stored, nextFields);
+      const usage = new Set(USAGE_KEYS);
+      const entitle = new Set(ENTITLE_KEYS);
+      const badUsage = changed.filter(k => !usage.has(k));
+      const badEntitle = changed.filter(k => !entitle.has(k));
+      if (badUsage.length && badEntitle.length)
+        return json(403, { error: { message: `CHANGES ${badUsage.join(',')} / ${badEntitle.join(',')}` } });
+      if (!selfOk && lockdownOn && changed.length) return json(403, { error: { message: 'NOT_SELF' } });
+    } else if (!['user', 'editor'].includes(nextFields.role?.stringValue) || !['active', 'pending'].includes(nextFields.status?.stringValue)) {
+      return json(403, { error: { message: 'CREATE_ROLE_STATUS' } });
+    }
+    store.set(path, nextFields);
+    return json(200, { name: `projects/p/databases/d/documents/${path}`, fields: nextFields });
+  };
+
+  try {
+    // A) temiz kurulum: tek POST yeter
+    dropSession();
+    let r = await FP.createMemberDoc({ ...baseDoc, id: 'a@b.co', email: 'a@b.co', emailNormalized: 'a@b.co' });
+    ok(r.ok, 'A: kurala uygun create kabul edildi', r.ok ? '' : r.error);
+    ok(wlog.filter(l => l.method === 'POST').length === 1 && wlog.length === 1, 'A: gereksiz deneme yok, tek istek', String(wlog.length));
+
+    // B) PATCH-create tuzağı: eksik belgeye kısmi yazım → kademe tam biçimle create eder
+    store.clear();
+    wlog.length = 0;
+    r = await FP.patchMemberDoc('yeni@ornek.com', { note: 'kısmi' });
+    ok(r.ok, 'B: belge yokken kısmi PATCH reddi, kademe ile yazıldı', r.ok ? '' : r.error);
+    ok(wlog.length >= 2 && wlog[0].method === 'PATCH' && wlog[1].method === 'POST', 'B: önce PATCH sonra create denendi', wlog.map(l => l.method).join('>'));
+    ok(wlog[1].fields.length >= MS.MEMBER_REQUIRED_KEYS.length, 'B: create gövdesi kuralın istediği tüm alanları taşıyor', String(wlog[1].fields.length));
+    ok((store.get('memberships/yeni@ornek.com')?.note?.stringValue || '').startsWith('kısmi'), 'B: istenen alan belgeye işlendi');
+
+    // C) belge zaten var (ör. eski PBKDF2 üyesi) → benimseme
+    store.set('memberships/a@b.co', fieldsOf({ ...baseDoc, id: 'a@b.co', email: 'a@b.co', emailNormalized: 'a@b.co' }));
+    wlog.length = 0;
+    r = await FP.writeMembershipSelf({ ...baseDoc, id: 'a@b.co', email: 'a@b.co', emailNormalized: 'a@b.co', note: 'yeniden' });
+    ok(r.ok && r.adopted === true, 'C: 409 → kabul edilen alanlarla güncelleme (benimsenme)', JSON.stringify({ ok: r.ok, adopted: r.adopted, e: r.error }));
+    ok(wlog.some(l => l.method === 'POST') && wlog.some(l => l.method === 'PATCH'), 'C: önce create, sonra kısmi yazım denendi', wlog.map(l => l.method).join('>'));
+    ok(!('password' in (store.get('memberships/a@b.co') || {})), 'C: belgeye kuralın tanımadığı `password` alanı sızmadı');
+    ok(store.get('memberships/a@b.co')?.note?.stringValue === 'yeniden', 'C: not alanı güncellendi');
+
+    // C2) karışık change-set (usage + entitlement birlikte) → ret, belge bozulmaz
+    store.clear();
+    store.set('memberships/a@b.co', fieldsOf({ ...baseDoc, id: 'a@b.co', email: 'a@b.co', emailNormalized: 'a@b.co', note: 'eski' }));
+    putSession('kpssasistani-01');
+    wlog.length = 0;
+    // `displayName`/`note` İKİ listede de var; gerçek karışık vaka `authUid` (yalnız
+    // usageOnlyChange) + hak alanı (yalnız entitlementChange) birlikteliğidir.
+    const mixed = await FP.patchMemberDoc('a@b.co', { authUid: 'uid1234567890', vip: true }, { noCreateFallback: true });
+    ok(!mixed.ok, 'C2: authUid + hak alanı birlikte PATCH edilmiyor (kuralın change-set ayrımı)', mixed.ok ? 'kabul edildi' : mixed.error);
+    ok(store.get('memberships/a@b.co')?.note?.stringValue === 'eski', 'C2: ret edilen yazma belgeye dokunmadı');
+    const both = await FP.upsertMemberDoc({ ...baseDoc, id: 'a@b.co', email: 'a@b.co', emailNormalized: 'a@b.co', vip: true, vipPlan: 'yearly', status: 'active', authUid: 'uid1234567890' });
+    ok(both.ok, 'C2: panel yazması authUid ile hak alanlarını AYRI PATCH’lerde taşıyor', both.ok ? '' : both.error);
+    ok(store.get('memberships/a@b.co')?.authUid?.stringValue === 'uid1234567890' && store.get('memberships/a@b.co')?.vipPlan?.stringValue === 'yearly', 'C2: iki kademenin ikisi de belgeye işlendi');
+    const onlyVip = await FP.patchMemberDoc('a@b.co', { vip: true, vipPlan: 'monthly', vipExpiresAt: '2030-01-01', status: 'active' }, { noCreateFallback: true });
+    ok(onlyVip.ok, 'C2: yalnız hak alanları ayrı bir PATCH olarak kabul ediliyor', onlyVip.ok ? '' : onlyVip.error);
+    const onlyNote = await FP.patchMemberDoc('a@b.co', { note: 'yeni' }, { noCreateFallback: true });
+    ok(onlyNote.ok && store.get('memberships/a@b.co')?.note?.stringValue === 'yeni', 'C2: ardından profil/not yazısı yazılabiliyor');
+
+    // D) düzeltilemeyen biçim → ağa hiç gitmeden, alan adıyla
+    wlog.length = 0;
+    r = await FP.createMemberDoc({ ...baseDoc, id: 'kotu', email: 'kotu', emailNormalized: 'kotu' });
+    ok(!r.ok && /email/.test(r.error) && wlog.length === 0, 'D: geçersiz e-posta gönderilmiyor, nedeni alan adıyla yazılıyor', r.ok ? 'kabul edildi' : r.error);
+
+    // E) deneme yazması: kendi belgesi yoksa oluşturulur
+    store.clear();
+    dropSession();
+    rules.lockdown = false;
+    let pr = await FP.probeMembershipWrite('A@B.co');
+    ok(pr.ok && pr.created && pr.email === 'a@b.co', 'E: sınama belgeyi tam biçimle oluşturdu', JSON.stringify(pr));
+    pr = await FP.probeMembershipWrite('a@b.co');
+    ok(pr.ok && pr.updated && !pr.created, 'E: ikinci sınama mevcut belgeyi güncelledi', JSON.stringify(pr));
+    pr = await FP.probeMembershipWrite('kotu');
+    ok(!pr.ok && pr.cause === 'shape', 'E: e-posta yazılmadan önce yakalanıyor', JSON.stringify(pr));
+    ok(MS.checkMemberFields(store.get('memberships/a@b.co'), 'create', 'a@b.co').length === 0, 'E: sınama belgesi kuralın beklediği biçimde');
+
+    // F) kilit açık + oturum yok → engelli, ama mesaj nedeni söylüyor
+    //    (taze modül örneği: authClient oturumu belleğinde tutar)
+    rules.lockdown = true;
+    store.clear();
+    dropSession();
+    const FPf = await freshApi();
+    pr = await FPf.probeMembershipWrite('a@b.co');
+    ok(!pr.ok && pr.cause === 'denied', 'F: kilit açıkken ve oturum yokken yazma reddi bildiriliyor', JSON.stringify(pr));
+    ok(/ESKİ/.test(pr.error || '') && /metnini kopyala/.test(pr.error || ''), 'F: kilit yokken red → “yayındaki kurallar ESKİ” + kopyalama adımı', pr.error);
+
+    // F2) kilit BELGESİ duruyorsa boşuna yazma denemiyor: nedeni + çözümü söylüyor
+    store.set('meta/membership_lockdown', { note: { stringValue: 'kilit' } });
+    putSession('kpssasistani-01'); // oturum a@b.co, probe baska@ornek.com
+    const FPe = await freshApi();
+    wlog.length = 0;
+    const blocked = await FPe.probeMembershipWrite('baska@ornek.com');
+    ok(!blocked.ok && blocked.cause === 'denied', 'F2: kilitli + başka üye belgesi → yazma denenmeden engelleniyor', JSON.stringify(blocked));
+    ok(/Üyelik kilidi AÇIK/.test(blocked.error || '') && /meta\/membership_lockdown/.test(blocked.error || ''), 'F2: kilit + silinecek belge yolu cümlede geçiyor', blocked.error);
+    ok(/giriş yap|kendi belgenize/.test(blocked.error || ''), 'F2: red cümlesi çözüm cümlesiyle birlikte geliyor', blocked.error);
+    ok(!wlog.some(l => l.method === 'POST' || l.method === 'PATCH'), 'F2: gereksiz yazma isteği atılmıyor', wlog.map(l => l.method).join('>'));
+    const selfOk2 = await FPe.probeMembershipWrite('a@b.co');
+    ok(selfOk2.ok, 'F2: aynı oturum kendi belgesine yazabiliyor', JSON.stringify(selfOk2));
+    dropSession();
+
+    // G) kilit + doğru oturum → kendi belgesine yazabilir
+    putSession('kpssasistani-01');
+    const FPg = await freshApi();
+    pr = await FPg.probeMembershipWrite('a@b.co');
+    ok(pr.ok, 'G: kilit açıkken bile kendi belgesine yazılabiliyor (token ile)', JSON.stringify(pr));
+    const other = await FPg.probeMembershipWrite('baska@ornek.com');
+    ok(!other.ok, 'G: başkasının belgesine sınama yazılamıyor', JSON.stringify(other));
+
+    // H) kilit belgesinin YOLU: yalnızca legacy yolda duruyorsa bile görünmeli
+    rules.lockdown = false;
+    store.clear();
+    store.set('artifacts/kpss-asistani/public/data/meta/membership_lockdown', { note: { stringValue: 'test' } });
+    const info = await FP.readLockdownInfo();
+    ok(info.on === true && info.path === 'artifacts/kpss-asistani/public/data/meta/membership_lockdown', 'H: legacy yoldaki kilit de görülüyor', JSON.stringify(info));
+    const lock = await FP.readMembershipLockdown();
+    ok(lock.ok === true && lock.data === true, 'H: readMembershipLockdown iki yolu da dikkate alıyor', JSON.stringify(lock));
+    rules.lockdown = true; // kural: meta/admins yazması !lockdownOn() ister
+    dropSession();
+    const added = await FP.addAdminEmail('a@b.co');
+    rules.lockdown = false;
+    ok(!added.ok && /artifacts\/kpss-asistani/.test(added.error || '') && /sil/.test(added.error || ''), 'H: kilitliyken liste yazımı, silinecek belgeyi tam yolla birlikte söylüyor', added.error);
+
+    // I) yönetici listesi iki yolun birleşimi
+    store.clear();
+    store.set('meta/admins', { emails: { arrayValue: { values: [{ stringValue: 'bir@ornek.com' }] } } });
+    store.set('artifacts/kpss-asistani/public/data/meta/admins', { emails: { arrayValue: { values: [{ stringValue: 'iki@ornek.com' }] } } });
+    const admins = await FP.readAdminList();
+    ok(admins.ok && admins.data.emails.includes('bir@ornek.com') && admins.data.emails.includes('iki@ornek.com'), 'I: kök + legacy yönetici listeleri birleşiyor', JSON.stringify(admins.data?.emails));
+
+    // J) panel yazması (upsert) mevcut belgeye PUT ile saldırmıyor
+    store.clear();
+    store.set('memberships/uye@ornek.com', { ...fieldsOf({ ...baseDoc, id: 'uye@ornek.com', email: 'uye@ornek.com', emailNormalized: 'uye@ornek.com' }), role: { stringValue: 'user' } });
+    wlog.length = 0;
+    const vip = await FP.upsertMemberDoc({ ...baseDoc, id: 'uye@ornek.com', email: 'uye@ornek.com', emailNormalized: 'uye@ornek.com', vip: true, vipPlan: 'monthly', vipExpiresAt: '2030-01-01', status: 'active' });
+    ok(vip.ok, 'J: var belgeye VIP hakkı kısmi yazımla veriliyor', vip.ok ? '' : vip.error);
+    ok(!wlog.some(l => l.method === 'PUT'), 'J: mevcut belge PUT ile ezilmiyor', wlog.map(l => l.method).join('>'));
+    ok(store.get('memberships/uye@ornek.com')?.vip?.booleanValue === true, 'J: vip alanı belgeye işlendi');
+    ok(MS.checkMemberFields(store.get('memberships/uye@ornek.com'), 'update', 'uye@ornek.com').length === 0, 'J: sonuç belgesi kuralın biçimini koruyor');
+  } finally {
+    globalThis.fetch = real;
+    dropSession();
+  }
+}
+{
+  const diagSrc = fs.readFileSync('lib/accessDiag.ts', 'utf8');
+  ok(/LEGACY_ARTIFACTS_ROOT = 'artifacts\/kpss-asistani\/public\/data'/.test(diagSrc), 'tanı da legacy kökü biliyor (firestoreApi ile aynı sabit)');
+  ok(/metaDocPaths\('meta\/membership_lockdown'\)/.test(diagSrc) && /metaDocPaths\('meta\/admins'\)/.test(diagSrc), 'tanı kilit VE yönetici listesini iki yolda yokluyor');
+  ok(rulesRaw.includes("artifacts/kpss-asistani/public/data/meta/membership_lockdown"), 'kural gerçekten iki yolu da denetliyor (testin varsayımı)');
+  const ctx2 = fs.readFileSync('lib/MembershipContext.tsx', 'utf8');
+  ok(/writeMembershipSelf\(draft\)/.test(ctx2), 'context: kayıt ve ilk giriş yazması kademeli yolu kullanıyor');
+  ok(!/createMemberDoc\(draft\)/.test(ctx2), 'context: çıplak createMemberDoc çağrısı kalmadı');
+  ok(/diag\.cause === 'write-needs-probe'/.test(ctx2), 'context: okuma temizse deneme yazmasını kendisi çalıştırıyor');
+}
 
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);
 process.exit(fail ? 1 : 0);
