@@ -7,6 +7,7 @@ import { useAppTheme } from '../lib/theme';
 import {
   collectionPath,
   DEFAULT_TARGET,
+  describeTarget,
   firestoreTarget,
   probeUrls,
   type FirestoreTarget,
@@ -75,7 +76,8 @@ import {
 } from '../lib/authClient';
 import { hasRepoApiKey } from '../config/firebaseApp';
 import { FIRESTORE_RULES_LINES, FIRESTORE_RULES_TEXT } from '../config/firestoreRulesCopy';
-import { diagnoseMembershipAccess, type AccessDiag } from '../lib/accessDiag';
+import { accessDiagReportText, diagnoseMembershipAccess, type AccessDiag } from '../lib/accessDiag';
+import * as authClient from '../lib/authClient';
 import { copyText } from '../lib/clipboard';
 
 export const AdminSettingsScreen: React.FC = () => {
@@ -162,6 +164,14 @@ export const AdminSettingsScreen: React.FC = () => {
   }>({ busy: false, text: 'Henüz denenmedi', tone: 'info' });
   const [rulesCopied, setRulesCopied] = useState<string | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  /** Tanı + sınama ölçümlerinin kopyalanabilir tek metni (geliştiriciye yapıştırılır). */
+  const [report, setReport] = useState<string | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportCopied, setReportCopied] = useState<string | null>(null);
+  /** `probeAuth()` ölçümü: E-posta/parola girişi kapalıysa hiçbir kural düzeltmesi yetmez. */
+  const [authProbeNote, setAuthProbeNote] = useState('');
+
+  const diagKey = String(diagEmail || '').trim().toLowerCase();
 
   const runAccessDiag = async () => {
     setDiag({ busy: true, data: null });
@@ -175,46 +185,83 @@ export const AdminSettingsScreen: React.FC = () => {
       await ensureAuthConfigLoaded();
       if (healed.healed) setRulesCopied(healed.note || 'Cihazdaki yabancı projeli anahtar kaydı temizlendi.');
       const data = await diagnoseMembershipAccess(diagKey || undefined);
-      setDiag({ busy: false, data });
+      // Sağlayıcı durumu ayrı ölçülür: ağ kopuksa rapor yine de yazılabilir.
+      const ap = await authClient.probeAuth().catch(() => null);
+      if (ap) setAuthProbeNote(ap.note);
       // Okuma tarafı temizse tek kanıt deneme yazmasıdır: düğümü aramadan kendimiz deneriz.
-      if (data.cause === 'write-needs-probe' && diagKey.includes('@')) await runWriteProbe();
+      let probeLine: string | undefined;
+      if ((data.cause === 'write-needs-probe' || data.cause === 'lockdown-no-admin') && diagKey.includes('@'))
+        probeLine = await runWriteProbe();
+      setDiag({ busy: false, data });
+      setReport(
+        accessDiagReportText(data, {
+          email: diagKey || undefined,
+          authSource: authConfigSource() || 'yok',
+          probe: probeLine ?? (writeProbe.text === 'Henüz denenmedi' ? undefined : writeProbe.text),
+          authProbe: ap?.note,
+          appLabel: describeTarget(fsTarget),
+        })
+      );
     } catch (e) {
       setDiag({ busy: false, data: null });
       setRulesCopied(`Tanı yapılamadı: ${String(e)}`);
     }
   };
 
-  const diagKey = String(diagEmail || '').trim().toLowerCase();
+
 
   /**
    * Okuma tarafı temizse yazmanın durumu ancak DENEME YAZMASIYLA bilinir.
    * `probeMembershipWrite` yalnızca o e-postanın KENDİ belgesine dokunur
    * (lastLoginAt / tam biçimle create) ve hak alanlarına değmez.
    */
-  const runWriteProbe = async () => {
+  const runWriteProbe = async (): Promise<string> => {
     if (!diagKey.includes('@')) {
-      setWriteProbe({
-        busy: false,
-        text: 'Önce yukarıya e-postanı yaz — deneme yalnız kendi belgene yazılır.',
-        tone: 'danger',
-      });
-      return;
+      const hint = 'E-posta yazılmadığı için sınama yapılmadı.';
+      setWriteProbe({ busy: false, text: hint, tone: 'danger' });
+      return hint;
     }
     setWriteProbe({ busy: true, text: 'Kendi belgene yazma deneniyor…', tone: 'info' });
     try {
       const res = await probeMembershipWrite(diagKey);
-      setWriteProbe({
-        busy: false,
-        tone: res.ok ? 'success' : 'danger',
-        text: res.ok
-          ? res.created
-            ? `Yazma serbest — ${res.email} belgesi yoktu, kurala tam uygun biçimde oluşturuldu.`
-            : `Yazma serbest — ${res.email} belgesi güncellendi (yalnız lastLoginAt).`
-          : `Yazma engellendi (${res.cause || 'bilinmiyor'}): ${res.error || 'neden ölçülemedi'}`,
-      });
+      const text = res.ok
+        ? res.created
+          ? `Yazma serbest — ${res.email} belgesi yoktu, kurala tam uygun biçimde oluşturuldu.`
+          : `Yazma serbest — ${res.email} belgesi güncellendi (yalnız lastLoginAt).`
+        : `Yazma engellendi (${res.cause || 'bilinmiyor'}): ${res.error || 'neden ölçülemedi'}`;
+      setWriteProbe({ busy: false, tone: res.ok ? 'success' : 'danger', text });
+      return text;
     } catch (e) {
-      setWriteProbe({ busy: false, tone: 'danger', text: `Sınama yapılamadı: ${String(e)}`, });
+      const text = `Sınama yapılamadı: ${String(e)}`;
+      setWriteProbe({ busy: false, tone: 'danger', text });
+      return text;
     }
+  };
+
+  const copyReport = async () => {
+    const text =
+      report ??
+      (diag.data
+        ? accessDiagReportText(diag.data, {
+            email: diagKey || undefined,
+            authSource: authConfigSource() || 'yok',
+            probe: writeProbe.text === 'Henüz denenmedi' ? undefined : writeProbe.text,
+            authProbe: authProbeNote || undefined,
+            appLabel: describeTarget(fsTarget),
+          })
+        : '');
+    if (!text) {
+      setReportCopied('Önce “Tanı” düğmesine bas — rapor ölçümden sonra oluşuyor.');
+      return;
+    }
+    setReport(text);
+    setReportOpen(true);
+    const res = await copyText(text);
+    setReportCopied(
+      res === 'copied'
+        ? 'Rapor kopyalandı — geliştiriciye yapıştırman yeterli (ekran fotoğrafı gerekmez).'
+        : 'Panoya kopyalanamadı: aşağıdaki metni uzun basıp seç, sonra kopyala.'
+    );
   };
 
   const copyLockdownPath = async () => {
@@ -790,6 +837,39 @@ export const AdminSettingsScreen: React.FC = () => {
               }}
             >
               {writeProbe.text}
+            </Text>
+          ) : null}
+          <AdminRow
+            icon="document-text-outline"
+            title="Tanı raporunu kopyala"
+            subtitle="Ölçülen her şey tek metinde: HTTP yanıtları, kilit yolu, token projesi, biçim denetimi, sınama sonucu. Geliştiriciye yapıştır — tahmine gerek kalmaz."
+            right={<AdminButton small tone="neutral" label="Kopyala" onPress={() => void copyReport()} />}
+          />
+          <AdminRow
+            icon="document-text-outline"
+            title="Raporu göster"
+            subtitle={report ? `${report.split('\n').length} satırlık ölçüm — uzun basıp seçebilirsin` : 'Önce “Tanı” çalıştır; ölçüm burada görünür.'}
+            right={
+              <AdminButton
+                small
+                tone="neutral"
+                label={reportOpen ? 'Gizle' : 'Göster'}
+                disabled={!report}
+                onPress={() => setReportOpen(v => !v)}
+              />
+            }
+          />
+          {reportOpen && report ? (
+            <Text
+              selectable
+              style={{ fontSize: 9.5, color: colors.text, fontFamily: 'monospace', lineHeight: 14, marginBottom: 6 }}
+            >
+              {report}
+            </Text>
+          ) : null}
+          {reportCopied ? (
+            <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16, marginBottom: 6 }}>
+              {reportCopied}
             </Text>
           ) : null}
           {diag.data?.detail.lockdownPath ? (

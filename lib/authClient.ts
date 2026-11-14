@@ -190,6 +190,12 @@ export async function readDeviceApiKey(): Promise<string | null> {
   return deviceOverride?.apiKey ?? null;
 }
 
+/** Çözümlenmiş web API anahtarı (yoksa boş string). Firestore REST isteklerinin
+ *  `?key=` yoklaması için — kullanıcıya asla sorulmaz, kaynak yine config/.env. */
+export function webApiKey(): string {
+  return resolveAuthConfig()?.apiKey || '';
+}
+
 export function authConfigSource(): AuthConfig['source'] | null {
   const cfg = resolveAuthConfig();
   return cfg ? cfg.source : null;

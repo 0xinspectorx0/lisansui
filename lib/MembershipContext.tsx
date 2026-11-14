@@ -34,7 +34,7 @@ import {
 } from './membership';
 import { AUTH_PASSWORD_BUNDLE, hashPassword, isFirebaseAuthBundle, verifyPassword } from './crypto';
 import { diagnoseMembershipAccess } from './accessDiag';
-import { probeMembershipWrite } from './firestoreApi';
+import { consumeApiKeyParamNotice, probeMembershipWrite } from './firestoreApi';
 import * as auth from './authClient';
 import {
   CloudOutcome,
@@ -184,9 +184,20 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   adminRef.current = admin;
 
   const noteCloud = useCallback((res: { ok: boolean; error?: string; reason?: string }) => {
+    // Kendi kendine iyileşen iki durum: (a) cihazda yabancı projeli anahtar,
+    // (b) Firestore isteklerinin web API anahtarı parametresi istemesi.
+    // Biri yaşandıysa kullanıcıya "ne oldu" tek cümleyle söylenir, suçlama değil.
+    const healedKey = consumeApiKeyParamNotice();
+    const healedToken = auth.consumeForeignTokenNotice();
     if (res.ok) {
       setCloudStatus('online');
-      setCloudMessage(null);
+      setCloudMessage(
+        healedKey
+          ? 'Firestore istekleri artık web API anahtarı parametresiyle gönderiliyor — anahtarsız istekler geçit tarafından reddediliyormuş, kendiliğinden düzeltildi.'
+          : healedToken
+            ? 'Cihazda kayıtlı eski Firebase anahtarı başka bir projeye aitmiş; kaldırıldı, depodaki anahtar kullanılıyor.'
+            : null
+      );
       return;
     }
     setCloudStatus(res.reason === 'denied' ? 'denied' : 'offline');

@@ -509,7 +509,7 @@ try {
   ok(/Yazma sınaması \(kendi belgen\)/.test(panel2), 'panel: sınama düğmesi etiketi');
   ok(/VIP\/rol\/durum alanlarına dokunulmaz/.test(panel2), 'panel: sınamanın yetki kazandırmadığı açıkça yazıyor');
   ok(/lockdownPath \? ` @\$\{diag\.data\.detail\.lockdownPath\}`/.test(panel2), 'panel: kilidin hangi yolda durduğu ölçüm satırında');
-  ok(/data\.cause === 'write-needs-probe' && diagKey\.includes\('@'\)/.test(panel2), 'panel: okuma temizse sınama kendiliğinden çalışıyor');
+  ok(/data\.cause === 'write-needs-probe' \|\| data\.cause === 'lockdown-no-admin'\)/.test(panel2), 'panel: okuma temizse/kuşkuluysa sınama kendiliğinden çalışıyor');
   ok(/await runWriteProbe\(\)/.test(panel2), 'panel: tanı sonrası yazma sınaması çağrılıyor');
   ok(/yalnızca yazdığın e-postanın belgesine dokunur/.test(panel2) && /VIP\/rol\/durum alanlarına dokunulmaz/.test(panel2), 'panel: sınamanın zararsız olduğu açıkça yazıyor');
   ok(/Neden engellendi\?/.test(panel2), 'panel: sorunun başlığı kullanıcı dilinde');
@@ -748,8 +748,9 @@ console.log('\n\x1b[1m[17] kuralı uygulayan sahte Firestore: yazma kademeleri +
     wlog.length = 0;
     r = await FP.patchMemberDoc('yeni@ornek.com', { note: 'kısmi' });
     ok(r.ok, 'B: belge yokken kısmi PATCH reddi, kademe ile yazıldı', r.ok ? '' : r.error);
-    ok(wlog.length >= 2 && wlog[0].method === 'PATCH' && wlog[1].method === 'POST', 'B: önce PATCH sonra create denendi', wlog.map(l => l.method).join('>'));
-    ok(wlog[1].fields.length >= MS.MEMBER_REQUIRED_KEYS.length, 'B: create gövdesi kuralın istediği tüm alanları taşıyor', String(wlog[1].fields.length));
+    ok(wlog[0].method === 'PATCH' && wlog.some(l => l.method === 'POST'), 'B: önce PATCH sonra create denendi', wlog.map(l => l.method).join('>'));
+    const createBody = wlog.find(l => l.method === 'POST');
+    ok(createBody.fields.length >= MS.MEMBER_REQUIRED_KEYS.length, 'B: create gövdesi kuralın istediği tüm alanları taşıyor', String(createBody.fields.length));
     ok((store.get('memberships/yeni@ornek.com')?.note?.stringValue || '').startsWith('kısmi'), 'B: istenen alan belgeye işlendi');
 
     // C) belge zaten var (ör. eski PBKDF2 üyesi) → benimseme
@@ -779,7 +780,35 @@ console.log('\n\x1b[1m[17] kuralı uygulayan sahte Firestore: yazma kademeleri +
     const onlyNote = await FP.patchMemberDoc('a@b.co', { note: 'yeni' }, { noCreateFallback: true });
     ok(onlyNote.ok && store.get('memberships/a@b.co')?.note?.stringValue === 'yeni', 'C2: ardından profil/not yazısı yazılabiliyor');
 
-    // D) düzeltilemeyen biçim → ağa hiç gitmeden, alan adıyla
+    // B2) kurallardan gelen red için anahtarlı deneme YAPILMAZ (boşuna gidiş-dönüş yok)
+  store.clear();
+  wlog.length = 0;
+  const rulesDenyResponse = () => ({
+    ok: false,
+    status: 403,
+    json: async () => ({ error: { code: 403, message: 'Missing or insufficient permissions.' } }),
+    text: async () => '{"error":{"message":"Missing or insufficient permissions."}}',
+    clone() {
+      return { text: async () => '{"error":{"message":"Missing or insufficient permissions."}}' };
+    },
+  });
+  const realRulesDeny = globalThis.fetch;
+  let rulesHits = 0;
+  globalThis.fetch = async (url, init) => {
+    rulesHits += 1;
+    wlog.push({ url: String(url), method: init?.method || 'GET' });
+    return rulesDenyResponse();
+  };
+  let rulesDenyRes = 'x';
+  try {
+    rulesDenyRes = await (await freshApi()).documentExists('memberships/x@y.co');
+  } finally {
+    globalThis.fetch = realRulesDeny;
+  }
+  ok(rulesDenyRes === null, 'B2: kural reddi “okunamadı” olarak dürüstçe bildiriliyor', String(rulesDenyRes));
+  ok(rulesHits === 1, 'B2: “Missing or insufficient permissions” için anahtarlı deneme yenilenmiyor', String(rulesHits));
+
+  // D) düzeltilemeyen biçim → ağa hiç gitmeden, alan adıyla
     wlog.length = 0;
     r = await FP.createMemberDoc({ ...baseDoc, id: 'kotu', email: 'kotu', emailNormalized: 'kotu' });
     ok(!r.ok && /email/.test(r.error) && wlog.length === 0, 'D: geçersiz e-posta gönderilmiyor, nedeni alan adıyla yazılıyor', r.ok ? 'kabul edildi' : r.error);
@@ -872,6 +901,95 @@ console.log('\n\x1b[1m[17] kuralı uygulayan sahte Firestore: yazma kademeleri +
   ok(/writeMembershipSelf\(draft\)/.test(ctx2), 'context: kayıt ve ilk giriş yazması kademeli yolu kullanıyor');
   ok(!/createMemberDoc\(draft\)/.test(ctx2), 'context: çıplak createMemberDoc çağrısı kalmadı');
   ok(/diag\.cause === 'write-needs-probe'/.test(ctx2), 'context: okuma temizse deneme yazmasını kendisi çalıştırıyor');
+}
+
+console.log('\n\x1b[1m[18] API anahtarı yoklaması, ham sunucu yanıtları ve kopyalanabilir rapor\x1b[0m');
+{
+  // A) firestore istemcisi: anahtarsız red → `?key=` ile yeniden dener ve tercihini hatırlar
+  const FPk = await freshApi();
+  const calls = [];
+  const realFetch5 = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    calls.push({ u, method: init?.method || 'GET', key: /[?&]key=/.test(u) });
+    const okBody = { name: 'projects/p/databases/(default)/documents/memberships/a@b.co', fields: {} };
+    if (!/[?&]key=/.test(u)) return { ok: false, status: 403, json: async () => ({ error: { message: 'PERMISSION_DENIED' } }), text: async () => '{"error":{"message":"PERMISSION_DENIED: missing key"}}' };
+    return { ok: true, status: 200, json: async () => okBody, text: async () => JSON.stringify(okBody) };
+  };
+  try {
+    const exists = await FPk.documentExists('memberships/a@b.co');
+    ok(exists === true, 'A: anahtarsız 403 → anahtarlı denemeyle belge bulundu', JSON.stringify(calls));
+    ok(calls.length === 2 && calls[0].key === false && calls[1].key === true, 'A: önce anahtarsız, sonra anahtarlı denendi', calls.map(c => (c.key ? 'key' : '-')).join(','));
+    ok(FPk.isApiKeyParamPreferred() === true, 'A: anahtar tercihi hatırlanıyor');
+    ok(FPk.consumeApiKeyParamNotice() === true && FPk.consumeApiKeyParamNotice() === false, 'A: bildirim bir kez gösteriliyor');
+    calls.length = 0;
+    await FPk.documentExists('memberships/c@d.co');
+    ok(calls.length === 1 && calls[0].key === true, 'A: sonraki istekler doğrudan anahtarlı gidiyor (gereksiz deneme yok)', JSON.stringify(calls));
+  } finally {
+    globalThis.fetch = realFetch5;
+  }
+
+  // B) tanı: veritabanı yoksa kuralı suçlamıyor, ham yanıtı taşıyor
+  const realFetch6 = globalThis.fetch;
+  const notFound = (msg) => ({
+    ok: false,
+    status: 404,
+    json: async () => ({ error: { message: msg } }),
+    text: async () => JSON.stringify({ error: { message: msg } }),
+  });
+  globalThis.fetch = async url => notFound(`NOT_FOUND: Database (default) does not exist on project kpssasistani-01. ${String(url).length}`);
+  let diagB = null;
+  try {
+    const Db = await import(`/tmp/accessDiagBundle.mjs?v=${Date.now()}-${Math.random()}`);
+    diagB = await Db.diagnoseMembershipAccess('a@b.co');
+  } finally {
+    globalThis.fetch = realFetch6;
+  }
+  ok(diagB.cause === 'database-missing', 'B: “veritabanı yok” kural reddi olarak SUNULMUYOR', diagB.cause);
+  ok(/Create database/.test(diagB.steps.join(' ')), 'B: adım tek eylemi söylüyor (veritabanını oluştur)', diagB.steps.join(' | '));
+  ok(/does not exist/.test(diagB.detail.raw.content), 'B: ham sunucu gerekçesi rapora işleniyor', diagB.detail.raw.content);
+
+  // C) tanı: okuma yalnız anahtarla geçiyorsa kullanıcıyı suçlamadan çözüme bağlıyor
+  const realFetch7 = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const u = String(url);
+    if (/[?&]key=/.test(u)) return { ok: true, status: 200, json: async () => ({}), text: async () => '{"documents":[]}' };
+    return { ok: false, status: 403, json: async () => ({ error: { message: 'PERMISSION_DENIED' } }), text: async () => '{"error":{"message":"PERMISSION_DENIED"}}' };
+  };
+  let diagC = null;
+  try {
+    const Dc = await import(`/tmp/accessDiagBundle.mjs?v=${Date.now()}-${Math.random()}`);
+    diagC = await Dc.diagnoseMembershipAccess('a@b.co');
+  } finally {
+    globalThis.fetch = realFetch7;
+  }
+  ok(diagC.cause === 'ok' && diagC.detail.needsApiKeyParam === true, 'C: “yalnız anahtarlı istek geçiyor” ayrılıyor', `${diagC.cause}/${diagC.detail.needsApiKeyParam}`);
+  ok(/anahtar/i.test(diagC.headline) && !/kural.*yayınla/i.test(diagC.steps[0]), 'C: adım boşuna kural yayınlamaya göndermiyor', diagC.steps[0]);
+
+  // D) rapor metni: tek yapıştırmayla nedeni taşır
+  const Rt = await import(`/tmp/accessDiagBundle.mjs?v=${Date.now()}-${Math.random()}`);
+  const text = Rt.accessDiagReportText(diagC, { email: 'a@b.co', authSource: 'repo', probe: 'Yazma serbest — a@b.co belgesi güncellendi', appLabel: 'kpssasistani-01 • db:(default) • (kök)' });
+  ok(text.startsWith('— KPSS Asistanı'), 'Rapor tek blok metin olarak başlıyor');
+  for (const need of ['neden: ok', 'hedef: proje kpssasistani-01', 'anahtar kaynağı repo', 'e-posta a@b.co', 'yazma sınaması: Yazma serbest', 'ham: ', 'adım 1:'])
+    ok(text.includes(need), `raporda “${need}” satırı var`);
+  ok(/biçim: /.test(text) && /okuma: içerik \d+/.test(text), 'rapor okuma ölçümlerini de taşıyor');
+  const report3 = Rt.accessDiagReportText(diagC, { authProbe: 'E-posta/parola girişi kapalı (OPERATION_NOT_ALLOWED).' });
+  ok(/^e-posta\/parola giri.*OPERATION_NOT_ALLOWED/im.test(report3), 'rapor sağlayıcı ölçümünü de taşıyor');
+  ok(!/e-posta\/parola girişi: undefined/.test(report3), 'ölçülmemiş satır rapora “undefined” olarak sızmıyor');
+
+  // E) kaynak bağları: panel raporu gösteriyor, context bildirimi duyuyor
+  const panel3 = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
+  ok(/accessDiagReportText\(data,/.test(panel3), 'panel: tanı sonrası rapor otomatik kuruluyor');
+  ok(/Tanı raporunu kopyala/.test(panel3) && /copyReport\(\)/.test(panel3), 'panel: raporu tek dokunuşla kopyalama satırı var');
+  ok(/authClient\.probeAuth\(\)\.catch\(\(\) => null\)/.test(panel3), 'panel: sağlayıcı ölçümü rapor için gerçekten alınıyor');
+  ok(/authProbe: ap\?\.note/.test(panel3) && /authProbe: authProbeNote \|\| undefined/.test(panel3), 'panel: rapora yalnız ölçülen sağlayıcı notu yazılıyor');
+  ok(!/ekran fotoğrafı at|ekran görüntüsü at|fotoğraf at/.test(panel3), 'panel: kullanıcıdan ekran görüntüsü istenmiyor');
+  const ctx3 = fs.readFileSync('lib/MembershipContext.tsx', 'utf8');
+  ok(/consumeApiKeyParamNotice\(\)/.test(ctx3), 'context: anahtar parametresi iyileşmesi kullanıcıya bildiriliyor');
+  ok(/auth\.consumeForeignTokenNotice\(\)/.test(ctx3), 'context: yabancı anahtar iyileşmesi de bildiriliyor');
+  const apiSrc3 = fs.readFileSync('lib/firestoreApi.ts', 'utf8');
+  ok(/const key = auth\.webApiKey\(\);/.test(apiSrc3) && !/const auth = await authHeaders\(\);/.test(apiSrc3), 'firestoreApi: modül takma adı gölgelenmiyor (auth.* çağrısı güvenli)');
+  ok(/key \&\& useApiKeyParam/.test(apiSrc3), 'firestoreApi: anahtar tercihi bir kez kazanılıyor');
 }
 
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);

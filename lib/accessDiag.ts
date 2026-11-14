@@ -23,7 +23,16 @@
  */
 
 import { collectionPath, contentBase, documentsBase, firestoreTarget } from './firebaseConfig';
-import { sessionIdTokenInfo } from './authClient';
+import { sessionIdTokenInfo, webApiKey } from './authClient';
+
+/** Anahtarı async okur: `ensureAuthConfigLoaded()` çağrılmamışsa boş döner. */
+async function resolveWebApiKey(): Promise<string> {
+  try {
+    return webApiKey();
+  } catch {
+    return '';
+  }
+}
 import { MEMBER_EMAIL_RE } from './memberShape';
 
 export type AccessDiagCause =
@@ -35,6 +44,7 @@ export type AccessDiagCause =
   | 'lockdown-no-admin'
   | 'shape-rejected'
   | 'write-needs-probe'
+  | 'database-missing'
   | 'unknown';
 
 export interface AccessDiag {
@@ -59,6 +69,10 @@ export interface AccessDiag {
     lockdownChecked: string[];
     tokenProject: string | null;
     tokenPresent: boolean;
+    /** Sunucunun ham gerekçeleri — panelden kopyalanıp geliştiriciye verilebilir. */
+    raw: { content: string; membership: string; lockdown: string };
+    /** Okuma bile `?key=` ile geçtiyse: anahtar parametresi zorunlu demektir. */
+    needsApiKeyParam: boolean;
     /** Oturumun e-postası incelenen belge kimliğiyle aynı mı? (kendi belgen = yazabilirsin) */
     selfMatch: boolean;
     /** Yerel biçim denetiminin buldukları (boş = kural alanları reddetmez). */
@@ -82,31 +96,70 @@ function metaDocPaths(name: string): string[] {
   return primary === legacy ? [primary] : [primary, legacy];
 }
 
-type Read = { status: number | 'network'; emptyList?: boolean };
+type Read = {
+  status: number | 'network';
+  emptyList?: boolean;
+  /** Sunucunun ham gerekçesi (`error.message`) — tahmini bitiren satır. */
+  message?: string;
+  /** İstek `?key=<web anahtarı>` ile gönderilince mi geçti? */
+  viaApiKey?: boolean;
+};
 
-async function get(url: string, token: string | null): Promise<Read> {
+/** Yanıt gövdesindeki `error.message`'ı kırparak alır (rapora yazılır). */
+function errorText(raw: string): string {
+  if (!raw) return '';
+  try {
+    const j = JSON.parse(raw);
+    const m = j?.error?.message ?? j?.error?.status ?? '';
+    return String(m || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  } catch {
+    return raw.replace(/\s+/g, ' ').trim().slice(0, 120);
+  }
+}
+
+async function get(
+  url: string,
+  token: string | null,
+  opts: { keyRetry?: string } = {}
+): Promise<Read> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
+  const send = async (target: string) => {
+    const res = await fetch(target, {
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       signal: ctrl.signal,
     });
-    // Liste sorgularında 200 + boş sonuç, okuma iznini KANITLAMAZ: kurallar
-    // erişilemeyen belgeleri sessizce süzer. Boş/oluş ayrımı için gövde okunur.
+    const text = await res.text().catch(() => '');
     let emptyList: boolean | undefined;
     if (res.ok && url.includes('pageSize')) {
+      // Liste sorgularında 200 + boş sonuç okuma iznini KANITLAMAZ: kurallar
+      // erişilemeyen belgeleri sessizce süzer.
       try {
-        const json = JSON.parse((await res.text()) || '{}');
+        const json = JSON.parse(text || '{}');
         emptyList = !Array.isArray(json?.documents) || json.documents.length === 0;
       } catch {
         emptyList = undefined;
       }
     }
-    return { status: res.status, emptyList };
+    return { res, text, emptyList };
+  };
+  try {
+    const first = await send(url);
+    if (!first.res.ok && first.res.status !== 404 && opts.keyRetry) {
+      // Kimliksiz istek API geçidinden geçmiyor olabilir (anahtar istenir).
+      const sep = url.includes('?') ? '&' : '?';
+      const again = await send(`${url}${sep}key=${encodeURIComponent(opts.keyRetry)}`);
+      if (again.res.ok)
+        return { status: again.res.status, emptyList: again.emptyList, viaApiKey: true, message: '' };
+    }
+    return {
+      status: first.res.status,
+      emptyList: first.emptyList,
+      message: first.res.ok ? '' : errorText(first.text),
+    };
   } catch {
     return { status: 'network' };
   } finally {
@@ -118,15 +171,16 @@ async function get(url: string, token: string | null): Promise<Read> {
 async function readLockdown(
   token: string | null,
   paths: string[]
-): Promise<{ state: 'on' | 'off' | 'unknown'; path: string | null }> {
+): Promise<{ state: 'on' | 'off' | 'unknown'; path: string | null; message: string }> {
   const hits = await Promise.all(
     paths.map(async path => ({ path, ...(await get(`${documentsBase()}/${path}?fields=note`, token)) }))
   );
   const on = hits.find(h => h.status === 200);
-  if (on) return { state: 'on', path: on.path };
-  if (hits.some(h => h.status === 'network')) return { state: 'unknown', path: null };
-  if (hits.every(h => h.status === 404)) return { state: 'off', path: null };
-  return { state: 'unknown', path: null };
+  const message = (hits.find(h => h.message)?.message || '').slice(0, 160);
+  if (on) return { state: 'on', path: on.path, message };
+  if (hits.some(h => h.status === 'network')) return { state: 'unknown', path: null, message };
+  if (hits.every(h => h.status === 404)) return { state: 'off', path: null, message };
+  return { state: 'unknown', path: null, message };
 }
 
 /**
@@ -140,6 +194,41 @@ export function memberEmailShapeProblem(email?: string): string {
   if (!MEMBER_EMAIL_RE.test(key)) return `email: “${key}” kuralın beklediği e-posta biçiminde değil`;
   if (key.length > 180) return 'email: 180 karakterden uzun olamaz';
   return '';
+}
+
+/**
+ * Tanıyı tek metin bloğuna çevirir: panelden kopyalanıp geliştiriciye
+ * yapıştırılabilir (tahmin yerine ölçüm dolaşır). Ham sunucu yanıtları da içinde.
+ */
+export function accessDiagReportText(
+  diag: AccessDiag,
+  extra: {
+    email?: string;
+    authSource?: string;
+    probe?: string;
+    /** `authClient.probeAuth()` notu: E-posta/parola girişinin gerçek durumu */
+    authProbe?: string;
+    appLabel?: string;
+  } = {}
+): string {
+  const d = diag.detail;
+  const lines = [
+    '— KPSS Asistanı · üyelik erişim raporu —',
+    `neden: ${diag.cause}`,
+    `cümle: ${diag.headline}`,
+    ...diag.steps.map((s, i) => `adım ${i + 1}: ${s}`),
+    `hedef: proje ${d.projectId} • db ${d.databaseId} • yol ${d.membershipsPath}`,
+    `okuma: içerik ${d.contentStatus} • üyelik ${d.membershipStatus}${d.membershipEmpty ? ' (boş liste)' : ''} • kilit ${d.lockdown}${d.lockdownPath ? ` @${d.lockdownPath}` : ''}`,
+    `kimlik: ${d.tokenPresent ? 'oturum var' : 'oturum yok'} • token projesi ${d.tokenProject || '-'} • anahtar kaynağı ${extra.authSource || '-'}${extra.email ? ` • e-posta ${extra.email}` : ''}`,
+    `eşleşme: kendi belgesi ${d.selfMatch ? 'evet' : 'hayır'} • anahtar parametresi ${d.needsApiKeyParam ? 'gerekli' : 'gerekmez'}`,
+    `biçim: ${d.shapeProblems || 'sorun yok'}`,
+    `ham: içerik=${d.raw.content || '-'} | üyelik=${d.raw.membership || '-'} | kilit=${d.raw.lockdown || '-'}`,
+  ];
+  if (extra.probe) lines.push(`yazma sınaması: ${extra.probe}`);
+  if (extra.authProbe) lines.push(`e-posta/parola girişi: ${extra.authProbe}`);
+  if (extra.appLabel) lines.push(`etiket: ${extra.appLabel}`);
+  lines.push(`düz: ${new Date().toISOString()}`);
+  return lines.join('\n');
 }
 
 /**
@@ -168,6 +257,8 @@ export async function diagnoseMembershipAccess(email?: string): Promise<AccessDi
     tokenPresent: !!token,
     selfMatch: !!email && String(cfg.email || '').toLowerCase() === String(email).toLowerCase(),
     shapeProblems: '',
+    raw: { content: '', membership: '', lockdown: '' },
+    needsApiKeyParam: false,
   };
   const out = (
     cause: AccessDiagCause,
@@ -196,10 +287,13 @@ export async function diagnoseMembershipAccess(email?: string): Promise<AccessDi
   const membershipUrl = email
     ? `${documentsBase()}/${membershipsPath}/${encodeURIComponent(email)}`
     : `${documentsBase()}/${membershipsPath}?pageSize=1`;
+  // Web anahtarı yalnızca YEDEK olarak denenir: bazı kurulumlarda API geçidi
+  // kimliksiz isteği anahtarsız reddeder ve bu, kural reddiyle karışır.
+  const webKey = await resolveWebApiKey();
   const [content, lockdown, membership] = await Promise.all([
-    get(`${contentBase()}/daily_tips/main`, null),
+    get(`${contentBase()}/daily_tips/main`, null, { keyRetry: webKey }),
     readLockdown(token, lockdownChecked),
-    get(membershipUrl, token || null),
+    get(membershipUrl, token || null, { keyRetry: webKey }),
   ]);
 
   base.contentStatus = content.status;
@@ -207,6 +301,37 @@ export async function diagnoseMembershipAccess(email?: string): Promise<AccessDi
   base.membershipEmpty = membership.emptyList === true;
   base.lockdown = lockdown.state;
   base.lockdownPath = lockdown.path;
+  base.raw = {
+    content: content.message || '',
+    membership: membership.message || '',
+    lockdown: lockdown.message || '',
+  };
+  base.needsApiKeyParam = content.viaApiKey === true || membership.viaApiKey === true;
+
+  // Veritabanı hiç oluşturulmamışsa kuralın hiç suçu yoktur — 404 + "does not exist".
+  if (/does not exist|NOT_FOUND.*[Dd]atabase/i.test(`${base.raw.content} ${base.raw.membership}`))
+    return out(
+      'database-missing',
+      `“${target.projectId}” projesinde ${target.databaseId} veritabanı bulunamadı — Firestore veritabanı henüz oluşturulmamış ya da adı farklı.`,
+      [
+        'Console → Firestore Database → Create database (Native mode, veritabanı kimliği: ' +
+          `${target.databaseId}) — bu bir kez yapılır, sonra kural metnini yayınlayabilirsin.`,
+        `Zaten varsa: app.json → expo.extra.firestore.databaseId değeri Console'daki adla birebir aynı olmalı (bugün: ${target.databaseId}).`,
+        'Yol öneki de aynı olmalı: bugün ' + (target.root ? `legacy (${target.root})` : '(kök)') + '.',
+      ],
+      { membershipStatus: membership.status }
+    );
+
+  if (base.needsApiKeyParam)
+    return out(
+      'ok',
+      'Okuma yalnızca web API anahtarı parametresiyle geçiyor: istekler eksik anahtar yüzünden reddediliyormuş.',
+      [
+        'Uygulama anahtarı kendisi ekliyor (`config/firebaseApp.ts` değeri, senden bir şey istenmiyor) — işlemi tekrar dene.',
+        'Aynı satır tekrar çıkarsa: Console → APIs & Services → Credentials → anahtarın “Application restrictions”ı bu adresi kapsıyor mu?',
+      ],
+      { membershipStatus: membership.status }
+    );
 
   if (content.status === 'network')
     return out(
