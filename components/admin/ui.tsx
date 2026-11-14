@@ -426,6 +426,7 @@ export const AdminField: React.FC<{
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
   maxLength?: number;
   hint?: string;
+  secureTextEntry?: boolean;
 }> = ({
   label,
   value,
@@ -436,6 +437,7 @@ export const AdminField: React.FC<{
   autoCapitalize = 'sentences',
   maxLength,
   hint,
+  secureTextEntry,
 }) => {
   const { accent, colors } = useAdminAccent();
   const [focused, setFocused] = useState(false);
@@ -456,6 +458,7 @@ export const AdminField: React.FC<{
         autoCorrect={false}
         maxLength={maxLength}
         multiline={multiline}
+        secureTextEntry={secureTextEntry}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         style={{

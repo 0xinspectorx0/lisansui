@@ -86,6 +86,8 @@ interface MembershipContextValue {
   authMode: boolean;
   /** Supabase Auth açıkken “şifremi unuttum” e-postası. */
   sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Şifre sıfırlama bağlantısından gelindiğinde yeni şifreyi kaydeder. */
+  completePasswordRecovery: (newPassword: string) => Promise<{ ok: boolean; email?: string; error?: string }>;
 
   quota: QuotaState;
   /** Effective VIP: cloud member doc (or admin local profile when cloudVip is off). */
@@ -93,7 +95,7 @@ interface MembershipContextValue {
   vipSource: 'cloud' | 'local-admin' | 'none';
 
   clearError: () => void;
-  signUp: (input: { email: string; password: string; displayName: string; city?: string; exam?: string }) => Promise<{ ok: boolean; reason?: string }>;
+  signUp: (input: { email: string; password: string; displayName: string; city?: string; exam?: string }) => Promise<{ ok: boolean; reason?: string; confirmationRequired?: boolean }>;
   signIn: (email: string, password: string) => Promise<{ ok: boolean; reason?: string }>;
   signOut: () => Promise<void>;
   refreshMember: () => Promise<void>;
@@ -399,9 +401,14 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setBusy(true);
       try {
         let authUid = '';
+        let confirmationRequired = false;
         if (authMode) {
           // Kimlik Supabase Auth'ta: önce hesabı aç, sonra üyelik belgesini yaz.
-          let account = await auth.signUp(emailKey, input.password);
+          let account = await auth.signUp(emailKey, input.password, {
+            displayName: input.displayName.trim(),
+            city: input.city?.trim() || '',
+            exam: input.exam?.trim() || 'KPSS Lisans (GY-GK)',
+          });
           if (!account.ok && /kayıtlı bir hesap var|already registered|already been registered/i.test(account.error || '')) {
             // Önceki deneme yarım kalmış olabilir (Auth hesabı açıldı, satır
             // yazılamadı). Şifre bilindiği için hesabı silmek yerine GİRİŞ yapılır
@@ -413,10 +420,11 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             setError(account.error || 'Kayıt başarısız.');
             return { ok: false, reason: 'auth' };
           }
+          confirmationRequired = Boolean(account.confirmationRequired);
           authUid = account.session?.uid || '';
           // Açılan hesap Supabase hedefinin projesinden mi? Değilse belge yazımı
           // 401/403 alır; hesabı geri al + cihazdaki eski anahtarı sil.
-          if (await auth.isForeignSessionToken()) {
+          if (!confirmationRequired && (await auth.isForeignSessionToken())) {
             await auth.deleteAccount().catch(() => undefined);
             const healed = await auth.healForeignAuthProject().catch(() => ({ healed: false }));
             setError(
@@ -470,6 +478,12 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         // create reddedilirse kuralın kabul ettiği alanlarla kısmi yazım.
         const created = await writeMembershipSelf(draft);
         if (!created.ok) {
+          // E-posta onayı beklenirken satır daha önce yazılmışsa veya oturum
+          // onaydan sonra açılacaksa kullanıcıyı engelleme; ilk girişte tamamlanır.
+          if (confirmationRequired) {
+            setCloudStatus('online');
+            return { ok: true, confirmationRequired: true };
+          }
           // Üyelik VERİSİ cihazda tutulmaz: satır yazılamadıysa kayıt YOKTUR.
           // Supabase Auth hesabı istemciden silinemez (service_role gerekir);
           // oturum kapatılır, tekrar deneme aynı hesapla giriş üzerinden tamamlanır.
@@ -481,6 +495,11 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               : created.error
           );
           return { ok: false, reason: 'write' };
+        }
+        if (confirmationRequired) {
+          setCloudStatus('online');
+          setMembersVersion(v => v + 1);
+          return { ok: true, confirmationRequired: true };
         }
         if (created.adopted || created.degraded) {
           // Belge zaten varmış: yazma kabul edilen alanlarla güncellendi, hesap bağlandı.
@@ -518,6 +537,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setBusy(true);
       try {
         let authUid = '';
+        let authMeta: { displayName?: string; city?: string; exam?: string } | undefined;
         if (authMode) {
           const account = await auth.signIn(emailKey, password);
           if (!account.ok) {
@@ -535,6 +555,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             authMode = false;
           } else {
             authUid = account.session?.uid || '';
+            authMeta = account.session?.userMetadata;
           }
         }
         const found = await fetchMemberByEmail(emailKey);
@@ -559,13 +580,15 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             setError('Bu e-posta ile kayıtlı üye bulunamadı.');
             return { ok: false, reason: 'notfound' };
           }
-          // Supabase hesabı var, üyelik belgesi yok (ör. eski veri/new project) → ilk girişte oluştur.
+          // Supabase hesabı var, üyelik belgesi yok (ör. e-posta onayı sonrası ilk giriş) → oluştur.
           const nowIso = new Date().toISOString();
           const draft: MemberDoc = {
             ...emptyMember(emailKey),
             email: emailKey,
             emailNormalized: emailKey,
-            displayName: emailKey.split('@')[0] || 'Üye',
+            displayName: authMeta?.displayName || emailKey.split('@')[0] || 'Üye',
+            city: authMeta?.city || '',
+            exam: authMeta?.exam || 'KPSS Lisans (GY-GK)',
             password: AUTH_PASSWORD_BUNDLE,
             ...(authUid ? { authUid } : {}),
             status: membershipCfg.requireApproval ? 'pending' : 'active',
@@ -626,7 +649,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setBusy(false);
       }
     },
-    [applyMember, noteCloud]
+    [applyMember, membershipCfg.requireApproval, noteCloud]
   );
 
   const signOut = useCallback(async () => {
@@ -640,7 +663,13 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     async email => {
       if (!auth.isAuthConfigured())
         return { ok: false, error: 'Parola sıfırlama için Supabase Auth gerekiyor (anahtar config/supabaseApp.ts içinde tanımlı olmalı).' };
-      const res = await auth.sendPasswordResetEmail(normalizeEmail(email));
+      const clean = normalizeEmail(email);
+      if (!emailPattern.test(clean)) {
+        const msg = 'Lütfen geçerli bir e-posta adresi girin.';
+        setError(msg);
+        return { ok: false, error: msg };
+      }
+      const res = await auth.sendPasswordResetEmail(clean);
       if (!res.ok) {
         setError(res.error || 'Sıfırlama e-postası gönderilemedi.');
         return { ok: false, error: res.error };
@@ -649,6 +678,34 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return { ok: true };
     },
     []
+  );
+
+  const completePasswordRecovery = useCallback<MembershipContextValue['completePasswordRecovery']>(
+    async newPassword => {
+      setError(null);
+      if ((newPassword || '').length < 6) {
+        const msg = 'Yeni parola en az 6 karakter olmalı.';
+        setError(msg);
+        return { ok: false, error: msg };
+      }
+      setBusy(true);
+      try {
+        const session = await auth.currentSession();
+        const res = await auth.updatePassword(newPassword);
+        if (!res.ok) {
+          setError(res.error || 'Yeni parola kaydedilemedi.');
+          return { ok: false, error: res.error };
+        }
+        const email = session?.email || '';
+        applyMember(null);
+        await sessionStore.remove(SESSION_KEY);
+        await auth.signOut();
+        return { ok: true, email };
+      } finally {
+        setBusy(false);
+      }
+    },
+    [applyMember]
   );
 
   const refreshMember = useCallback(async () => {
@@ -1070,6 +1127,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       cloudMessage,
       authMode: auth.isAuthConfigured(),
       sendPasswordReset,
+      completePasswordRecovery,
       quota,
       isVip,
       vipSource,
@@ -1105,6 +1163,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       cloudStatus,
       cloudMessage,
       sendPasswordReset,
+      completePasswordRecovery,
       quota,
       isVip,
       vipSource,

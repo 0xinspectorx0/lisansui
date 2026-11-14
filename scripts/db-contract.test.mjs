@@ -215,6 +215,38 @@ const noUser = await A.signIn('yok@ornek.com', 'GoodPass1');
 ok(noUser.ok === false && /E-posta veya parola hatalı/.test(noUser.error || ''), 'olmayan hesap da aynı cümleyi alır (e-posta doğrulaması sızdırılmıyor)', noUser.error);
 const in1 = await A.signIn('ogrenci@ornek.com', 'GoodPass1');
 ok(in1.ok === true && in1.session.uid === up.session.uid, 'giriş → aynı uid');
+const resetLive = await A.sendPasswordResetEmail('ogrenci@ornek.com');
+ok(resetLive.ok === true, 'şifre sıfırlama e-postası gönderildi');
+const pwUp = await A.updatePassword('NewPass123');
+ok(pwUp.ok === true, 'yeni şifre kaydedildi (updatePassword)');
+const inNewPw = await A.signIn('ogrenci@ornek.com', 'NewPass123');
+ok(inNewPw.ok === true, 'yeni şifreyle giriş yapıldı');
+await A.updatePassword('GoodPass1');
+
+fake.injectWith(url =>
+  url.includes('/auth/v1/signup')
+    ? {
+        status: 200,
+        body: {
+          id: '00000000-0000-4000-8000-000000000099',
+          email: 'onaybekleyen@ornek.com',
+          identities: [{ id: 'id-1' }],
+        },
+      }
+    : null
+);
+const pendingConfirm = await A.signUp('onaybekleyen@ornek.com', 'GoodPass1', {
+  displayName: 'Onay Bekleyen',
+  city: 'Elazığ',
+  exam: 'KPSS Lisans (GY-GK)',
+});
+fake.clearInject();
+ok(
+  pendingConfirm.ok === true &&
+    pendingConfirm.confirmationRequired === true &&
+    pendingConfirm.code === 'EMAIL_CONFIRMATION_REQUIRED',
+  'e-posta doğrulaması açıkken kayıt hata vermez, confirmationRequired=true döner'
+);
 
 head('\x1b[1m[2b] bayat token: kendiliğinden tazeleme, kullanıcıya iş yok\x1b[0m');
 await A.signOut();

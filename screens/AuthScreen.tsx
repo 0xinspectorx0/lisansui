@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
@@ -7,11 +7,12 @@ import { useNavigation } from '@react-navigation/native';
 import { useAppTheme } from '../lib/theme';
 import { useAdmin } from '../lib/AdminContext';
 import { useMembership } from '../lib/MembershipContext';
+import { consumeAuthRedirect } from '../lib/authClient';
 import { EXAM_PRESETS } from '../lib/AppContext';
 import { AdminButton, AdminCard, AdminField, AdminSectionTitle } from '../components/admin/ui';
 import { CloudStatusBanner } from '../components/membership/ui';
 
-type Mode = 'signin' | 'signup';
+type Mode = 'signin' | 'signup' | 'forgot' | 'recovery';
 
 export const AuthScreen: React.FC = () => {
   const { colors } = useAppTheme();
@@ -23,44 +24,131 @@ export const AuthScreen: React.FC = () => {
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
   const [city, setCity] = useState('');
   const [exam, setExam] = useState(EXAM_PRESETS[0].label);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [localNotice, setLocalNotice] = useState<string | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
 
   const error = localError || membership.error;
-  const busy = membership.busy;
-
-  useEffect(() => {
-    setLocalError(null);
-    setLocalNotice(null);
-    membership.clearError();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
-
+  const busy = membership.busy || resetBusy;
   const canSignUp = settings.registrationOpen;
-  const [resetBusy, setResetBusy] = useState(false);
-  const [localNotice, setLocalNotice] = useState<string | null>(null);
 
-  const doReset = useCallback(async () => {
+  const goHomeOrBack = useCallback(() => {
+    if (navigation.canGoBack?.()) {
+      navigation.goBack();
+    } else {
+      navigation.navigate('MainTabs');
+    }
+  }, [navigation]);
+
+  const switchMode = useCallback(
+    (nextMode: Mode, notice: string | null = null) => {
+      setLocalError(null);
+      setLocalNotice(notice);
+      membership.clearError();
+      setMode(nextMode);
+    },
+    [membership]
+  );
+
+  // E-postadaki onay veya şifre sıfırlama bağlantısından gelindiyse yakala
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const redirected = await consumeAuthRedirect();
+      if (!active || !redirected) return;
+      if (redirected.email) setEmail(redirected.email);
+      if (redirected.kind === 'signup') {
+        setMode('signin');
+        setLocalError(null);
+        membership.clearError();
+        setLocalNotice('Üyeliğiniz onaylandı! Şimdi e-posta adresiniz ve parolanızla giriş yapabilirsiniz.');
+      } else if (redirected.kind === 'recovery') {
+        setMode('recovery');
+        setLocalError(null);
+        membership.clearError();
+        setLocalNotice('Şifre sıfırlama bağlantısı doğrulandı. Lütfen yeni parolanızı belirleyin.');
+      } else if (redirected.kind === 'error') {
+        setMode('signin');
+        setLocalNotice(null);
+        setLocalError(redirected.error || 'E-posta bağlantısının süresi dolmuş veya geçersiz.');
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [membership]);
+
+  const doResetRequest = useCallback(async () => {
     setResetBusy(true);
     setLocalError(null);
     setLocalNotice(null);
+    membership.clearError();
     const res = await membership.sendPasswordReset(email);
     setResetBusy(false);
-    if (res.ok) setLocalNotice(`Şifre sıfırlama bağı ${email.trim()} adresine gönderildi. Spam kutusuna da bak.`);
+    if (res.ok) {
+      setLocalNotice(
+        `Şifre sıfırlama bağlantısı ${email.trim()} adresine gönderildi! Lütfen mail kutunuzu (ve spam klasörünü) kontrol edin; gelen bağlantıya tıkladığınızda yeni şifre belirleme ekranı açılacaktır.`
+      );
+    }
   }, [email, membership]);
 
-  const submit = useCallback(async () => {
+  const doCompleteRecovery = useCallback(async () => {
     setLocalError(null);
-    const res =
-      mode === 'signin'
-        ? await membership.signIn(email, password)
-        : await membership.signUp({ email, password, displayName: name, city, exam });
-    if (res.ok) {
-      navigation.goBack();
+    setLocalNotice(null);
+    membership.clearError();
+    if ((newPassword || '').length < 6) {
+      setLocalError('Yeni parola en az 6 karakter olmalı.');
+      return;
     }
-  }, [city, email, exam, membership, mode, name, navigation, password]);
+    if (newPassword !== confirmPassword) {
+      setLocalError('Girdiğiniz yeni parolalar birbiriyle eşleşmiyor.');
+      return;
+    }
+    const res = await membership.completePasswordRecovery(newPassword);
+    if (res.ok) {
+      if (res.email) setEmail(res.email);
+      setPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      switchMode(
+        'signin',
+        'Yeni şifreniz başarıyla kaydedildi! Şimdi yeni şifrenizle giriş yapabilirsiniz.'
+      );
+    }
+  }, [confirmPassword, membership, newPassword, switchMode]);
+
+  const submit = useCallback(async () => {
+    if (mode === 'forgot') {
+      await doResetRequest();
+      return;
+    }
+    if (mode === 'recovery') {
+      await doCompleteRecovery();
+      return;
+    }
+    setLocalError(null);
+    setLocalNotice(null);
+    if (mode === 'signin') {
+      const res = await membership.signIn(email, password);
+      if (res.ok) {
+        goHomeOrBack();
+      }
+      return;
+    }
+    const res = await membership.signUp({ email, password, displayName: name, city, exam });
+    if (res.ok) {
+      setPassword('');
+      switchMode(
+        'signin',
+        'Kaydınız alındı! Lütfen e-posta kutunuzu (ve spam klasörünü) kontrol edin. Gelen onay mailindeki bağlantıya tıkladıktan sonra giriş yapabilirsiniz.'
+      );
+    }
+  }, [city, doCompleteRecovery, doResetRequest, email, exam, goHomeOrBack, membership, mode, name, password, switchMode]);
 
   const quotaHint = useMemo(
     () =>
@@ -74,91 +162,59 @@ export const AuthScreen: React.FC = () => {
     <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1, backgroundColor: colors.background }}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <View style={styles.header}>
-          <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Pressable
+            onPress={goHomeOrBack}
+            hitSlop={10}
+            style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
             <Ionicons name="chevron-back" size={18} color={colors.text} />
           </Pressable>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.title, { color: colors.text }]}>Üyelik</Text>
+            <Text style={[styles.title, { color: colors.text }]}>
+              {mode === 'recovery'
+                ? 'Yeni Şifre Belirle'
+                : mode === 'forgot'
+                ? 'Şifremi Unuttum'
+                : 'Üyelik'}
+            </Text>
             <Text style={[styles.sub, { color: colors.textSecondary }]}>
-              Kayıtlar Supabase’da tutulur ve cihazlar arası senkron çalışır
+              {mode === 'recovery'
+                ? 'Hesabınız için yeni parolanızı girin'
+                : mode === 'forgot'
+                ? 'E-posta adresinize şifre sıfırlama bağlantısı gönderilir'
+                : 'Kayıtlar Supabase’da tutulur ve cihazlar arası senkron çalışır'}
             </Text>
           </View>
         </View>
 
-        <View style={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <CloudStatusBanner />
 
-          <View style={[styles.tabs, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            {(['signin', 'signup'] as Mode[]).map(m => (
-              <Pressable
-                key={m}
-                onPress={() => canSignUp || m === 'signin' ? setMode(m) : undefined}
-                style={[
-                  styles.tab,
-                  mode === m && { backgroundColor: colors.primary },
-                  !canSignUp && m === 'signup' && { opacity: 0.4 },
-                ]}
-              >
-                <Text style={[styles.tabText, { color: mode === m ? '#FFFFFF' : colors.textSecondary }]}>
-                  {m === 'signin' ? 'Giriş yap' : 'Üye ol'}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          {(mode === 'signin' || mode === 'signup') && (
+            <View style={[styles.tabs, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              {(['signin', 'signup'] as const).map(m => (
+                <Pressable
+                  key={m}
+                  onPress={() => (canSignUp || m === 'signin' ? switchMode(m) : undefined)}
+                  style={[
+                    styles.tab,
+                    mode === m && { backgroundColor: colors.primary },
+                    !canSignUp && m === 'signup' && { opacity: 0.4 },
+                  ]}
+                >
+                  <Text style={[styles.tabText, { color: mode === m ? '#FFFFFF' : colors.textSecondary }]}>
+                    {m === 'signin' ? 'Giriş yap' : 'Üye ol'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
 
           <AdminCard>
-            <AdminField
-              label="E-posta"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              placeholder="ornek@eposta.com"
-            />
-            {mode === 'signup' && (
-              <AdminField label="Ad soyad" value={name} onChangeText={setName} placeholder="Örn: Selin Aydoğan" />
-            )}
-            <AdminField
-              label="Parola"
-              value={password}
-              onChangeText={setPassword}
-              placeholder="en az 6 karakter"
-              hint={
-                mode === 'signup'
-                  ? 'Parola asla düz metin yazılmaz: cihazda PBKDF2-SHA256 ile doğrulayıcı + tuz üretilir, Supabase’e böyle kaydedilir.'
-                  : undefined
-              }
-            />
-            {mode === 'signup' && (
-              <>
-                <AdminField label="Şehir (opsiyonel)" value={city} onChangeText={setCity} placeholder="Örn: Elazığ" />
-                <AdminSectionTitle label="Hazırlandığın sınav" />
-                <View style={styles.examRow}>
-                  {EXAM_PRESETS.map(p => (
-                    <Pressable
-                      key={p.id}
-                      onPress={() => setExam(p.label)}
-                      style={[
-                        styles.examChip,
-                        {
-                          backgroundColor: exam === p.label ? colors.primarySoft : colors.surfaceSecondary,
-                          borderColor: exam === p.label ? colors.primary : colors.border,
-                        },
-                      ]}
-                    >
-                      <Text style={[styles.examText, { color: exam === p.label ? colors.primary : colors.textSecondary }]}>
-                        {p.label}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </>
-            )}
-
             {!!localNotice && !error && (
-              <View style={[styles.errorBox, { backgroundColor: colors.successSoft, borderColor: colors.border }]}>
-                <Ionicons name="mail-outline" size={15} color={colors.success} />
-                <Text style={{ flex: 1, fontSize: 12, fontWeight: '700', color: colors.success, lineHeight: 17 }}>
+              <View style={[styles.noticeBox, { backgroundColor: colors.successSoft, borderColor: colors.success }]}>
+                <Ionicons name="checkmark-circle" size={18} color={colors.success} />
+                <Text style={{ flex: 1, fontSize: 12.5, fontWeight: '800', color: colors.success, lineHeight: 18 }}>
                   {localNotice}
                 </Text>
               </View>
@@ -166,39 +222,161 @@ export const AuthScreen: React.FC = () => {
 
             {!!error && (
               <View style={[styles.errorBox, { backgroundColor: colors.dangerSoft, borderColor: colors.border }]}>
-                <Ionicons name="alert-circle" size={15} color={colors.danger} />
+                <Ionicons name="alert-circle" size={16} color={colors.danger} />
                 <Text style={{ flex: 1, fontSize: 12, fontWeight: '700', color: colors.danger, lineHeight: 17 }}>
                   {error}
                 </Text>
               </View>
             )}
 
-            <AdminButton
-              label={busy ? 'İşleniyor…' : mode === 'signin' ? 'Giriş yap' : 'Hesabımı oluştur'}
-              icon={mode === 'signin' ? 'log-in-outline' : 'person-add-outline'}
-              onPress={submit}
-              disabled={busy}
-              style={{ alignSelf: 'stretch', marginTop: 4 }}
-            />
+            {mode === 'recovery' ? (
+              <>
+                {!!email && (
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginBottom: 10 }}>
+                    Hesap: {email}
+                  </Text>
+                )}
+                <AdminField
+                  label="Yeni parola"
+                  value={newPassword}
+                  onChangeText={setNewPassword}
+                  autoCapitalize="none"
+                  secureTextEntry
+                  placeholder="En az 6 karakter"
+                />
+                <AdminField
+                  label="Yeni parola (tekrar)"
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  autoCapitalize="none"
+                  secureTextEntry
+                  placeholder="Yeni parolanızı tekrar yazın"
+                />
+                <AdminButton
+                  label={busy ? 'Kaydediliyor…' : 'Yeni şifremi kaydet'}
+                  icon="key-outline"
+                  onPress={submit}
+                  disabled={busy}
+                  style={{ alignSelf: 'stretch', marginTop: 4 }}
+                />
+                <AdminButton
+                  small
+                  tone="ghost"
+                  icon="arrow-back-outline"
+                  label="Giriş ekranına dön"
+                  disabled={busy}
+                  onPress={() => switchMode('signin')}
+                  style={{ alignSelf: 'flex-start', marginTop: 6 }}
+                />
+              </>
+            ) : mode === 'forgot' ? (
+              <>
+                <AdminField
+                  label="Kayıtlı e-posta adresiniz"
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  placeholder="ornek@eposta.com"
+                  hint="Bu adrese yeni şifre belirleme bağlantısı içeren bir e-posta gönderilecektir."
+                />
+                <AdminButton
+                  label={busy ? 'Gönderiliyor…' : 'Sıfırlama bağlantısı gönder'}
+                  icon="mail-outline"
+                  onPress={submit}
+                  disabled={busy}
+                  style={{ alignSelf: 'stretch', marginTop: 4 }}
+                />
+                <AdminButton
+                  small
+                  tone="ghost"
+                  icon="arrow-back-outline"
+                  label="Giriş ekranına dön"
+                  disabled={busy}
+                  onPress={() => switchMode('signin')}
+                  style={{ alignSelf: 'flex-start', marginTop: 6 }}
+                />
+              </>
+            ) : (
+              <>
+                <AdminField
+                  label="E-posta"
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  placeholder="ornek@eposta.com"
+                />
+                {mode === 'signup' && (
+                  <AdminField label="Ad soyad" value={name} onChangeText={setName} placeholder="Örn: Selin Aydoğan" />
+                )}
+                <AdminField
+                  label="Parola"
+                  value={password}
+                  onChangeText={setPassword}
+                  autoCapitalize="none"
+                  secureTextEntry
+                  placeholder="en az 6 karakter"
+                  hint={
+                    mode === 'signup'
+                      ? 'Kayıt olduktan sonra e-posta adresinize bir onay bağlantısı gönderilir.'
+                      : undefined
+                  }
+                />
+                {mode === 'signup' && (
+                  <>
+                    <AdminField label="Şehir (opsiyonel)" value={city} onChangeText={setCity} placeholder="Örn: Elazığ" />
+                    <AdminSectionTitle label="Hazırlandığın sınav" />
+                    <View style={styles.examRow}>
+                      {EXAM_PRESETS.map(p => (
+                        <Pressable
+                          key={p.id}
+                          onPress={() => setExam(p.label)}
+                          style={[
+                            styles.examChip,
+                            {
+                              backgroundColor: exam === p.label ? colors.primarySoft : colors.surfaceSecondary,
+                              borderColor: exam === p.label ? colors.primary : colors.border,
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.examText, { color: exam === p.label ? colors.primary : colors.textSecondary }]}>
+                            {p.label}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </>
+                )}
 
-            {mode === 'signin' && membership.authMode ? (
-              <AdminButton
-                small
-                tone="ghost"
-                icon="help-circle-outline"
-                label={resetBusy ? 'Gönderiliyor…' : 'Şifremi unuttum'}
-                disabled={resetBusy || !email.includes('@')}
-                onPress={() => void doReset()}
-                style={{ alignSelf: 'flex-start', marginTop: 2 }}
-              />
-            ) : null}
+                <AdminButton
+                  label={busy ? 'İşleniyor…' : mode === 'signin' ? 'Giriş yap' : 'Hesabımı oluştur'}
+                  icon={mode === 'signin' ? 'log-in-outline' : 'person-add-outline'}
+                  onPress={submit}
+                  disabled={busy}
+                  style={{ alignSelf: 'stretch', marginTop: 4 }}
+                />
 
-            <Text style={[styles.quota, { color: colors.textMuted }]}>{quotaHint}</Text>
-            {mode === 'signin' && membership.authMode ? (
-              <Text style={[styles.quota, { color: colors.textMuted }]}>
-                Parolan Supabase Auth’ta saklanır; uygulamada yalnızca e-posta ve hakların tutulur.
-              </Text>
-            ) : null}
+                {mode === 'signin' && membership.authMode ? (
+                  <AdminButton
+                    small
+                    tone="ghost"
+                    icon="help-circle-outline"
+                    label="Şifremi unuttum"
+                    disabled={busy}
+                    onPress={() => switchMode('forgot')}
+                    style={{ alignSelf: 'flex-start', marginTop: 4 }}
+                  />
+                ) : null}
+
+                <Text style={[styles.quota, { color: colors.textMuted }]}>{quotaHint}</Text>
+                {mode === 'signin' && membership.authMode ? (
+                  <Text style={[styles.quota, { color: colors.textMuted }]}>
+                    Parolan Supabase Auth’ta saklanır; uygulamada yalnızca e-posta ve hakların tutulur.
+                  </Text>
+                ) : null}
+              </>
+            )}
           </AdminCard>
 
           {mode === 'signup' && !canSignUp && (
@@ -221,12 +399,12 @@ export const AuthScreen: React.FC = () => {
           <View style={styles.footNote}>
             <Ionicons name="information-circle-outline" size={14} color={colors.textMuted} />
             <Text style={[styles.footText, { color: colors.textMuted }]}>
-              Üyelik doğrulaması doğrudan Supabase belgeleri üzerinden yapılır; Supabase Auth
-              hesabına ihtiyaç yoktur. VIP durumu da aynı belgede tutulur, yani yönetici panelinden
-              verdiğin VIP anında bu cihazda geçerli olur.
+              Kayıt olduktan sonra gelen onay mailindeki bağlantıya tıklayarak hesabınızı aktif
+              edebilirsiniz. VIP durumu da Supabase’de tutulur, yönetici panelinden verilen VIP
+              anında geçerli olur.
             </Text>
           </View>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -237,13 +415,14 @@ const styles = StyleSheet.create({
   backBtn: { width: 34, height: 34, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 18, fontWeight: '900' },
   sub: { fontSize: 11.5, marginTop: 2 },
-  body: { flex: 1, paddingHorizontal: 16 },
+  body: { paddingHorizontal: 16, paddingBottom: 28 },
   tabs: { flexDirection: 'row', borderRadius: 13, borderWidth: 1, padding: 4, marginBottom: 12, gap: 4 },
   tab: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10 },
   tabText: { fontSize: 13, fontWeight: '800' },
   examRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
   examChip: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, borderWidth: 1 },
   examText: { fontSize: 11.5, fontWeight: '800' },
+  noticeBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, borderWidth: 1, marginBottom: 12 },
   errorBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, padding: 10, borderRadius: 12, borderWidth: 1, marginBottom: 12 },
   quota: { fontSize: 11.5, lineHeight: 16, marginTop: 10, textAlign: 'center' },
   footNote: { flexDirection: 'row', gap: 6, marginTop: 14, alignItems: 'flex-start' },
