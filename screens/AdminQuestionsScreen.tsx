@@ -340,14 +340,32 @@ export const AdminQuestionsScreen: React.FC = () => {
       icon="document-text-outline"
       right={
         <AdminChip
-          label={override ? 'Yerel liste' : 'Canlı'}
-          tone={override ? 'warning' : 'success'}
-          icon={override ? 'phone-portrait-outline' : 'cloud-outline'}
+          label={
+            admin.cloudWrite?.error
+              ? 'Buluta yazılamadı'
+              : admin.cloudWrite?.busy
+                ? 'Yazılıyor…'
+                : override
+                  ? 'Firestore’a yazıldı'
+                  : 'Canlı'
+          }
+          tone={admin.cloudWrite?.error ? 'danger' : override ? 'warning' : 'success'}
+          icon={admin.cloudWrite?.error ? 'cloud-offline-outline' : 'cloud-outline'}
           compact
         />
       }
     >
       <AdminGate>
+        {admin.cloudWrite?.error ? (
+          <AdminRow
+            icon="cloud-upload-outline"
+            title="Son içerik yazması Firestore’a gidemedi"
+            subtitle={`${admin.cloudWrite?.error} — düzenleme bu ekranda duruyor, yazma izni düzelince “Yeniden dene” yeter.`}
+            right={
+              <AdminButton small tone="danger" label="Yeniden dene" onPress={() => void admin.retryCloudWrites?.()} />
+            }
+          />
+        ) : null}
         <View style={styles.courseRow}>
           {ALL_COURSE_IDS.map(id => {
             const active = id === courseId;

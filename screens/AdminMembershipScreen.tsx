@@ -96,7 +96,7 @@ export const AdminMembershipScreen: React.FC = () => {
     cloudVip: true,
     cloudMembers: true,
     defaultTrialDays: 0,
-    requireApproval: false,
+    requireApproval: true,
   };
 
   const [members, setMembers] = useState<MemberDoc[]>([]);
@@ -323,7 +323,7 @@ export const AdminMembershipScreen: React.FC = () => {
 
         <AdminSectionTitle
           label="Üyelik politikası"
-          hint="Tüm ekranlar bu kuralları okur"
+          hint="Tüm ekranlar bu kuralları okur · her değişiklik anında meta/membership_policy belgesine yazılır, başka cihaz da aynı kuralı görür"
         />
         <AdminCard style={{ marginBottom: 12 }}>
           <AdminToggle
@@ -409,6 +409,40 @@ export const AdminMembershipScreen: React.FC = () => {
               />
             </View>
           </View>
+          <View style={styles.divider} />
+          <AdminRow
+            icon="cloud-upload-outline"
+            title={
+              admin.policySource === 'cloud'
+                ? 'Politika Firestore’daki belgede'
+                : admin.policySource === 'device'
+                  ? 'Bulutta politika belgesi henüz yok'
+                  : admin.policySource === 'denied'
+                    ? 'Politika belgesi okunamadı'
+                    : 'Politika okunuyor…'
+            }
+            subtitle={
+              admin.cloudWrite?.error
+                ? admin.cloudWrite?.error
+                : admin.cloudWrite?.busy
+                  ? 'Yazılıyor…'
+                  : admin.policySource === 'cloud'
+                    ? 'Değişiklikler belgede tutulur; kayıt olan herkes bu kuralları görür.'
+                    : 'Şimdi gönder: panel düzenlediğin an yazar, ama bir kez elle de zorlayabilirsin.'
+            }
+            right={
+              <AdminButton
+                small
+                tone={admin.cloudWrite?.error ? 'danger' : 'neutral'}
+                label={admin.cloudWrite?.error ? 'Yeniden dene' : 'Buluta gönder'}
+                disabled={admin.cloudWrite?.busy}
+                onPress={() => {
+                  if (admin.cloudWrite?.error) void admin.retryCloudWrites?.();
+                  else admin.pushMembershipPolicy?.();
+                }}
+              />
+            }
+          />
         </AdminCard>
 
         <AdminSectionTitle

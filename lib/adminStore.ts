@@ -75,7 +75,11 @@ export interface MembershipConfig {
   cloudMembers: boolean;
   /** Days granted when a new sign-up is created (0 = none). */
   defaultTrialDays: number;
-  /** When true a sign-up also has to be approved (status = pending) by an admin. */
+  /**
+   * When true a sign-up also has to be approved (status = pending) by an admin.
+   * Cihazda değil, Firestore'da durur (`meta/membership_policy`): panelde
+   * değiştirildiği anda yazılır, her cihaz oradan okur.
+   */
   requireApproval: boolean;
 }
 
@@ -122,7 +126,9 @@ export const DEFAULT_MEMBERSHIP: MembershipConfig = {
   cloudVip: true,
   cloudMembers: true,
   defaultTrialDays: 0,
-  requireApproval: false,
+  // Onay varsayılan olarak ZORUNLU: yönetici onaylamadan üyelik `pending` doğar
+  // (VIP/kota hakkı onaydan sonra açılır). Kapatmak panelin tek dokunuşu.
+  requireApproval: true,
 };
 
 export interface AdminActivity {

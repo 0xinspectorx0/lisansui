@@ -407,6 +407,55 @@ altında yol + `kod member-…` (cihazdaki derleme etiketi).
 > ve `dist` üretmez. Yayınlanana kadar yeni üyeler yazma redliyse kayıt açılmaz
 > (bilerek: cihazda kopya bırakmıyoruz) ve ekranda tek cümlelik neden yazar.
 
+## 7c) Üyelik politikası ve panel içerik yazmaları da anlık — bulut tek kaynak
+
+**1) Onay politikası cihazda değil, `meta/membership_policy` belgesinde durur.**
+`lib/cloudWrite.ts → writeMembershipPolicy()` panel “üyelik” ya da “kayıtlar açık/kapalı”
+ayarına dokunduğu AN bu belgeyi yazar; `lib/AdminContext.tsx` açılışta `pullMembershipPolicy()`
+ile geri okur (okuma herkesedir, yazma yalnız yönetici). Uygulama `lib/memberShape.ts`
+üzerinden belgeyi kayıt anında da okur ve yeni üyenin `status` alanını ona göre
+`pending`/`active` doğurur. Varsayılan `requireApproval: true` — yani “admin onayı
+olmadan üyelik aktif olmaz” bulutta zorunlu bir kuraldır, telefona bağlı bir seçenek değil.
+
+| Alan | Anlamı |
+| --- | --- |
+| `requireApproval` | `true` ise yeni kayıt `status: 'pending'` doğar; VIP hakları açılmaz. |
+| `registrationOpen` | `false` ise panel “kayıtlar kapalı” der (kayıt ekranı bilgi verir). |
+| `enforce`, `freeTestsPerCourse`, `cloudVip`, `cloudMembers`, `defaultTrialDays` | Panelin üyelik kartındaki sayılar; cihazlar arası tek kaynak. |
+| `updatedAt`, `schemaVersion` | Zorunlu imza alanları (kural `membershipPolicyOk`). |
+
+Yazma kapısı: `isAdminSession() || !lockdownOn()` — üyelik kilidi açıkken bile panel
+politika yazabilir (kilit yalnız *üyelik* yazmalarını token'a bağlar), ama kimliksiz
+bir ziyaretçi listeyle oynayamaz. Kurallarda alan seti `membershipPolicyOk(data)`
+ile sabittir; rol/hak alanı kabul edilmez. `meta` altındaki diğer belgeler gibi bu da
+`sync:rules` ile `config/firestoreRulesCopy.ts` kopyasına alınır.
+
+**2) Panelden eklenen/düzenlenen soru doğrudan Firestore'a yazılır.** Kuyruk,
+bekletme, “sonra gönder” yok: her panel mutasyonu kendi `PUT`'unu anında atar.
+
+| Panel eylemi | Giden yazma |
+| --- | --- |
+| Konu içeriği düzenle / soru ekle-sil | `writeTopicDoc` → `courses/{courseId}/topics/{subjectId}` |
+| Konu ekle / yeniden adlandır | `writeTopicMeta` (önce canlı soru listesini okur, sonra PUT) |
+| Konu sil | `deleteTopicDoc` → `DELETE` aynı yol |
+| Hap bilgi düzenle | `writeTipsDoc` → `daily_tips/main` |
+| Ders sırası / gizle | `writeCourseDoc` → `courses/{courseId}` |
+| Üyelik ayarı | `writeMembershipPolicy` → `meta/membership_policy` |
+
+Belge biçimi tek yerden gelir: `lib/contentDoc.ts → topicDocFields()` (tohumlama da
+aynı fonksiyonu kullanır), bu yüzden alan seti `contentWriteOk` denetimini geçer.
+Yerel `overrides` yalnız **okuma önbelleği**dir; silme/baştan yazma hariç her yazma
+buluta gider. Yazma reddedilirse ekranlarda durum çipi `Buluta yazılamadı` olur ve
+satırda **Yeniden dene** düğmesi çıkar (`retryCloudWrites`) — hiçbir eylem sessizce
+“yerelde kaldı” demez.
+
+**3) `status: 'pending'` üyenin VIP hakkı yoktur.** `lib/membership.ts → isVipActive()`
+yalnız `status === 'active'` olan üyede hak tanır; panel onaylayınca
+(`adminSetStatus(id, 'active')`) tek PATCH ile bulutta açılır. Onay bekleyen üye
+giriş yapabilir ve ücretsiz hakkını (ders başına 1 test) kullanır; ekranında
+“Üyeliğin yönetim onayında” uyarısı durur.
+
+
 ## 8) Sık karşılaşılan hatalar
 | Belirti | Sebep / çözüm |
 | --- | --- |
@@ -422,6 +471,8 @@ altında yol + `kod member-…` (cihazdaki derleme etiketi).
 | Kayıt açılırken “yazma reddedildi” | Sırayla: (1) kural yayında mı → 3. adım; (2) `meta/membership_lockdown` var mı → silince kimliksiz create açılır (7b); (3) E-posta/Parola sağlayıcısı kapalıysa (`OPERATION_NOT_ALLOWED`) → Console → Authentication → Sign-in method → **Email/Password → Enable** — ama kural 7b’deki gibi yayındaysa sağlayıcı kapalıyken de üyelik yazılır. |
 | Üyelik yazması bir ara `TOKEN_EXPIRED`/403 verip sonra geçiyor | Beklenen durum: uygulama bayat token’ı kendiliğinden yenileyip aynı isteği tekrar gönderiyor (`lib/firestoreApi.ts`). Kullanıcıya “işlemi yeniden dene” denmez; tek cümlelik bilgi yeter. |
 | Cihazda derlemenin hangisi çalıştığından şüphe | Panel → Firestore bağlantısı kartındaki `kod member-…` satırına bak; beklenen etiketle farklıysa paket eski: `npx expo start --clear` + Ctrl/Cmd+Shift+R (Vercel sürümü kullanıyorsan yeniden deploy şart — CI yok). |
+| Panelden soru ekledim, Firestore'ta görünmüyor | Panel artık her düzenlemede anlık `PUT` atar (7c). Görünmüyorsa (1) kural yayında değil → 3. adım; (2) `meta/content_lock` belgesi var → Console'dan sil (içerik kilidi tohumlama VE panel yazmalarını kapatır); (3) ekranda `Buluta yazılamadı` çipi + satır vardır, “Yeniden dene” ile tekrar denenir. Cihazda kopya bekletilmez. |
+| Yeni üye onaysız aktif görünüyor | `meta/membership_policy` belgesinde `requireApproval` `false` kalmış olabilir — panel → Üyelik kartı → “Buluta gönder” (veya Console'dan `requireApproval = true`). Eski üyeler etkilenmez; politika yeni kayıtlar içindir. |
 | Env değişikliği etkili olmadı | `.env.local` repo kökünde mi, ad `EXPO_PUBLIC_` ile mi başlıyor, ve Metro'yu `npx expo start --clear` ile yeniden başlattın mı? |
 | Panel “root hâlâ legacy” uyarısı veriyor | Sadece proje kimliğini verdin; `EXPO_PUBLIC_FIRESTORE_ROOT=.` satırını ekle (B seçeneğinde `root: "."`). |
 | İçerik Console'da var, app boş gösteriyor | Koleksiyon/yol birebir `courses/{courseId}/topics/{docId}` olmalı; `questions` bir **array of map**. |

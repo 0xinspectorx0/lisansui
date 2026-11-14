@@ -319,6 +319,22 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
   ok(vis.includes('kod member-'), 'hangi derlemede olduğu satırda yazıyor');
 }
 
+console.log('\x1b[1m[bulut] anlık yazı + politika belgesi bağlantıları\x1b[0m');
+{
+  const qs = fs.readFileSync(path.join(REPO, 'screens/AdminQuestionsScreen.tsx'), 'utf8');
+  const ms = fs.readFileSync(path.join(REPO, 'screens/AdminMembershipScreen.tsx'), 'utf8');
+  const ac = fs.readFileSync(path.join(REPO, 'lib/AdminContext.tsx'), 'utf8');
+  ok(/Firestore’a yazıldı/.test(qs) && /Buluta yazılamadı/.test(qs), 'soru ekranı yazmanın sonucunu tek satırda söylüyor');
+  ok(/retryCloudWrites\?\.\(\)/.test(qs), 'hata satırında tek dokunuşla yeniden deneme var');
+  ok(!/yerel taslak|sonra gönderilir|bekletiliyor/.test(qs), 'soru ekranı “sonra gönderilir” demiyor');
+  ok(/meta\/membership_policy/.test(ms), 'politika kartı belgenin adını söylüyor');
+  ok(/admin\.policySource === 'cloud'/.test(ms), 'politikanın nereden okunduğu panelde ayrılıyor');
+  ok(/requireApproval: true/.test(ms), 'üyelik ekranının yedek politikası da onay zorunlu');
+  ok(/Buluta gönder/.test(ms), 'politikayı elle gönderme düğmesi var');
+  ok(/cloudWrite,/.test(ac) && /policySource,/.test(ac), 'context yazım durumunu panele açıyor');
+  ok(/useSyncExternalStore\(subscribeCloudWrite/.test(ac), 'yazım durumu aboneyle akıyor');
+}
+
 cleanup();
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${fail + pass} kontrol\x1b[0m\n`);
 process.exit(fail ? 1 : 0);

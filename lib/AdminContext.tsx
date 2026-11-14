@@ -40,6 +40,20 @@ import {
   type AdminState,
 } from './adminStore';
 import { fetchTopicQuestions, clearKpssCaches } from './kpssApi';
+import { COURSES } from './theme';
+import {
+  getCloudWriteStatus,
+  readMembershipPolicy,
+  retryFailedWrites,
+  subscribeCloudWrite,
+  writeCourseDoc,
+  writeMembershipPolicy,
+  writeTipsDoc,
+  writeTopicDoc,
+  writeTopicMeta,
+  deleteTopicDoc,
+  type CloudWriteStatus,
+} from './cloudWrite';
 import { useApp } from './AppContext';
 
 const UNLOCK_TTL_MS = 15 * 60 * 1000;
@@ -163,6 +177,16 @@ interface AdminContextValue {
 
   /* settings, catalog & data */
   patchSettings: (patch: Partial<AdminSettings>) => void;
+  /** Panel düzenlemelerinin buluta yazım durumu (bekletme yok; hata burada görünür). */
+  cloudWrite: CloudWriteStatus;
+  /** Hatalı yazıları aynı işlerle yeniden dener. */
+  retryCloudWrites: () => Promise<{ retried: number; ok: number }>;
+  /** Üyelik politikası nereden okundu: bulut mu, yalnız bu cihaz mı. */
+  policySource: 'unknown' | 'cloud' | 'device' | 'denied';
+  /** `meta/membership_policy` belgesini yeniden okuyup uygular. */
+  pullMembershipPolicy: () => Promise<boolean>;
+  /** Mevcut politikayı buluta yaz (panel “buluta gönder” dokunuşu). */
+  pushMembershipPolicy: () => void;
   setPin: (pin: string) => void;
   setCourseOrder: (order: CourseId[]) => void;
   toggleCourseHidden: (courseId: CourseId) => void;
@@ -176,6 +200,8 @@ const AdminContext = createContext<AdminContextValue | null>(null);
 
 export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const state = useSyncExternalStore(subscribeAdmin, getAdminState, getAdminState);
+  const cloudWrite = useSyncExternalStore(subscribeCloudWrite, getCloudWriteStatus, getCloudWriteStatus);
+  const [policySource, setPolicySource] = useState<'unknown' | 'cloud' | 'device' | 'denied'>('unknown');
   const { catalog, dailyTips, refreshAllCourses, streak, results, favorites, mistakes } =
     useApp();
   const [unlockedUntil, setUnlockedUntil] = useState<number>(0);
@@ -253,6 +279,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ]);
       writeQuestionsOverride(courseId, docId, []);
       touch({ icon: 'add-circle-outline', label: `${courseId}: “${trimmed}” konusu eklendi` });
+      void writeTopicMeta(courseId, docId, { docId, id: docId, name: trimmed, questionCount: 0 }, topics.length);
     },
     [touch, topicsFor]
   );
@@ -266,6 +293,12 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       );
       writeTopicsOverride(courseId, topics);
       touch({ icon: 'create-outline', label: `Konu adı “${trimmed}” olarak güncellendi` });
+      void writeTopicMeta(
+        courseId,
+        docId,
+        { docId, id: docId, name: trimmed, questionCount: getQuestionsOverride(courseId, docId)?.length ?? 0 },
+        topics.findIndex(t => t.docId === docId)
+      );
     },
     [touch, topicsFor]
   );
@@ -278,6 +311,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       writeTopicsOverride(courseId, topics);
       clearQuestionsOverride(courseId, docId);
       touch({ icon: 'trash-outline', label: `${courseId}: bir konu silindi` });
+      void deleteTopicDoc(courseId, docId);
     },
     [touch, topicsFor]
   );
@@ -396,11 +430,22 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ): void => {
       const current = getQuestionsOverride(courseId, docId);
       if (!current) return;
-      writeQuestionsOverride(courseId, docId, mutator(current));
+      const next = mutator(current);
+      writeQuestionsOverride(courseId, docId, next);
       syncCounts(courseId, docId);
       touch(activity);
+      // ANINDA Firestore: soru düzenlemesi cihazda bekletilmez, belge hemen yazılır.
+      const topics = topicsFor(courseId);
+      const index = topics.findIndex(t => t.docId === docId);
+      void writeTopicDoc(
+        courseId,
+        docId,
+        index >= 0 ? topics[index] : { docId, id: docId, name: docId, questionCount: next.length },
+        next,
+        index < 0 ? topics.length : index
+      );
     },
-    [syncCounts, touch]
+    [syncCounts, touch, topicsFor]
   );
 
   const createQuestion = useCallback(
@@ -548,6 +593,50 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [refreshAllCourses, touch]
   );
 
+  /** Ders belgesini (başlık/ikon/sıra/gizli) anında buluta yazar. */
+  const pushCourseDoc = useCallback((courseId: CourseId) => {
+    const st = getAdminState();
+    const cfg = (COURSES as Record<CourseId, { title: string; icon: string }>)[courseId];
+    const order = (st.content.courseOrder || ALL_COURSE_IDS).indexOf(courseId);
+    void writeCourseDoc(courseId, {
+      title: st.content.courseTitles?.[courseId] || cfg?.title || courseId,
+      icon: cfg?.icon || 'book-outline',
+      order: order >= 0 ? order : 0,
+      hidden: (st.content.hiddenCourses || []).includes(courseId),
+    });
+  }, []);
+
+  /**
+   * Politika buluttan okunur ve yerel ayara UYGULANIR (updateAdminSettings buluta
+   * geri yazmaz → döngü olmaz). Bulutta belge yoksa “yalnız bu cihaz” durumu panelde
+   * tek satırda görünür; kimse yanlış kuralı geçerli sanmaz.
+   */
+  const pullMembershipPolicy = useCallback(async () => {
+    const res = await readMembershipPolicy();
+    if (res.ok && res.policy) {
+      const p = res.policy;
+      updateAdminSettings({
+        membership: {
+          enforce: p.enforce,
+          freeTestsPerCourse: p.freeTestsPerCourse,
+          cloudVip: p.cloudVip,
+          cloudMembers: p.cloudMembers,
+          defaultTrialDays: p.defaultTrialDays,
+          requireApproval: p.requireApproval,
+        },
+        registrationOpen: p.registrationOpen,
+      });
+      setPolicySource('cloud');
+      return true;
+    }
+    setPolicySource(res.ok ? 'device' : 'denied');
+    return false;
+  }, []);
+
+  useEffect(() => {
+    void pullMembershipPolicy();
+  }, [pullMembershipPolicy]);
+
   /* -------------------------------------------------------------- tips */
 
   const tips = state.content.tips ?? dailyTips;
@@ -555,8 +644,10 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const mutateTips = useCallback(
     (mutator: (list: string[]) => string[], activity?: { icon: string; label: string }) => {
       const base = getAdminState().content.tips ?? dailyTips;
-      writeTipsOverride(mutator(base));
+      const next = mutator(base);
+      writeTipsOverride(next);
       touch(activity);
+      void writeTipsDoc(next);
     },
     [dailyTips, touch]
   );
@@ -773,9 +864,23 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   /* ------------------------------------------------------ settings etc */
 
-  const patchSettings = useCallback((patch: Partial<AdminSettings>) => {
-    updateAdminSettings(patch);
+  const retryCloudWrites = useCallback(() => retryFailedWrites(), []);
+
+  const pushMembershipPolicy = useCallback(() => {
+    const st = getAdminState().settings;
+    void writeMembershipPolicy({ ...st.membership, registrationOpen: st.registrationOpen });
   }, []);
+
+  const patchSettings = useCallback(
+    (patch: Partial<AdminSettings>) => {
+      updateAdminSettings(patch);
+      // Politika Firestore'da durur: değiştiği anda yazılır, böylece başka cihazdan
+      // açılan kayıt da AYNI onay/kota kuralını görür (eskiden yalnız bu cihazın
+      // ayarıydı → yönetici “onay zorunlu” yapsa bile diğer cihazlar bilmiyordu).
+      if (patch.membership || 'registrationOpen' in patch) pushMembershipPolicy();
+    },
+    [pushMembershipPolicy]
+  );
 
   const setPin = useCallback((pin: string) => {
     const clean = pin.replace(/\D/g, '').slice(0, 8);
@@ -795,6 +900,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       updateAdminState(s => ({ ...s, content: { ...s.content, courseOrder: normalized } }));
       touch({ icon: 'swap-vertical-outline', label: 'Ders sırası güncellendi' });
+      normalized.forEach(id => pushCourseDoc(id));
     },
     [touch]
   );
@@ -808,6 +914,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return { ...s, content: { ...s.content, hiddenCourses: hidden } };
       });
       touch({ icon: 'eye-outline', label: 'Ders görünürlüğü güncellendi' });
+      pushCourseDoc(courseId);
     },
     [touch]
   );
@@ -953,6 +1060,11 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addLocalUsage,
       dropCloudMember,
       patchSettings,
+      cloudWrite,
+      retryCloudWrites,
+      policySource,
+      pullMembershipPolicy,
+      pushMembershipPolicy,
       setPin,
       setCourseOrder,
       toggleCourseHidden,
@@ -1013,6 +1125,11 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addLocalUsage,
       dropCloudMember,
       patchSettings,
+      cloudWrite,
+      retryCloudWrites,
+      policySource,
+      pullMembershipPolicy,
+      pushMembershipPolicy,
       setPin,
       setCourseOrder,
       toggleCourseHidden,

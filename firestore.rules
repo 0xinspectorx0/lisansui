@@ -349,6 +349,53 @@ service cloud.firestore {
         && request.resource.data.schemaVersion == 1;
     }
 
+    /**
+     * Üyelik politikası belgesi — kayıt/onay/kota kuralları TÜM cihazlardan buradan
+     * okunur. Cihaz ayarı olarak bırakılırsa (eski davranış) yöneticinin "onay
+     * zorunlu" tercihi yalnız kendi telefonunda geçerli olur ve başka cihazdan
+     * açılan kayıt onaysız aktif doğardı. Bu belge bunu imkansız kılar.
+     *
+     * Yazım: panel tek dokunuşla yazar (kilit kapalıyken kimliksiz de olur),
+     * üyelik kilidi AÇIKKEN de yazılabilir — ama o zaman doğrulanmış yönetici
+     * oturumu şart (`isAdminSession()`). Politika üyeliğin kendisi değil panelin
+     * ayarıdır; kilit onu donduramaz. Alan seti sabit, sayılar sınırlı; hak/rol
+     * alanı yok → bu belge yetki kazanmanın yolu değil.
+     */
+    function membershipPolicyOk(data) {
+      return data.keys().hasOnly([
+          'enforce', 'freeTestsPerCourse', 'cloudVip', 'cloudMembers',
+          'defaultTrialDays', 'requireApproval', 'registrationOpen',
+          'updatedAt', 'schemaVersion'
+        ])
+        && data.enforce is bool
+        && data.cloudVip is bool
+        && data.cloudMembers is bool
+        && data.requireApproval is bool
+        && data.registrationOpen is bool
+        && data.freeTestsPerCourse is int && data.freeTestsPerCourse >= 0
+        && data.freeTestsPerCourse <= 100
+        && data.defaultTrialDays is int && data.defaultTrialDays >= 0
+        && data.defaultTrialDays <= 3650
+        && data.updatedAt is string
+        && data.schemaVersion == 1;
+    }
+
+    match /meta/membership_policy {
+      allow get: if true;
+      // Kilitli modda (üyelik lockdown açıkken) de yazılabilir: politika üyeliğin
+      // kendisi değil, panelin ayarıdır ve panel her cihazdan onu değiştirebilmeli.
+      // Yine de ya doğrulanmış yönetici oturumu ya da kilit kapalı olmalı.
+      allow write: if (isAdminSession() || !lockdownOn())
+        && membershipPolicyOk(request.resource.data);
+    }
+
+    match /artifacts/{artifact}/public/data/meta/membership_policy {
+      allow get: if artifact == 'kpss-asistani';
+      allow write: if artifact == 'kpss-asistani'
+        && (isAdminSession() || !lockdownOn())
+        && membershipPolicyOk(request.resource.data);
+    }
+
     /** meta altında gerisi (content_lock, membership_lockdown...) istemciye kapalı. */
     match /meta/{document} {
       allow get: if true;
