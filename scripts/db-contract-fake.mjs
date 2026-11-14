@@ -218,8 +218,35 @@ export function createFakeSupabase(opts = {}) {
       if (mode !== 'merge' && !['email','status','role'].every(k => k in doc))
         return deny('member document requires id/email, status and role');
       const prev = db.members.get(who) || {};
-      const next = { ...prev, ...doc, email: who, id: doc.id || who };
       const creating = !prev.email;
+      // create modunda eksik alanlar tablo DEFAULT’u görür (SQL’deki gibi:
+      // yalnız belgede olan kolonlar yazılır, gerisi default’a düşer).
+      const defaults = {
+        emailNormalized: who,
+        displayName: '',
+        city: '',
+        exam: 'KPSS Lisans (GY-GK)',
+        note: '',
+        verifier: '',
+        salt: '',
+        iterations: 0,
+        algo: 'pbkdf2-sha256',
+        role: 'user',
+        status: 'pending',
+        vip: false,
+        vipPlan: 'free',
+        vipExpiresAt: '',
+        createdAt: new Date().toISOString().slice(0, 10),
+        lastLoginAt: '',
+        testsCompleted: 0,
+        questionsSolved: 0,
+        netSum: 0,
+        courseUsage: {},
+        schemaVersion: 1,
+      };
+      const next = creating
+        ? { ...defaults, ...doc, email: who, id: doc.id || who }
+        : { ...prev, ...doc, email: who, id: doc.id || who };
       if (!admin) {
         if (creating) {
           // ── kpss_guard_member_write / INSERT (aynı sıra, aynı sebepler) ──

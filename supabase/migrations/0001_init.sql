@@ -513,6 +513,67 @@ create trigger questions_write_guard
   before insert or update on public.questions
   for each row execute function kpss_guard_question_write();
 
+/* ============================================ belge alanı okuma yardımcıları */
+
+/**
+ * JSON alanından boolean. Katı `::boolean` cast'i panelden/yedekten gelen
+ * `"1"`, `"on"`, `0`, `true` (metin) gibi değerlerde "invalid input syntax"
+ * ile TÜM yazmayı patlatıyordu; burada tanınan her biçim çevrilir, bilinmeyen
+ * değer fallback'e düşer (yani mevcut kolon değeri korunur).
+ */
+create or replace function kpss_as_bool(p_val jsonb, p_fallback boolean default null)
+returns boolean
+language sql
+immutable
+as $$
+  select case
+    when p_val is null or jsonb_typeof(p_val) = 'null' then p_fallback
+    when jsonb_typeof(p_val) = 'boolean' then (p_val #>> '{}')::boolean
+    when jsonb_typeof(p_val) = 'number'  then (p_val #>> '{}')::numeric <> 0
+    when jsonb_typeof(p_val) = 'string' then case
+      when lower(btrim(p_val #>> '{}')) in
+        ('true','1','yes','y','on','open','aktif','acik','açık','evet') then true
+      when lower(btrim(p_val #>> '{}')) in
+        ('false','0','no','n','off','closed','kapali','kapalı','hayir','hayır') then false
+      else p_fallback
+    end
+    else p_fallback
+  end;
+$$;
+
+/** JSON alanından int: ondalık gelirse kesilir, boş/uyumsuz metin fallback. */
+create or replace function kpss_as_int(p_val jsonb, p_fallback int default null)
+returns int
+language sql
+immutable
+as $$
+  select case
+    when p_val is null or jsonb_typeof(p_val) = 'null' then p_fallback
+    when jsonb_typeof(p_val) = 'number'  then trunc((p_val #>> '{}')::numeric)::int
+    when jsonb_typeof(p_val) = 'boolean' then case when (p_val #>> '{}')::boolean then 1 else 0 end
+    when jsonb_typeof(p_val) = 'string'
+         and btrim(p_val #>> '{}') ~ '^-?[0-9]+([.][0-9]+)?$'
+      then trunc(btrim(p_val #>> '{}')::numeric)::int
+    else p_fallback
+  end;
+$$;
+
+/** JSON alanından numeric (net gibi ondalık değerler için). */
+create or replace function kpss_as_num(p_val jsonb, p_fallback numeric default 0)
+returns numeric
+language sql
+immutable
+as $$
+  select case
+    when p_val is null or jsonb_typeof(p_val) = 'null' then p_fallback
+    when jsonb_typeof(p_val) = 'number' then (p_val #>> '{}')::numeric
+    when jsonb_typeof(p_val) = 'string'
+         and btrim(p_val #>> '{}') ~ '^-?[0-9]+([.][0-9]+)?$'
+      then btrim(p_val #>> '{}')::numeric
+    else p_fallback
+  end;
+$$;
+
 /* ============================================== belge geçidi (doc gateway) */
 
 /**
@@ -652,6 +713,7 @@ declare
   v_ord int;
   v_topic text;
   v_sets text;
+  v_cols text;
 begin
   if v_kind is null then
     return jsonb_build_object('status', 400, 'error', 'unknown document path');
@@ -688,27 +750,39 @@ begin
     if p_mode = 'merge' then
       select coalesce(to_jsonb(m), '{}'::jsonb) || p_doc into v_doc
         from public.members m where m."email"::text = lower(v_name);
-      if v_doc is null then
-        -- belge yoksa PATCH create sayılır: e-posta zorunlu, id yoldan gelir
-        v_doc := p_doc || jsonb_build_object('email', lower(v_name));
-        if not (v_doc ? 'email') then
-          return jsonb_build_object('status', 400, 'error', 'email required');
-        end if;
-      end if;
+      -- belge hiç yoksa PATCH bir create sayılır; e-posta yine yoldan gelir
+      v_doc := coalesce(v_doc, '{}'::jsonb) || jsonb_build_object('email', lower(v_name));
     else
       v_doc := p_doc || jsonb_build_object('email', lower(v_name));
     end if;
     if v_doc ->> 'schemaVersion' is null then
       v_doc := v_doc || jsonb_build_object('schemaVersion', 1);
     end if;
-    -- kolon listesi kataloaktan: kolon eklenince/çıkınca bu metin değişmez.
-    select string_agg(format('%I = excluded.%I', a.attname), ', ' order by a.attnum)
-      into v_sets
+    if coalesce(v_doc ->> 'email', '') = '' then
+      return jsonb_build_object('status', 400, 'error', 'email required');
+    end if;
+
+    /* KOLON LİSTESİ = kataloğun BELGEDE OLAN alanları.
+     * Eskiden `select x.*` ile tüm kolonlar yazılıyor, belgede bulunmayan
+     * alanlar NULL sayılıyor ve tablo DEFAULT'u hiç devreye girmiyordu —
+     * yani eksik alanlı bir create "null value in column violates not-null
+     * constraint" ile patlıyordu. `id` de listede değil: bekçi
+     * (kpss_member_fill_id) onu e-postadan doldurur, `email` ise PK olduğu
+     * için DO UPDATE kümesine giremez. */
+    select string_agg(format('%I', a.attname), ', ' order by a.attnum),
+           string_agg(case when a.attname = 'email' then null
+                          else format('%I = excluded.%I', a.attname) end, ', ' order by a.attnum)
+      into v_cols, v_sets
       from pg_attribute a
      where a.attrelid = 'public.members'::regclass
        and a.attnum > 0 and not a.attisdropped
-       and a.attname <> 'email';
-    execute 'insert into public.members select x.* from jsonb_populate_record(null::public.members, $1) x'
+       and a.attname <> 'id'
+       and (v_doc ? a.attname or a.attname = 'email');
+    if v_cols is null or v_sets is null then
+      return jsonb_build_object('status', 400, 'error', 'nothing writable in document');
+    end if;
+    execute 'insert into public.members (' || v_cols || ') select ' || v_cols
+         || ' from jsonb_populate_record(null::public.members, $1) x'
          || ' on conflict ("email") do update set ' || v_sets
       using v_doc;
     return jsonb_build_object('status', 200, 'name', p_path);
@@ -721,16 +795,16 @@ begin
       v_name,
       coalesce(p_doc ->> 'title', v_name),
       coalesce(p_doc ->> 'icon', 'book-outline'),
-      coalesce((p_doc ->> 'order')::int, 0),
-      coalesce((p_doc ->> 'hidden')::boolean, false),
+      coalesce(kpss_as_int(p_doc -> 'order'), 0),
+      coalesce(kpss_as_bool(p_doc -> 'hidden'), false),
       coalesce(p_doc ->> 'updatedAt', ''),
       1
     )
     on conflict ("id") do update
       set "title" = coalesce(nullif(p_doc ->> 'title',''), courses."title"),
           "icon" = coalesce(nullif(p_doc ->> 'icon',''), courses."icon"),
-          "order" = coalesce((p_doc ->> 'order')::int, courses."order"),
-          "hidden" = coalesce((p_doc ->> 'hidden')::boolean, courses."hidden"),
+          "order" = coalesce(kpss_as_int(p_doc -> 'order', courses."order"), courses."order"),
+          "hidden" = coalesce(kpss_as_bool(p_doc -> 'hidden', courses."hidden"), courses."hidden"),
           "updatedAt" = coalesce(nullif(p_doc ->> 'updatedAt',''), courses."updatedAt");
     return jsonb_build_object('status', 200, 'name', p_path);
   end if;
@@ -743,7 +817,7 @@ begin
       split_part(v_parent, '/', 2), v_topic,
       coalesce(p_doc ->> 'id', v_topic),
       coalesce(nullif(p_doc ->> 'name',''), v_topic),
-      coalesce((p_doc ->> 'order')::int, 0),
+      coalesce(kpss_as_int(p_doc -> 'order'), 0),
       0, coalesce(p_doc ->> 'updatedAt', ''), 1
     )
     on conflict ("courseId","docId") do update
@@ -765,7 +839,7 @@ begin
           v_ord,
           coalesce(v_q ->> 'question', ''),
           coalesce(case when jsonb_typeof(v_q -> 'options') = 'array' then v_q -> 'options' end, '[]'::jsonb),
-          coalesce((v_q ->> 'answer')::int, 0),
+          coalesce(kpss_as_int(v_q -> 'answer'), 0),
           coalesce(v_q ->> 'explanation', '')
         );
         v_ord := v_ord + 1;
@@ -804,13 +878,13 @@ begin
       raise exception 'only an admin may change the membership policy' using errcode = '42501';
     end if;
     update public.membership_policy set
-      "enforce"            = coalesce((p_doc ->> 'enforce')::boolean, "enforce"),
-      "freeTestsPerCourse" = coalesce((p_doc ->> 'freeTestsPerCourse')::int, "freeTestsPerCourse"),
-      "cloudVip"           = coalesce((p_doc ->> 'cloudVip')::boolean, "cloudVip"),
-      "cloudMembers"       = coalesce((p_doc ->> 'cloudMembers')::boolean, "cloudMembers"),
-      "defaultTrialDays"   = coalesce((p_doc ->> 'defaultTrialDays')::int, "defaultTrialDays"),
-      "requireApproval"     = coalesce((p_doc ->> 'requireApproval')::boolean, "requireApproval"),
-      "registrationOpen"    = coalesce((p_doc ->> 'registrationOpen')::boolean, "registrationOpen"),
+      "enforce"            = coalesce(kpss_as_bool(p_doc -> 'enforce', "enforce"), "enforce"),
+      "freeTestsPerCourse" = coalesce(kpss_as_int(p_doc -> 'freeTestsPerCourse', "freeTestsPerCourse"), "freeTestsPerCourse"),
+      "cloudVip"           = coalesce(kpss_as_bool(p_doc -> 'cloudVip', "cloudVip"), "cloudVip"),
+      "cloudMembers"       = coalesce(kpss_as_bool(p_doc -> 'cloudMembers', "cloudMembers"), "cloudMembers"),
+      "defaultTrialDays"   = coalesce(kpss_as_int(p_doc -> 'defaultTrialDays', "defaultTrialDays"), "defaultTrialDays"),
+      "requireApproval"     = coalesce(kpss_as_bool(p_doc -> 'requireApproval', "requireApproval"), "requireApproval"),
+      "registrationOpen"    = coalesce(kpss_as_bool(p_doc -> 'registrationOpen', "registrationOpen"), "registrationOpen"),
       "updatedAt"           = coalesce(nullif(p_doc ->> 'updatedAt',''), "updatedAt"),
       "schemaVersion"       = 1
     where id = 1;
@@ -974,12 +1048,12 @@ begin
       coalesce(r ->> 'courseId', 'genel'),
       nullif(r ->> 'topicDocId', ''),
       coalesce(r ->> 'title', ''),
-      greatest(0, coalesce((r ->> 'correct')::int, 0)),
-      greatest(0, coalesce((r ->> 'wrong')::int, 0)),
-      greatest(0, coalesce((r ->> 'blank')::int, 0)),
-      greatest(0, coalesce((r ->> 'total')::int, 0)),
-      coalesce((r ->> 'net')::numeric, 0),
-      greatest(0, coalesce((r ->> 'durationSec')::int, 0)),
+      greatest(0, coalesce(kpss_as_int(r -> 'correct'), 0)),
+      greatest(0, coalesce(kpss_as_int(r -> 'wrong'), 0)),
+      greatest(0, coalesce(kpss_as_int(r -> 'blank'), 0)),
+      greatest(0, coalesce(kpss_as_int(r -> 'total'), 0)),
+      coalesce(kpss_as_num(r -> 'net'), 0),
+      greatest(0, coalesce(kpss_as_int(r -> 'durationSec'), 0)),
       coalesce(nullif(r ->> 'completedAt', ''), now())::timestamptz
     )
     on conflict ("key") do update
@@ -1126,6 +1200,10 @@ grant insert, update, delete on public.courses, public.topics, public.questions,
   public.tips, public.membership_policy to authenticated;
 grant insert, delete on public.admins to anon, authenticated;
 grant select, insert, update, delete on public.user_tests, public.user_data to authenticated;
+grant execute on function public.kpss_as_bool(jsonb, boolean) to anon, authenticated;
+grant execute on function public.kpss_as_int(jsonb, int) to anon, authenticated;
+grant execute on function public.kpss_as_num(jsonb, numeric) to anon, authenticated;
+
 grant execute on function
   public.kpss_read_doc(text),
   public.kpss_write_doc(text, jsonb, text),

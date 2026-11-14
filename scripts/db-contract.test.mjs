@@ -379,6 +379,17 @@ head('\x1b[1m[5] supabase/migrations — tablo + bekçi + politika + grant\x1b[0
   ok(/create extension if not exists "citext"/.test(sql), 'e-posta için citext isteniyor (varsa dokunulmaz)');
   ok(!sql.split('\n').some(l => /^insert into public\.members\b/.test(l)), 'SQL sahte üye tohumlamıyor (boş başla; membership_policy satırı sayılmaz)');
   ok(!sql.split('\n').some(l => /^insert into public\.admins\b/.test(l)), 'yönetici listesi elle/panelden dolduruluyor');
+  /* --- toleranslı alan okuma + kolon listesi (elle göz denetimi gerektirmesin) --- */
+  ok(sql.includes('create or replace function kpss_as_bool') && sql.includes('create or replace function kpss_as_int') && sql.includes('create or replace function kpss_as_num'),
+    'belge alanları tolere eden okuyucular tanımlı');
+  ok(!/\(p_doc ->> '[a-zA-Z]+'\)::(boolean|int)/.test(sql), 'p_doc alanlarında katı cast kalmadı (sayı/metin/boolean hepsi geçerli)');
+  ok(!/\(r ->> '[a-zA-Z]+'\)::(int|numeric)/.test(sql), 'test satırı alanlarında katı cast kalmadı');
+  ok((sql.match(/::boolean/g) || []).length <= 3, 'katı boolean yalnız yardımcıların içinde (en fazla 3 iz)');
+  ok(sql.includes('grant execute on function public.kpss_as_bool'), 'yardımcılara çalıştırma izni verildi (iç çağrıda da denetlenir)');
+  ok(sql.includes("and (v_doc ? a.attname or a.attname = 'email')"), 'üye yazması yalnız belgede olan kolonları listeler (DEFAULT’lar korunur)');
+  ok(sql.includes("and a.attname <> 'id'"), 'id kolonu listeye alınmaz; bekçi e-postadan doldurur');
+  ok(sql.includes('on conflict ("email") do update set'), 'çakışma anahtarı e-posta (PK)');
+  ok(!/select x\.\* from jsonb_populate_record/.test(sql), 'tüm kolonlu eski `select x.*` yazma yolu kaldırıldı');
   ok(flat.includes('not exists (select 1 from public.admins)'), 'ilk yönetici kendisini ekleyebiliyor (bootstrap), sonrası yöneticide');
 }
 
