@@ -406,17 +406,28 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return { ok: false, reason: 'email' };
       }
       await auth.ensureAuthConfigLoaded();
-      const authMode = auth.isAuthConfigured();
+      let authMode = auth.isAuthConfigured();
       setBusy(true);
       try {
         let authUid = '';
         if (authMode) {
           const account = await auth.signIn(emailKey, password);
           if (!account.ok) {
-            setError(account.error || 'Giriş başarısız.');
-            return { ok: false, reason: 'auth' };
+            // Firebase anahtarı sonradan eklendiyse eski üyelerin Firebase hesabı
+            // yoktur (belgede yerel PBKDF2 hash’i durur). Parolayı yerel hash ile
+            // doğrulayıp üyeliği içeri alıyoruz — kimse dışarıda kalmıyor.
+            const legacy = account.code === 'EMAIL_NOT_FOUND' ? await fetchMemberByEmail(emailKey) : null;
+            const legacyDoc = legacy?.ok ? legacy.data : null;
+            const legacyOk =
+              !!legacyDoc && !isFirebaseAuthBundle(legacyDoc.password) && verifyPassword(password, legacyDoc.password);
+            if (!legacyOk) {
+              setError(legacyDoc && !isFirebaseAuthBundle(legacyDoc.password) ? 'Mevcut parola hatalı.' : account.error || 'Giriş başarısız.');
+              return { ok: false, reason: 'auth' };
+            }
+            authMode = false;
+          } else {
+            authUid = account.session?.uid || '';
           }
-          authUid = account.session?.uid || '';
         }
         const found = await fetchMemberByEmail(emailKey);
         // Katı modda (meta/membership_lockdown) henüz OLMAYAN belge 404 değil 403
@@ -592,27 +603,48 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       setBusy(true);
       try {
+        let claimUid = '';
         if (authMode) {
           // Mevcut parolayı Firebase ile doğrula: taze oturum, REQUIRES_RECENT_LOGIN olmaz.
           const check = await auth.signIn(current.email, current0);
-          if (!check.ok) {
+          if (!check.ok && check.code === 'EMAIL_NOT_FOUND' && !isFirebaseAuthBundle(current.password)) {
+            // Eski (yerel) hesap: parolayı belgedeki hash ile doğrula, Firebase
+            // hesabını YENİ parolayla aç ve belgeyi Firebase’e taşı.
+            if (!verifyPassword(current0, current.password)) {
+              setError('Mevcut parola hatalı.');
+              return { ok: false, reason: 'password' };
+            }
+            const opened = await auth.signUp(current.email, next0);
+            if (!opened.ok) {
+              setError(opened.error || 'Firebase hesabı açılamadı.');
+              return { ok: false, reason: 'auth' };
+            }
+            claimUid = opened.session?.uid || '';
+          } else if (!check.ok) {
             setError(check.error || 'Mevcut parola hatalı.');
             return { ok: false, reason: 'password' };
-          }
-          const res = await auth.updatePassword(next0);
-          if (!res.ok) {
-            setError(res.error || 'Parola Firebase Auth’ta güncellenemedi.');
-            return { ok: false, reason: 'auth' };
+          } else {
+            const res = await auth.updatePassword(next0);
+            if (!res.ok) {
+              setError(res.error || 'Parola Firebase Auth’ta güncellenemedi.');
+              return { ok: false, reason: 'auth' };
+            }
           }
         }
         const sec = authMode ? AUTH_PASSWORD_BUNDLE : hashPassword(next0);
-        const res = await patchMemberDoc(current.id, { password: sec } as Partial<MemberDoc> as MemberDoc);
+        const res = await patchMemberDoc(
+          current.id,
+          {
+            password: sec,
+            ...(claimUid ? { authUid: claimUid } : {}),
+          } as Partial<MemberDoc> as MemberDoc
+        );
         if (!res.ok) {
           noteCloud(res);
           setError(res.error);
           return { ok: false, reason: res.reason };
         }
-        applyMember({ ...current, password: sec });
+        applyMember({ ...current, password: sec, ...(claimUid ? { authUid: claimUid } : {}) });
         setError(null);
         return { ok: true };
       } finally {

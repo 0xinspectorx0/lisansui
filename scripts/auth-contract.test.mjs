@@ -243,6 +243,19 @@ ok(/if \(auth\.isAuthConfigured\(\)\) await auth\.deleteAccount\(\);/.test(ctx),
 ok(/Authorization: `Bearer \$\{token\}`/.test(api), 'firestoreApi: idToken bearer olarak ekleniyor');
 ok(/const token = await currentIdToken\(\);/.test(api), 'firestoreApi: token yenileme dahil alınıyor');
 ok(ctx.includes('authMode: auth.isAuthConfigured(),') && ctx.includes('sendPasswordReset,'), 'context: authMode + sendPasswordReset dışa açık');
+// Anahtar SONRADAN eklendiğinde eski (yerel PBKDF2) üyeler dışarıda kalmamalı.
+ok(/account\.code === 'EMAIL_NOT_FOUND' \? await fetchMemberByEmail\(emailKey\) : null/.test(ctx), 'signIn: Firebase hesabı olmayan eski üye belgeden aranıyor');
+ok(/!isFirebaseAuthBundle\(legacyDoc\.password\) && verifyPassword\(password, legacyDoc\.password\)/.test(ctx), 'signIn: eski hesap yerel hash ile doğrulanıyor');
+ok(/authMode = false;/.test(ctx), 'signIn: yerel doğrulama sonrası akış yerel moda düşüyor');
+ok(/check\.code === 'EMAIL_NOT_FOUND' && !isFirebaseAuthBundle\(current\.password\)/.test(ctx), 'changePassword: yerel hesap için sahiplenme yolu açık');
+ok(/const opened = await auth\.signUp\(current\.email, next0\);/.test(ctx), 'changePassword: Firebase hesabı yeni parolayla açılıyor');
+ok(/\.\.\.\(claimUid \? \{ authUid: claimUid \} : \{\}\)/.test(ctx), 'changePassword: uid belediye yazılıyor (artık Firebase hesabı var)');
+const C = await import('/tmp/cryptoBundle.mjs');
+const legacyBundle = C.hashPassword('EskiParola1');
+ok(!C.isFirebaseAuthBundle(legacyBundle), 'yerel bundle “firebase-auth” sayılmıyor (sahiplenme adayı)');
+ok(C.verifyPassword('EskiParola1', legacyBundle) && !C.verifyPassword('Yanlis123', legacyBundle), 'sahiplenme eşiği yalnız doğru parolada açılıyor');
+ok(C.isFirebaseAuthBundle(C.AUTH_PASSWORD_BUNDLE), 'firebase bundle’ı işaretli (yeniden sahiplenme adayı değil)');
+ok(!C.verifyPassword('herhangi-bir-parola', C.AUTH_PASSWORD_BUNDLE), 'firebase bundle’ı yerel doğrulamayı asla geçmez (kimse parola tahminiyle içeri giremez)');
 ok(/await auth\.ensureAuthConfigLoaded\(\);\n        await auth\.currentIdToken\(\)\.catch\(\(\) => null\);/.test(ctx), 'boot: cihaz anahtarı + oturum yüklenmeden Firestore isteği gitmiyor');
 ok(/const missingDoc =\s*!found\.ok && authMode && \(found\.reason === 'notfound' \|\| found\.reason === 'denied'\)/.test(ctx), 'katı modda 403 dönen eksik belge “yok” sayılıyor (yeni üye girişebilir)');
 ok(/missingDoc && created\.reason === 'denied'/.test(ctx), 'okuma+yazma reddedilirse “kural yayınlanmamış” uyarısı veriliyor');
@@ -294,6 +307,7 @@ ok(!/\.env\.local içine EXPO_PUBLIC_FIREBASE_API_KEY ekleyip/.test(ctx), 'Membe
 ok(/config\/firebaseApp\.ts/.test(ctx), 'MembershipContext uyarıları repo config’e işaret ediyor');
 const setupSrc = fs.readFileSync('scripts/setup-firestore.mjs', 'utf8');
 ok(/writeRepoFirebaseConfig/.test(setupSrc) && /config', 'firebaseApp\.ts'/.test(setupSrc), 'setup-firestore --api-key anahtarı depoya da yazıyor');
+ok(/readRepoFirebaseConfig/.test(setupSrc) && /repoCfg\.apiKey/.test(setupSrc), 'npm run check:firestore anahtarı config/firebaseApp.ts’ten de okuyor');
 
 console.log('\x1b[1m[13] setup-firestore --api-key (gerçek yazma, geçici dizinde)\x1b[0m');
 const os = await import('node:os');
@@ -312,7 +326,11 @@ try {
   ok(/apiKey: 'AIzaSETUP-KEY_0123456789ab'/.test(written), '--api-key config/firebaseApp.ts içine yazdı');
   ok(/projectId: 'kpssasistani-01'/.test(written), 'projectId de config’e yazıldı');
   ok(/export function hasRepoApiKey/.test(written) && /AMAÇ:/.test(written), 'dosyanın yorum satırları ve export’ları korundu');
-  ok(/\n  projectId: 'kpssasistani-01',\n  authDomain: '',\n  appId: '',/.test(written), 'diğer alanlar korundu (yalnız hedef satırlar değişti)');
+  const srcLines = fs.readFileSync('config/firebaseApp.ts', 'utf8').split('\n');
+  const writtenLines = written.split('\n');
+  const untouched = srcLines.filter(l => !/^\s*(apiKey|projectId):\s*'/.test(l));
+  ok(untouched.every(l => writtenLines.includes(l)), 'diğer satırlar birebir korundu (yalnız apiKey/projectId değişti)', untouched.filter(l => !writtenLines.includes(l)).join(' ⏎ '));
+  ok(/appId: '[^']*'/.test(written) && /authDomain: '[^']*'/.test(written), 'appId/authDomain satırları yerinde (setup bunlara dokunmuyor)');
   ok(/EXPO_PUBLIC_FIREBASE_API_KEY=AIzaSETUP-KEY_0123456789ab/.test(fs.readFileSync(nodePath.join(tmp, '.env.local'), 'utf8')), '--api-key .env.local’a da yazıldı (override)');
   ok(/config\/firebaseApp\.ts/.test(out), 'kurulum çıktısı repo config’ten söz ediyor');
 } finally {

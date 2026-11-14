@@ -30,20 +30,25 @@ export interface FirebaseWebConfig {
   projectId: string;
   /** Boş bırakılırsa `<projectId>.firebaseapp.com` türetilir. */
   authDomain: string;
-  /** Opsiyonel; yalnız Crashlytics/Analytics için gerekir. */
+  /** Opsiyonel; Firebase SDK kuran derlemeler / Analytics ister. REST akışımız kullanmıyor. */
   appId: string;
+  /** Bilgi amaçlı: Console bloğundaki diğer public değerler (uygulama şu an kullanmıyor). */
+  storageBucket?: string;
+  messagingSenderId?: string;
 }
 
 /**
- * DEĞERLENDİRME NOTU: `apiKey` boşken uygulama çalışmaya devam eder —
- * üyelikler cihazda hash'lenen yerel modla yürür. Anahtar yazıldığı anda
- * Firebase Auth kendiliğinden devreye girer; kullanıcıya hiçbir şey sorulmaz.
+ * kpssasistani-01 — Console → Project settings → General → Your apps → Web app.
+ * Bu değerlerin tamamı PUBLIC web SDK yapılandırmasıdır (istemci paketine gömülür);
+ * veriyi koruyan şey `firestore.rules` kurallarıdır.
  */
 export const FIREBASE_WEB_CONFIG: FirebaseWebConfig = {
-  apiKey: '',
+  apiKey: 'AIzaSyC7QaaTqOZm4fn-l_-uk4Uv4z5BKFTLikA',
   projectId: 'kpssasistani-01',
-  authDomain: '',
-  appId: '',
+  authDomain: 'kpssasistani-01.firebaseapp.com',
+  appId: '1:674719983447:web:04aaeee6fb7ab9cfd48012',
+  storageBucket: 'kpssasistani-01.firebasestorage.app',
+  messagingSenderId: '674719983447',
 };
 
 /** Depoda gerçek bir anahtar var mı? (panel/uyarı metinleri bunu kullanır.) */

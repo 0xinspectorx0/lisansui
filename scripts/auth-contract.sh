@@ -29,4 +29,7 @@ npx esbuild lib/authClient.ts --bundle --format=esm --platform=neutral \
   --define:process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN='""' \
   --define:process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID='""' \
   --define:process.env.EXPO_PUBLIC_FIREBASE_APP_ID='""'
+# Yerel doğrulama primitifleri — sahiplenme (claim) eşiğinin dayandığı kod.
+npx esbuild lib/crypto.ts --bundle --format=esm --platform=neutral \
+  --outfile=/tmp/cryptoBundle.mjs --log-level=warning
 node scripts/auth-contract.test.mjs
