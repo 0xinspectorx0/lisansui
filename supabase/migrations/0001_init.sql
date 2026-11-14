@@ -770,7 +770,7 @@ begin
      * için DO UPDATE kümesine giremez. */
     select string_agg(format('%I', a.attname), ', ' order by a.attnum),
            string_agg(case when a.attname = 'email' then null
-                          else format('%I = excluded.%I', a.attname) end, ', ' order by a.attnum)
+                          else format('%I = excluded.%I', a.attname, a.attname) end, ', ' order by a.attnum)
       into v_cols, v_sets
       from pg_attribute a
      where a.attrelid = 'public.members'::regclass
