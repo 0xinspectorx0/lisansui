@@ -379,16 +379,22 @@ const F = await import('/tmp/firestoreApiBundle.mjs');
 // sahte Firestore: URL + başlık kaydı, durum kodları senaryoya göre
 let fsMode = {};
 const fsLog = [];
+let inflight = 0;
+let maxInflight = 0;
 const realFetch2 = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
   const u = String(url);
   fsLog.push({ url: u, headers: init?.headers || {} });
+  inflight += 1;
+  maxInflight = Math.max(maxInflight, inflight);
+  await Promise.resolve(); // eşzamanlılığı ölçmek için küçük bekleme
   const key = u.includes('/meta/membership_lockdown')
     ? 'lockdown'
     : u.includes('/memberships')
       ? 'membership'
       : 'content';
   const status = fsMode[key] ?? 200;
+  inflight -= 1;
   if (status === 'network') throw new Error('ECONNRESET');
   return { ok: status < 400, status, json: async () => ({}), text: async () => '{}' };
 };
@@ -400,6 +406,8 @@ try {
   ok(d.cause === 'rules-not-published', 'her şey 403 → kurallar hiç yayınlanmamış', d.cause);
   ok(/yayınlanmamış/.test(d.headline), 'başlık “yayınlanmamış” diyor', d.headline);
   ok(d.steps.length > 0 && /Kuralları kopyala/.test(d.steps[0]), 'ilk adım paneldeki kopyalama düğmesine götürüyor', d.steps[0]);
+  ok(maxInflight >= 2, 'yoklamalar PARALEL koşuyor (çevrimdışıyken 3×8 sn sürmez)', String(maxInflight));
+  ok(fsLog.filter(l => !l.headers.Authorization).length >= 1, 'içerik yoklaması kimliksiz atılıyor');
 
   fsMode = { content: 200, membership: 403, lockdown: 404 };
   d = await D.diagnoseMembershipAccess();

@@ -48,6 +48,7 @@ export interface AccessDiag {
   };
 }
 
+/** Tek istek zaman aşımı. Üç yoklama PARALEL koşar → tanı en kötü ~8 sn sürer. */
 const TIMEOUT_MS = 8000;
 
 async function get(url: string, token: string | null): Promise<{ status: number | 'network' }> {
@@ -116,8 +117,18 @@ export async function diagnoseMembershipAccess(email?: string): Promise<AccessDi
       }
     );
 
-  // 2) İçerik okuması (kimliksiz): kurallar yayınlanmış mı?
-  const content = await get(`${contentBase()}/daily_tips/main`, null);
+  // 2) Üç yoklama birden atılır (sırayla denirse çevrimdışı durumda 3×8 sn sürerdi):
+  //    • içerik okuması (kimliksiz) → kurallar yayınlanmış mı?
+  //    • kilit belgesi            → meta/membership_lockdown var mı?
+  //    • üyelik okuması (tokenlı) → bu cihaz için memberships izni var mı?
+  const membershipUrl = email
+    ? `${documentsBase()}/${membershipsPath}/${encodeURIComponent(email)}`
+    : `${documentsBase()}/${membershipsPath}?pageSize=1`;
+  const [content, lockdownRaw, membership] = await Promise.all([
+    get(`${contentBase()}/daily_tips/main`, null),
+    readLockdown(token, collectionPath('meta/membership_lockdown')),
+    get(membershipUrl, token || null),
+  ]);
   if (content.status === 'network')
     return out(
       'offline',
@@ -135,8 +146,7 @@ export async function diagnoseMembershipAccess(email?: string): Promise<AccessDi
       }
     );
 
-  const lockdown = await readLockdown(token, collectionPath('meta/membership_lockdown'));
-
+  const lockdown = lockdownRaw;
   const base = {
     projectId: target.projectId,
     databaseId: target.databaseId,
@@ -146,12 +156,6 @@ export async function diagnoseMembershipAccess(email?: string): Promise<AccessDi
     tokenProject: cfg.projectId,
     tokenPresent: !!token,
   } as const;
-
-  // 3) Üyelik koleksiyonu okunabiliyor mu? (yalnızca token ile, belge adını biliyorsak)
-  const membershipUrl = email
-    ? `${documentsBase()}/${membershipsPath}/${encodeURIComponent(email)}`
-    : `${documentsBase()}/${membershipsPath}?pageSize=1`;
-  const membership = await get(membershipUrl, token || null);
 
   if (content.status === 403)
     return out(
