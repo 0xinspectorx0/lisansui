@@ -60,7 +60,7 @@ export const CloudStatusBanner: React.FC<{ compact?: boolean }> = ({ compact }) 
             { color: denied ? colors.warning : colors.danger },
           ]}
         >
-          {denied ? 'Firestore yazma/okuma kuralı engelledi' : 'Firestore’a ulaşılamadı'}
+          {denied ? 'Supabase yazma/okuma kuralı engelledi' : 'Supabase’e ulaşılamadı'}
         </Text>
         {!!cloudMessage && (
           <Text style={[styles.bannerText, { color: colors.textSecondary }]}>
@@ -69,8 +69,8 @@ export const CloudStatusBanner: React.FC<{ compact?: boolean }> = ({ compact }) 
         )}
         {!compact && denied && (
           <Text style={[styles.bannerText, { color: colors.textMuted }]}>
-            Repo’daki `firestore.rules` dosyasındaki bloğu Firebase Konsol → Firestore → Rules
-            bölümüne kopyalayıp “Publish” yapman yeterli. Üyelik kayıtları yalnızca Firestore’da
+            Repo’daki `firestore.rules` dosyasındaki bloğu Supabase Konsol → Supabase → Rules
+            bölümüne kopyalayıp “Publish” yapman yeterli. Üyelik kayıtları yalnızca Supabase’da
             tutulduğu için bu izin olmadan kayıt açılamaz.
           </Text>
         )}

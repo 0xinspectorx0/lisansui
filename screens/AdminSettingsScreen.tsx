@@ -7,10 +7,10 @@ import { useAppTheme } from '../lib/theme';
 import {
   collectionPath,
   DEFAULT_TARGET,
-  firestoreTarget,
+  cloudTarget,
   probeUrls,
-  type FirestoreTarget,
-} from '../lib/firebaseConfig';
+  type SupabaseTarget,
+} from '../lib/supabaseConfig';
 import {
   buildSeedPlan,
   CONTENT_LOCK_PATH,
@@ -32,6 +32,7 @@ import {
   type CopyProgress,
   type CopyResult,
 } from '../lib/contentCopy';
+import { SUPABASE_SQL, describeSupabaseSql } from '../config/supabaseSqlCopy';
 import { useAdmin } from '../lib/AdminContext';
 import { useMembership } from '../lib/MembershipContext';
 import { useApp } from '../lib/AppContext';
@@ -57,7 +58,7 @@ import {
   readMembershipLockdown,
   ADMINS_DOC_PATH,
   MEMBERSHIP_LOCKDOWN_DOC_PATH,
-} from '../lib/firestoreApi';
+} from '../lib/cloudApi';
 import {
   authConfigSource,
   clearDeviceApiKey,
@@ -72,7 +73,7 @@ import {
   resetAuthConfigCache,
   signOut as authSignOut,
 } from '../lib/authClient';
-import { hasRepoApiKey } from '../config/firebaseApp';
+import { hasRepoApiKey } from '../config/supabaseApp';
 import { membershipBuildLabel } from '../lib/buildTag';
 
 export const AdminSettingsScreen: React.FC = () => {
@@ -98,25 +99,26 @@ export const AdminSettingsScreen: React.FC = () => {
     tone: 'info',
   });
 
-  const fsTarget: FirestoreTarget = firestoreTarget();
-  // Sık düşülen tuzak: yeni proje kimliği verip yol önekini legacy'de bırakmak
-  // (veya tam tersi). Panelde uyar, çünkü iki ayar birlikte anlam kazanıyor.
+  const fsTarget: SupabaseTarget = cloudTarget();
+  // Sık düşülen tuzak: adres ile şemanın AYNI projeyi göstermemesi (URL yenilenmiş,
+  // app.json'daki eski değer kalmış gibi). Ayar tek yerde durur: config/ + app.json.
   const rootConfigWarnings: string[] = [];
-  if (fsTarget.projectId !== DEFAULT_TARGET.projectId && fsTarget.root !== '') {
+  if (!fsTarget.url) {
     rootConfigWarnings.push(
-      `Proje “${fsTarget.projectId}” ama root hâlâ ${fsTarget.root} — yeni projede bu ağacı oluşturmadıysan EXPO_PUBLIC_FIRESTORE_ROOT=. ver.`
+      'Supabase hedefi boş — uygulama yerel modda. Geliştirici bir kez `npm run setup:supabase` çalıştırırsa bu satır kaybolur.'
     );
-  }
-  if (fsTarget.projectId === DEFAULT_TARGET.projectId && fsTarget.root === '') {
+  } else if (fsTarget.schema !== DEFAULT_TARGET.schema) {
     rootConfigWarnings.push(
-      'Root kök (“.”) ama proje hâlâ kpss-asistani — eski projede /courses beklenen veri yok, panelde tohumlama yapman gerekir.'
+      `Şema “${fsTarget.schema}” — tabloların olduğu şema bu mu? Supabase varsayılanı public.`
     );
   }
 
-  /* Firebase web API anahtarı KULLANICIDAN İSTENMEZ: depoda `config/firebaseApp.ts`
+  /* Supabase web API anahtarı KULLANICIDAN İSTENMEZ: depoda `config/supabaseApp.ts`
      içinde durur. Aşağıdaki state yalnız eski kurulumlardan kalan cihaz kaydını
      göstermek/clear etmek için tutuluyor. */
   const [deviceKey, setDeviceKey] = useState<string | null>(null);
+  const [sqlCopied, setSqlCopied] = useState(false);
+  const [sqlNote, setSqlNote] = useState<string | null>(null);
   const [keyNote, setKeyNote] = useState<string | null>(null);
   const [keyBusy, setKeyBusy] = useState(false);
 
@@ -132,6 +134,24 @@ export const AdminSettingsScreen: React.FC = () => {
     };
   }, []);
 
+  /** SQL panoya kopyalanır; pano kapalıysa metin seçilebilir hâlde açılır. */
+  const copySql = async () => {
+    setSqlNote(null);
+    try {
+      const nav: any = typeof navigator !== 'undefined' ? navigator : null;
+      if (nav?.clipboard?.writeText) {
+        await nav.clipboard.writeText(SUPABASE_SQL);
+        setSqlCopied(true);
+        setSqlNote('Kopyalandı — Supabase → SQL Editor içine yapıştır ve Run’a bas.');
+        return;
+      }
+    } catch {
+      /* pano erişimi yoksa aşağıdaki seçilebilir blok devreye girer */
+    }
+    setSqlCopied(false);
+    setSqlNote('Pano bu cihazda kapalı — aşağıdaki metni seçip kopyalayabilirsin.');
+  };
+
   const removeDeviceKey = async () => {
     setKeyBusy(true);
     await clearDeviceApiKey();
@@ -141,7 +161,7 @@ export const AdminSettingsScreen: React.FC = () => {
     setKeyBusy(false);
     setKeyNote(
       hasRepoApiKey()
-        ? 'Cihaz kaydı silindi — depodaki anahtar (config/firebaseApp.ts) kullanılmaya devam ediyor.'
+        ? 'Cihaz kaydı silindi — depodaki anahtar (config/supabaseApp.ts) kullanılmaya devam ediyor.'
         : 'Cihaz kaydı silindi. Depoda anahtar yoksa yerel PBKDF2 moduna dönülür.'
     );
   };
@@ -152,11 +172,11 @@ export const AdminSettingsScreen: React.FC = () => {
       : authConfigSource() === 'env'
         ? '.env.local (pakete gömülü)'
         : authConfigSource() === 'repo'
-          ? 'depoya gömülü config (config/firebaseApp.ts)'
+          ? 'depoya gömülü config (config/supabaseApp.ts)'
           : 'yok';
 
   /* eski projeden içerik kopyalama (terminal gerekmez) */
-  const [copySrc, setCopySrc] = useState(LEGACY_SOURCE.projectId);
+  const [copySrc, setCopySrc] = useState(LEGACY_SOURCE.url);
   const [copyPlan, setCopyPlan] = useState<CopyPlan | null>(null);
   const [copyBusy, setCopyBusy] = useState<'plan' | 'run' | null>(null);
   const [copyProgress, setCopyProgress] = useState<CopyProgress | null>(null);
@@ -168,7 +188,7 @@ export const AdminSettingsScreen: React.FC = () => {
     setCopyPlan(null);
     setCopyResult(null);
     setCopyProgress(null);
-    const p = await planCopy(copySrc.trim() || LEGACY_SOURCE.projectId);
+    const p = await planCopy(copySrc.trim());
     setCopyPlan(p);
     setCopyBusy(null);
   };
@@ -230,7 +250,7 @@ export const AdminSettingsScreen: React.FC = () => {
     setGov({ busy: false, emails: res.data, locked: lock.ok ? lock.data : null, note: `Listede ${res.data.length} e-posta • ${lock.ok && lock.data ? 'kilit AÇIK (liste artık Console’dan)' : 'kilit kapalı'}` });
   };
 
-  /* Firebase Auth durumu */
+  /* Supabase Auth durumu */
   const [authProbe, setAuthProbe] = useState<{
     busy: boolean;
     text: string;
@@ -250,7 +270,7 @@ export const AdminSettingsScreen: React.FC = () => {
       setAuthInfo(
         s2
           ? `${s2.email} • uid ${s2.uid.slice(0, 10)}… • token ${s2.expiresAt > Date.now() ? 'geçerli' : 'yenilenecek'}`
-          : 'Bu cihazda kayıtlı Firebase oturumu yok.'
+          : 'Bu cihazda kayıtlı Supabase oturumu yok.'
       );
       setAuthProbe({ busy: false, text: r.note, tone: r.ok ? 'success' : 'danger' });
     } catch (e) {
@@ -442,13 +462,13 @@ export const AdminSettingsScreen: React.FC = () => {
         {/* Membership policy */}
         <AdminSectionTitle
           label="Üyelik & test limiti"
-          hint="Üye olmayan (ve ücretsiz üye) her dersten yalnızca belirlenen sayıda test çözer. Tüm üyelik kayıtları Firestore’dadır."
+          hint="Üye olmayan (ve ücretsiz üye) her dersten yalnızca belirlenen sayıda test çözer. Tüm üyelik kayıtları Supabase’dadır."
         />
         <AdminCard>
           <AdminToggle
             icon="lock-closed-outline"
             label="Limit uygulansın"
-            description="Kapatırsan herkes sınırsız çözer. Firestore kurallarını dağıtmadan önce geçici kaçış kapısı."
+            description="Kapatırsan herkes sınırsız çözer. Supabase kurallarını dağıtmadan önce geçici kaçış kapısı."
             value={membershipPolicy.enforce}
             onValueChange={v =>
               patchSettings({ membership: { ...membershipPolicy, enforce: v } })
@@ -469,14 +489,14 @@ export const AdminSettingsScreen: React.FC = () => {
           />
           <AdminToggle
             icon="cloud-outline"
-            label="VIP durumu Firestore’dan okunsun"
+            label="VIP durumu Supabase’dan okunsun"
             description="Açıkken üyelik belgesindeki `vip`/`vipPlan`/`vipExpiresAt` esas alınır. Kapatırsan yalnızca bu cihazın yerel etiketi geçerli."
             value={membershipPolicy.cloudVip}
             onValueChange={v => patchSettings({ membership: { ...membershipPolicy, cloudVip: v } })}
           />
           <AdminToggle
             icon="people-outline"
-            label="Panel listesi Firestore üyelerini göstersin"
+            label="Panel listesi Supabase üyelerini göstersin"
             description="Kullanıcılar ekranı demo kayıtlar yerine `memberships` koleksiyonundaki gerçek belgeleri listeler."
             value={membershipPolicy.cloudMembers}
             onValueChange={v =>
@@ -506,44 +526,34 @@ export const AdminSettingsScreen: React.FC = () => {
           <AdminRow
             icon="person-badge-outline"
             title="Üyelik paneli"
-            subtitle="Üye oluştur, düzenle, plan/rol değiştir, sil — doğrudan Firestore’a yazar · onay kuralı meta/membership_policy belgesinde durur"
+            subtitle="Üye oluştur, düzenle, plan/rol değiştir, sil — doğrudan Supabase’e yazar · onay kuralı meta/membership_policy belgesinde durur"
             onPress={() => navigation.navigate('AdminMembership')}
             badge={membershipPolicy.cloudMembers ? 'bulut' : 'yerel'}
           />
         </AdminCard>
 
-        {/* Firestore hedefi */}
+        {/* Supabase hedefi */}
         <AdminSectionTitle
-          label="Firestore bağlantısı"
-          hint="İçerik ve üyeliklerin okunduğu proje. Değerler derleme zamanında çözülür: EXPO_PUBLIC_* → app.json (expo.extra.firestore) → varsayılan."
+          label="Supabase bağlantısı"
+          hint="İçerik ve üyeliklerin okunduğu proje. Değerler derleme zamanında çözülür: EXPO_PUBLIC_* → app.json (expo.extra.supabase) → depoda gömülü config."
         />
         <AdminCard>
           <AdminRow
             icon="cloud-outline"
             title="Proje kimliği"
-            subtitle="EXPO_PUBLIC_FIRESTORE_PROJECT"
+            subtitle="URL'den türetilir — Supabase projesinin kısa adı (ref)"
             right={<Text style={{ fontSize: 12, fontWeight: '900', color: colors.text }}>{fsTarget.projectId}</Text>}
           />
           <AdminRow
             icon="albums-outline"
-            title="Veritabanı"
-            subtitle="Yeni kurulumda (default) bırak"
+            title="Şema"
+            subtitle="Postgres şeması — tablolar ve RLS kuralları burada"
             right={<Text style={{ fontSize: 12, fontWeight: '900', color: colors.text }}>{fsTarget.databaseId}</Text>}
-          />
-          <AdminRow
-            icon="git-branch-outline"
-            title="Yol öneki (root)"
-            subtitle={fsTarget.root ? 'Legacy düzen: artifacts/{proje}/public/data' : 'Kök düzen: koleksiyonlar doğrudan /courses, /memberships altında'}
-            right={
-              <Text style={{ fontSize: 11, fontWeight: '800', color: colors.textMuted }} numberOfLines={1}>
-                {fsTarget.root || '(kök)'}
-              </Text>
-            }
           />
           <AdminRow
             icon="person-badge-outline"
             title="Üyelik koleksiyonu"
-            subtitle={`Kayıtlar ve panel listesi bu yolu kullanır · üyelikler yalnızca Firestore’da, cihazda kopya tutulmaz (kod ${membershipBuildLabel()})`}
+            subtitle={`Kayıtlar ve panel listesi bu tabloyu kullanır (public.members) · üyelikler yalnızca Supabase’da, cihazda kopya tutulmaz (kod ${membershipBuildLabel()})`}
             right={
               <Text style={{ fontSize: 11, fontWeight: '800', color: colors.textMuted }} numberOfLines={1}>
                 {collectionPath('memberships')}
@@ -551,10 +561,49 @@ export const AdminSettingsScreen: React.FC = () => {
             }
           />
           <AdminRow
+            icon="construct-outline"
+            title="SQL — tablolar ve RLS"
+            subtitle={
+              sqlNote ?? `${describeSupabaseSql()} · uygulamanın beklediği tek şema bu; Dashboard → SQL Editor → Run`
+            }
+            right={
+              <AdminButton
+                small
+                tone={sqlNote ? 'success' : 'primary'}
+                label={sqlCopied ? 'Panoda' : 'Kopyala'}
+                onPress={() => void copySql()}
+              />
+            }
+          />
+          {sqlNote && !sqlCopied ? (
+            <Text
+              selectable
+              style={{ fontSize: 10.5, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 15, marginBottom: 6 }}
+            >
+              {SUPABASE_SQL.slice(0, 3000)}
+            </Text>
+          ) : null}
+          <AdminRow
+            icon="construct-outline"
+            title="SQL — tablolar ve RLS"
+            subtitle={
+              sqlNote ??
+              `${describeSupabaseSql()} · uygulamanın beklediği tek şema bu; Dashboard → SQL Editor → Run`
+            }
+          />
+          {sqlNote && !sqlCopied ? (
+            <Text
+              selectable
+              style={{ fontSize: 10.5, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 15, marginBottom: 6 }}
+            >
+              {SUPABASE_SQL.slice(0, 3000)}
+            </Text>
+          ) : null}
+          <AdminRow
             icon="code-slash-outline"
             title="Ayar kaynağı"
             subtitle={
-              fsTarget.source === 'default'
+              fsTarget.source === 'none'
                 ? 'Repo varsayılanı — yeni proje için .env veya app.json kullan'
                 : `${fsTarget.source} üzerinden verildi`
             }
@@ -574,14 +623,15 @@ export const AdminSettingsScreen: React.FC = () => {
               TEK KOMUTLU KURULUM (terminalde)
             </Text>
             <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace' }} selectable>
-              npm run setup:firestore -- {fsTarget.projectId} --root .
+              npm run setup:supabase -- --url https://&lt;ref&gt;.supabase.co --anon-key &lt;anon&gt;
             </Text>
             <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace', marginTop: 2 }} selectable>
-              npm run check:firestore
+              npm run check:supabase
             </Text>
             <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
-              Birincisi .env.local + .firebaserc yazar, ikincisi kuralları/okuma-yazmayı
-              dener. Kurallar için: npm run deploy:rules
+              Birincisi .env.local + config/supabaseApp.ts + app.json dosyalarına hedefi
+              yazar; ikincisi okuma/yazmayı dener. Tablolar ve yetki kuralları (RLS)
+              depoda: supabase/migrations/0001_init.sql → SQL Editor → Run.
             </Text>
           </View>
           {rootConfigWarnings.length ? (
@@ -605,10 +655,10 @@ export const AdminSettingsScreen: React.FC = () => {
           />
         </AdminCard>
 
-        {/* Firebase Auth */}
+        {/* Supabase Auth */}
         <AdminSectionTitle
-          label="Firebase Auth (kimlik doğrulama)"
-          hint="Anahtar uygulamanın içinde: config/firebaseApp.ts (bir kez yazılır, commit’lenir). Tanımlıysa parola Firebase’de doğrulanır ve Firestore istekleri idToken taşır; senden bir yere anahtar yapıştırman istenmez."
+          label="Supabase Auth (kimlik doğrulama)"
+          hint="Anahtar uygulamanın içinde: config/supabaseApp.ts (bir kez yazılır, commit’lenir). Tanımlıysa parola Supabase’de doğrulanır ve Supabase istekleri idToken taşır; senden bir yere anahtar yapıştırman istenmez."
         />
         <AdminCard>
           <AdminRow
@@ -616,12 +666,12 @@ export const AdminSettingsScreen: React.FC = () => {
             title="Kimlik modu"
             subtitle={
               isAuthConfigured()
-                ? `Firebase Auth açık — üyelik belgelerinde parola hash’i tutulmuyor. Kaynak: ${authSourceLabel}`
-                : 'Yerel mod — parola cihazda hash’lenip belgeye yazılıyor. Anahtar depoya yazıldığı an bu satır kendiliğinden Firebase Auth’a döner.'
+                ? `Supabase Auth açık — üyelik belgelerinde parola hash’i tutulmuyor. Kaynak: ${authSourceLabel}`
+                : 'Yerel mod — parola cihazda hash’lenip belgeye yazılıyor. Anahtar depoya yazıldığı an bu satır kendiliğinden Supabase Auth’a döner.'
             }
             right={
               <AdminChip
-                label={isAuthConfigured() ? 'firebase-auth' : 'pbkdf2'}
+                label={isAuthConfigured() ? 'supabase-auth' : 'pbkdf2'}
                 tone={isAuthConfigured() ? 'success' : 'info'}
               />
             }
@@ -630,8 +680,8 @@ export const AdminSettingsScreen: React.FC = () => {
             <View style={{ paddingHorizontal: 2, marginBottom: 6 }}>
               <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16 }}>
                 {'Anahtarı kendin girmeye çalışman gerekmiyor. Tek yapman gereken anahtarı'}{'\n'}
-                {'geliştiriciye iletmek; o da `config/firebaseApp.ts` içine yazıp commit’liyor.'}{'\n'}
-                {'Uygulama güncellendiği anda Firebase Auth kendiliğinden açılır.'}
+                {'geliştiriciye iletmek; o da `config/supabaseApp.ts` içine yazıp commit’liyor.'}{'\n'}
+                {'Uygulama güncellendiği anda Supabase Auth kendiliğinden açılır.'}
               </Text>
             </View>
           ) : null}
@@ -660,7 +710,7 @@ export const AdminSettingsScreen: React.FC = () => {
             <AdminRow
               icon="pulse-outline"
               title="API anahtarı"
-              subtitle={`Pakete gömülü public web anahtarı (gizli değil; koruma Firestore kurallarında). Kaynak: ${authSourceLabel}`}
+              subtitle={`Pakete gömülü public web anahtarı (gizli değil; koruma Supabase kurallarında). Kaynak: ${authSourceLabel}`}
               right={
                 <Text style={{ fontSize: 11.5, fontWeight: '800', color: colors.textMuted }}>
                   {maskKey(authCfg.apiKey)}
@@ -671,7 +721,7 @@ export const AdminSettingsScreen: React.FC = () => {
           <AdminRow
             icon="person-circle-outline"
             title="Bu cihazdaki oturum"
-            subtitle={authInfo ?? 'Test edince görünür (Firestore işlemleri bu token ile gider).'}
+            subtitle={authInfo ?? 'Test edince görünür (Supabase işlemleri bu token ile gider).'}
             right={
               <AdminButton
                 small
@@ -688,7 +738,7 @@ export const AdminSettingsScreen: React.FC = () => {
           <AdminRow
             icon="people-outline"
             title="Yönetici listesi"
-            subtitle={gov.emails.length ? gov.emails.join(', ') : 'meta/admins belgesi yok — “Kendimi ekle” ile oluşturabilirsin (Admin SDK gerekmez).'}
+            subtitle={gov.emails.length ? gov.emails.join(', ') : 'public.admins tablosu boş — “Kendimi ekle” ile ilk yöneticiyi sen yazarsın (sunucu anahtarı gerekmez).'}
             right={
               <AdminButton
                 small
@@ -714,19 +764,21 @@ export const AdminSettingsScreen: React.FC = () => {
           />
           <View style={{ paddingHorizontal: 2, gap: 2 }}>
             <Text style={{ fontSize: 10.5, color: colors.textMuted, lineHeight: 15 }}>
-              Kilidi açmak yalnız Console işidir (uygulama meta altına yazamaz) — belgeyi
-              silmek anında geri alır, kuralı yeniden yayımlamaya gerek yok:
+              Kilit tek satırda durur: public.membership_policy. Panel düğmesi
+              {` ${MEMBERSHIP_LOCKDOWN_DOC_PATH} `} üzerinden aynı satırı çevirir; SQL
+              Editor’dan elle yapmak istersen:
             </Text>
             <Text selectable style={{ fontSize: 10.5, color: colors.text, fontFamily: 'monospace', lineHeight: 15 }}>
-              Firestore → Data → Add document → collection `meta` → ID `membership_lockdown`
-              → alan `note` (string) = `kilitli` → Save
+              update public.membership_policy set "membershipLockdown" = true where id = 1;  -- kapat{'\n'}
+              update public.membership_policy set "membershipLockdown" = false where id = 1; -- aç
             </Text>
             <Text selectable style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 14 }}>
-              beklenen yollar → {ADMINS_DOC_PATH} • {MEMBERSHIP_LOCKDOWN_DOC_PATH}
+              yönetici listesi: select email from public.admins; • panel yolu → {ADMINS_DOC_PATH}
             </Text>
             <Text style={{ fontSize: 10, color: colors.textMuted, lineHeight: 14 }}>
-              Liste yolu yanlış görünüyorsa EXPO_PUBLIC_FIRESTORE_ROOT ayarını kontrol et
-              (yukarıdaki “Yol öneki (root)” satırı).
+              Kilit AÇIKKEN kimliksiz üyelik okuma/yazma reddedilir; giriş yapmış üyeler
+              kendi satırlarını görmeye devam eder. Satır yazma kuralları (rol/durum/hak)
+              veritabanındaki bekçide uygulanır, arayüzde değil.
             </Text>
           </View>
           <AdminRow
@@ -761,7 +813,7 @@ export const AdminSettingsScreen: React.FC = () => {
               “Register app” (npm/Next.js adımlarını atla) → çıkan SDK config içindeki `apiKey`{'\n'}
               (Your apps boşsa anahtar da yoktur; tek yapman gereken bu kayıt.){'\n'}
               2) Console → Authentication → Sign-in method → **Email/Password → Enable**{'\n'}
-              3) Anahtarı geliştiriciye ilet → o `config/firebaseApp.ts` içine yazar ve commit’ler.
+              3) Anahtarı geliştiriciye ilet → o `config/supabaseApp.ts` içine yazar ve commit’ler.
               Panelden/uygulamadan hiçbir şey girmene gerek yok.{'\n'}
               3b) Kalıcı/override iki yol daha var (yalnız geliştirici için):
             </Text>
@@ -769,17 +821,18 @@ export const AdminSettingsScreen: React.FC = () => {
               selectable
               style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace', marginTop: 4 }}
             >
-              npm run setup:firestore -- {fsTarget.projectId} --root . --api-key &lt;ANAHTAR&gt;
+              npm run setup:supabase -- --url https://&lt;ref&gt;.supabase.co --anon-key &lt;anon&gt;
             </Text>
             <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace' }} selectable>
-              npm run deploy:rules
+              npm run sync:sql
             </Text>
             <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
-              4) “Test et” yeşil olmalı — anahtar depoda olduğu için sen hiçbir şey yapmıyorsun;
-              Metro’yu yalnız geliştirici `npx expo start --clear` ile yeniden başlatır.{'\n'}
-              5) Katı mod (kod değişikliği yok): Console'da `meta/membership_lockdown`
-              belgesi oluştur → kimliksiz üyelik okuma/yazma anında kapanır.
-              Geri almak = belgeyi silmek. Yukarıdaki “Üyelik kilidi” satırı durumu gösterir.
+              4) “Test et” yeşil olmalı — anahtar depoda olduğu için sen hiçbir şey
+              yapmıyorsun; Metro’yu yalnız geliştirici `npx expo start --clear` ile
+              yeniden başlatır.{'\n'}
+              5) Katı mod (kod değişikliği yok): Admin → Ayarlar → “Üyelik kilidi”.
+              Açıkken kimliksiz üyelik okuma/yazma veritabanında reddedilir; kapalıyken
+              serbest. Ayar Supabase’dedir, cihazda değil.
             </Text>
           </View>
         </AdminCard>
@@ -787,7 +840,7 @@ export const AdminSettingsScreen: React.FC = () => {
         {/* Eski projeden kopyala */}
         <AdminSectionTitle
           label="Eski projeden içeriği kopyala"
-          hint="Canlı Firestore’daki courses/{ders}/topics/{konu} ve daily_tips/main belgelerini fields bloğu dönüştürülmeden bu projeye kopyalar. Kaynak anonim okunur, hedef yazımı içerik penceresi açıkken çalışır — terminal/script gerekmez."
+          hint="Canlı Supabase’daki courses/{ders}/topics/{konu} ve daily_tips/main belgelerini fields bloğu dönüştürülmeden bu projeye kopyalar. Kaynak anonim okunur, hedef yazımı içerik penceresi açıkken çalışır — terminal/script gerekmez."
         />
         <AdminCard>
           <AdminField
@@ -892,7 +945,7 @@ export const AdminSettingsScreen: React.FC = () => {
 
         {/* Content bootstrap */}
         <AdminSectionTitle
-          label="Firestore klasörlerini oluştur (tohumlama)"
+          label="Supabase klasörlerini oluştur (tohumlama)"
           hint="courses/{ders}/topics/{konu} ve daily_tips/main yapılarını panel oluşturur; memberships ilk kayıtta kendiliğinden açılır. “Planı çıkar” her konu için içeriği okur (birkaç saniye sürebilir), yazım 6 eşzamanlı istekle yapılır."
         />
         <AdminCard>
@@ -936,7 +989,7 @@ export const AdminSettingsScreen: React.FC = () => {
                   ? seedProgress
                     ? `${seedProgress.done}/${seedProgress.total}`
                     : 'Yazılıyor…'
-                  : 'Firestore’a yaz'
+                  : 'Supabase’e yaz'
               }
               disabled={seedBusy !== null || !seedPlan}
               onPress={() => void writePlan()}
@@ -956,7 +1009,7 @@ export const AdminSettingsScreen: React.FC = () => {
           {seedResult ? (
             <Text style={{ fontSize: 11.5, color: seedResult.failed.length ? colors.danger : colors.success, marginTop: 4 }}>
               {seedResult.written} belge yazıldı
-              {seedResult.failed.length ? ` • ${seedResult.failed.length} hata` : ' • Collections Firestore’ta hazır'}
+              {seedResult.failed.length ? ` • ${seedResult.failed.length} hata` : ' • Collections Supabase’ta hazır'}
             </Text>
           ) : null}
           {seedPlan && seedPlan.notes.length ? (
@@ -987,7 +1040,7 @@ export const AdminSettingsScreen: React.FC = () => {
               Yazma penceresini kapat
             </Text>
             <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 4, lineHeight: 16 }}>
-              Console → Firestore Data → “Start collection” → koleksiyon kimliği{' '}
+              Console → Supabase Data → “Start collection” → koleksiyon kimliği{' '}
               <Text style={{ fontFamily: 'monospace' }}>meta</Text>, belge kimliği{' '}
               <Text style={{ fontFamily: 'monospace' }}>content_lock</Text>, alan{' '}
               <Text style={{ fontFamily: 'monospace' }}>note</Text> = “kilitli”. Bu belge varken

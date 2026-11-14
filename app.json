@@ -25,10 +25,10 @@
       "eas": {
         "projectId": "552f0665-e30d-4f11-9ea9-97bc22a22809"
       },
-      "firestore": {
-        "projectId": "kpssasistani-01",
-        "databaseId": "(default)",
-        "root": ""
+      "supabase": {
+        "url": "",
+        "anonKey": "",
+        "schema": "public"
       }
     },
     "updates": {

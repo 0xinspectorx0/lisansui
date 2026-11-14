@@ -346,7 +346,7 @@ export const AdminQuestionsScreen: React.FC = () => {
               : admin.cloudWrite?.busy
                 ? 'Yazılıyor…'
                 : override
-                  ? 'Firestore’a yazıldı'
+                  ? 'Supabase’e yazıldı'
                   : 'Canlı'
           }
           tone={admin.cloudWrite?.error ? 'danger' : override ? 'warning' : 'success'}
@@ -359,7 +359,7 @@ export const AdminQuestionsScreen: React.FC = () => {
         {admin.cloudWrite?.error ? (
           <AdminRow
             icon="cloud-upload-outline"
-            title="Son içerik yazması Firestore’a gidemedi"
+            title="Son içerik yazması Supabase’e gidemedi"
             subtitle={`${admin.cloudWrite?.error} — düzenleme bu ekranda duruyor, yazma izni düzelince “Yeniden dene” yeter.`}
             right={
               <AdminButton small tone="danger" label="Yeniden dene" onPress={() => void admin.retryCloudWrites?.()} />
@@ -1118,7 +1118,7 @@ export const AdminQuestionsScreen: React.FC = () => {
         visible={confirm?.type === 'restore'}
         title="Buluttan geri yükle"
         confirmLabel="Sıfırla"
-        message="Bu konudaki yerel soru listesi silinecek ve canlı Firestore içeriği geri gelecek."
+        message="Bu konudaki yerel soru listesi silinecek ve canlı Supabase içeriği geri gelecek."
         onCancel={() => setConfirm(null)}
         onConfirm={async () => {
           setConfirm(null);

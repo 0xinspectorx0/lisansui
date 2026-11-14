@@ -6,8 +6,8 @@
  * `firestore.rules → contentWriteOk` ikinci yazmayı reddeder ve panel
  * düzenlemesi buluta hiç düşmez. Bu modül RN/Expo'ya dokunmaz; hafiftir.
  */
-import { collectionPath } from './firebaseConfig';
-import { arr, fbMap, FbValue, int, str } from './firestoreApi';
+import { collectionPath } from './supabaseConfig';
+import { arr, fbMap, FbValue, int, str } from './cloudApi';
 
 const COURSES_COLLECTION_PATH = collectionPath('courses');
 

@@ -3,18 +3,18 @@
 # Çalıştır: npm run test:copy
 set -e
 cd "$(dirname "$0")/.."
-npx esbuild lib/contentCopy.ts --bundle --format=esm --platform=neutral \
-  --outfile=/tmp/copyBundle.mjs --log-level=warning \
-  --alias:react-native=./scripts/auth-shims/react-native.ts \
-  --alias:@react-native-async-storage/async-storage=./scripts/auth-shims/async-storage.ts \
-  --alias:expo-secure-store=./scripts/auth-shims/expo-secure-store.ts \
-  --alias:expo-constants=./scripts/auth-shims/expo-constants.ts \
-  --define:process.env.EXPO_PUBLIC_FIRESTORE_PROJECT='"DST"' \
-  --define:process.env.EXPO_PUBLIC_FIRESTORE_ROOT='"."' \
-  --define:process.env.EXPO_PUBLIC_FIRESTORE_DATABASE='""' \
-  --define:process.env.EXPO_PUBLIC_FIRESTORE_HOST='""' \
-  --define:process.env.EXPO_PUBLIC_FIREBASE_API_KEY='""' \
-  --define:process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN='""' \
-  --define:process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID='""' \
-  --define:process.env.EXPO_PUBLIC_FIREBASE_APP_ID='""'
+# Hedef proje = deponun kendi ref'i (testte sahte sunucu bu adresi dinliyor).
+bundle() {
+  npx esbuild "$1" --bundle --format=esm --platform=neutral \
+    --outfile="$2" --log-level=warning \
+    --alias:react-native=./scripts/auth-shims/react-native.ts \
+    --alias:@react-native-async-storage/async-storage=./scripts/auth-shims/async-storage.ts \
+    --alias:expo-secure-store=./scripts/auth-shims/expo-secure-store.ts \
+    --alias:expo-constants=./scripts/auth-shims/expo-constants.ts \
+    --define:process.env.EXPO_PUBLIC_SUPABASE_URL='"https://kpssdemo.supabase.co"' \
+    --define:process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY='"eyJTESTANONKEY.abcdef.0123456789"' \
+    --define:process.env.EXPO_PUBLIC_SUPABASE_SCHEMA='"public"'
+}
+bundle lib/contentCopy.ts /tmp/copyBundle.mjs
+bundle lib/authClient.ts /tmp/authBundle.mjs
 node scripts/copy-contract.test.mjs

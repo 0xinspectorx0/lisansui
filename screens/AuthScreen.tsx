@@ -80,7 +80,7 @@ export const AuthScreen: React.FC = () => {
           <View style={{ flex: 1 }}>
             <Text style={[styles.title, { color: colors.text }]}>Üyelik</Text>
             <Text style={[styles.sub, { color: colors.textSecondary }]}>
-              Kayıtlar Firestore’da tutulur ve cihazlar arası senkron çalışır
+              Kayıtlar Supabase’da tutulur ve cihazlar arası senkron çalışır
             </Text>
           </View>
         </View>
@@ -125,7 +125,7 @@ export const AuthScreen: React.FC = () => {
               placeholder="en az 6 karakter"
               hint={
                 mode === 'signup'
-                  ? 'Parola asla düz metin yazılmaz: cihazda PBKDF2-SHA256 ile doğrulayıcı + tuz üretilir, Firestore’a böyle kaydedilir.'
+                  ? 'Parola asla düz metin yazılmaz: cihazda PBKDF2-SHA256 ile doğrulayıcı + tuz üretilir, Supabase’e böyle kaydedilir.'
                   : undefined
               }
             />
@@ -196,7 +196,7 @@ export const AuthScreen: React.FC = () => {
             <Text style={[styles.quota, { color: colors.textMuted }]}>{quotaHint}</Text>
             {mode === 'signin' && membership.authMode ? (
               <Text style={[styles.quota, { color: colors.textMuted }]}>
-                Parolan Firebase Auth’ta saklanır; uygulamada yalnızca e-posta ve hakların tutulur.
+                Parolan Supabase Auth’ta saklanır; uygulamada yalnızca e-posta ve hakların tutulur.
               </Text>
             ) : null}
           </AdminCard>
@@ -221,7 +221,7 @@ export const AuthScreen: React.FC = () => {
           <View style={styles.footNote}>
             <Ionicons name="information-circle-outline" size={14} color={colors.textMuted} />
             <Text style={[styles.footText, { color: colors.textMuted }]}>
-              Üyelik doğrulaması doğrudan Firestore belgeleri üzerinden yapılır; Firebase Auth
+              Üyelik doğrulaması doğrudan Supabase belgeleri üzerinden yapılır; Supabase Auth
               hesabına ihtiyaç yoktur. VIP durumu da aynı belgede tutulur, yani yönetici panelinden
               verdiğin VIP anında bu cihazda geçerli olur.
             </Text>

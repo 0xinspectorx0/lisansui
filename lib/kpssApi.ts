@@ -1,5 +1,5 @@
 import { CourseId, Question, TopicMeta } from './types';
-import { contentBase } from './firebaseConfig';
+import { readDocument, listDocuments } from './cloudApi';
 import {
   FALLBACK_QUESTIONS,
   INITIAL_DAILY_TIPS,
@@ -13,16 +13,18 @@ import {
 } from './adminStore';
 
 /**
- * Content root is resolved by lib/firebaseConfig (env → app.json → defaults) so the
- * same bundle can point at a brand-new Firestore project without code edits.
+ * İçerik okumaları bulut geçidinden (lib/cloudApi.ts → Supabase RPC) yapılır;
+ * hedef tek yerden çözülür (lib/supabaseConfig.ts), böylece aynı paket başka bir
+ * Supabase projesine yalnız config ile taşınır.
  */
-const FIRESTORE_PUBLIC_BASE = contentBase();
+const contentDocPath = (courseId: CourseId, topicDocId: string) =>
+  `courses/${courseId}/topics/${encodeURIComponent(topicDocId)}`;
 
 // Fast in-memory session caches
 const topicQuestionsCache = new Map<string, Question[]>();
 const catalogCache = new Map<CourseId, TopicMeta[]>();
 
-function parseFirestoreQuestions(
+function parseCloudQuestions(
   rawValues: any[],
   courseId: CourseId,
   topicDocId: string,
@@ -88,7 +90,7 @@ export function clearKpssCaches(): void {
 }
 
 /**
- * Fetches questions for a single topic document from kpssasistani.com live Firestore (~100ms),
+ * Fetches questions for a single topic document from kpssasistani.com live Supabase (~100ms),
  * caching in memory and falling back gracefully to bundled authentic questions if offline.
  */
 export async function fetchTopicQuestions(
@@ -109,16 +111,12 @@ export async function fetchTopicQuestions(
   }
 
   try {
-    const url = `${FIRESTORE_PUBLIC_BASE}/courses/${courseId}/topics/${encodeURIComponent(
-      topicDocId
-    )}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const doc = await res.json();
-    const fields = doc?.fields || {};
-    const resolvedName = topicName || fields.name?.stringValue || topicDocId;
-    const rawValues = fields.questions?.arrayValue?.values || [];
-    const questions = parseFirestoreQuestions(
+    const read = await readDocument(contentDocPath(courseId, topicDocId));
+    if (!read.ok) throw new Error(read.error);
+    const fields = read.data || {};
+    const resolvedName = topicName || (fields.name as any)?.stringValue || topicDocId;
+    const rawValues = ((fields.questions as any)?.arrayValue?.values || []) as any[];
+    const questions = parseCloudQuestions(
       rawValues,
       courseId,
       topicDocId,
@@ -147,11 +145,9 @@ export async function fetchTopicQuestions(
  */
 export async function refreshCourseTopics(courseId: CourseId): Promise<TopicMeta[]> {
   try {
-    const url = `${FIRESTORE_PUBLIC_BASE}/courses/${courseId}/topics?pageSize=100`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const docs = json?.documents || [];
+    const listed = await listDocuments(`courses/${courseId}/topics`, { pageSize: 100 });
+    if (!listed.ok) throw new Error(listed.error);
+    const docs = listed.data;
     const topics: TopicMeta[] = docs.map((d: any) => {
       const docId = String(d.name || '').split('/').pop() || '';
       const f = d.fields || {};
@@ -159,7 +155,7 @@ export async function refreshCourseTopics(courseId: CourseId): Promise<TopicMeta
       const name = f.name?.stringValue || docId;
       const rawValues = f.questions?.arrayValue?.values || [];
       if (rawValues.length > 0) {
-        const parsed = parseFirestoreQuestions(rawValues, courseId, docId, name);
+        const parsed = parseCloudQuestions(rawValues, courseId, docId, name);
         if (parsed.length > 0) {
           topicQuestionsCache.set(`${courseId}:${docId}`, parsed);
         }
@@ -261,7 +257,7 @@ export async function buildGeneralMixedExam(
 }
 
 /**
- * Syncs daily Hap Bilgiler from kpssasistani.com live Firestore
+ * Syncs daily Hap Bilgiler from kpssasistani.com live Supabase
  */
 /**
  * Returns the RAW (cloud/seed) tip list. Admin overrides are applied by the
@@ -269,10 +265,9 @@ export async function buildGeneralMixedExam(
  */
 export async function fetchLiveDailyTips(): Promise<string[]> {
   try {
-    const res = await fetch(`${FIRESTORE_PUBLIC_BASE}/daily_tips/main`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const values = json?.fields?.list?.arrayValue?.values || [];
+    const read = await readDocument('daily_tips/main');
+    if (!read.ok) throw new Error(read.error);
+    const values = ((read.data as any)?.list?.arrayValue?.values || []) as any[];
     const tips = values
       .map((v: any) => String(v?.stringValue || '').trim())
       .filter((s: string) => s.length > 3);

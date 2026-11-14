@@ -1,7 +1,7 @@
 /**
  * Membership provider — accounts, VIP entitlements and the free-quota gate.
  *
- * All membership state is stored in Firestore (`memberships/{memberId}`); this
+ * All membership state is stored in Supabase (`memberships/{memberId}`); this
  * provider is the only place that reads/writes it, keeps a local session, and
  * answers "may this device start another test?".
  */
@@ -32,9 +32,8 @@ import {
   remainingTests,
   validateMembership,
 } from './membership';
-import { AUTH_PASSWORD_BUNDLE, hashPassword, isFirebaseAuthBundle, verifyPassword } from './crypto';
-import { diagnoseMembershipAccess } from './accessDiag';
-import { consumeApiKeyParamNotice, consumeTokenRefreshNotice } from './firestoreApi';
+import { AUTH_PASSWORD_BUNDLE, hashPassword, isCloudAuthBundle, verifyPassword } from './crypto';
+import { consumeApiKeyParamNotice, consumeTokenRefreshNotice } from './cloudApi';
 import * as auth from './authClient';
 import {
   CloudOutcome,
@@ -45,12 +44,32 @@ import {
   patchMemberDoc,
   upsertMemberDoc,
   writeMembershipSelf,
-} from './firestoreApi';
+} from './cloudApi';
 import { setTestCompletionListener, useApp } from './AppContext';
 import { useAdmin } from './AdminContext';
+import { bindMember, resetUserDataStatus } from './userDataSync';
 
 const SESSION_KEY = '@kpss_session_member_v1';
 const MEMBER_CACHE_KEY = '@kpss_member_cache_v1';
+
+/**
+ * Cihaz önbelleği YALNIZ kimlik ipucu taşır.
+ *
+ * Hak/sayaç alanları (vip, vipPlan, vipExpiresAt, testsCompleted, courseUsage,
+ * status) kasıtlı olarak yazılmaz: offline önbelleği düzenleyerek VIP
+ * çoğaltılamaz, bayat değer de ekranda hak gibi görünmez. Bulut erişilemezse
+ * kullanıcı yalnız "giriş yapılmış" bilgisini görür, hak bilgisi için satır
+ * beklenir. Doğru/tek kaynak Supabase'deki `members` satırıdır.
+ */
+function memberCacheStub(next: MemberDoc | null): string {
+  if (!next) return '';
+  return JSON.stringify({
+    id: next.id,
+    email: next.email,
+    displayName: next.displayName,
+    authUid: next.authUid || '',
+  });
+}
 
 export type CloudStatus = 'unknown' | 'online' | 'offline' | 'denied';
 
@@ -63,9 +82,9 @@ interface MembershipContextValue {
   cloudStatus: CloudStatus;
   cloudMessage: string | null;
 
-  /** true ise kimlik doğrulama Firebase Auth üzerinden yapılır (anahtar depoda/.env’de tanımlı). */
+  /** true ise kimlik doğrulama Supabase Auth üzerinden yapılır (anahtar depoda/.env’de tanımlı). */
   authMode: boolean;
-  /** Firebase Auth açıkken “şifremi unuttum” e-postası. */
+  /** Supabase Auth açıkken “şifremi unuttum” e-postası. */
   sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
 
   quota: QuotaState;
@@ -107,6 +126,8 @@ interface MembershipContextValue {
   adminUpsertMember: (member: MemberDoc) => Promise<CloudOutcome<MemberDoc>>;
   adminSetVip: (memberId: string, plan: VipPlanId) => Promise<CloudOutcome<true>>;
   adminSetStatus: (memberId: string, status: MemberDoc['status']) => Promise<CloudOutcome<true>>;
+  /** Rol değişimi de buluta gider (RLS: yalnız yönetici PATCH'leyebilir). */
+  adminSetRole: (memberId: string, role: MemberDoc['role']) => Promise<CloudOutcome<true>>;
   adminDeleteMember: (memberId: string) => Promise<CloudOutcome<true>>;
   membersVersion: number;
 }
@@ -175,8 +196,15 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setMember(next);
     // Device profile identity drives which result rows count against the quota.
     setLocalMemberId(next ? next.id : GUEST_PROFILE);
-    if (next) AsyncStorage.setItem(MEMBER_CACHE_KEY, JSON.stringify(next)).catch(() => {});
+    if (next) AsyncStorage.setItem(MEMBER_CACHE_KEY, memberCacheStub(next)).catch(() => {});
     else AsyncStorage.removeItem(MEMBER_CACHE_KEY).catch(() => {});
+    // Kullanıcı verisi eşleyicisi oturuma bağlanır: satır yazılırken
+    // `userId = auth.uid` politikası bu kimliği kullanır. Çıkışta bağ kopar.
+    if (next) bindMember({ email: next.email || next.id, userId: next.authUid || '' });
+    else {
+      bindMember(null);
+      resetUserDataStatus();
+    }
   }, []);
 
   const reportRef = useRef<MembershipContextValue['reportTestCompleted'] | null>(null);
@@ -194,9 +222,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setCloudStatus('online');
       setCloudMessage(
         healedKey
-          ? 'Firestore istekleri artık web API anahtarı parametresiyle gönderiliyor — anahtarsız istekler geçit tarafından reddediliyormuş, kendiliğinden düzeltildi.'
+          ? 'Supabase istekleri artık web API anahtarı parametresiyle gönderiliyor — anahtarsız istekler geçit tarafından reddediliyormuş, kendiliğinden düzeltildi.'
           : healedToken
-            ? 'Cihazda kayıtlı eski Firebase anahtarı başka bir projeye aitmiş; kaldırıldı, depodaki anahtar kullanılıyor.'
+            ? 'Cihazda kayıtlı eski Supabase anahtarı başka bir projeye aitmiş; kaldırıldı, depodaki anahtar kullanılıyor.'
             : healedRefresh
               ? 'Oturum tokenın bayattı — yenilenip aynı yazma gönderildi, işlem baştan denenmedi.'
               : null
@@ -204,7 +232,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return;
     }
     setCloudStatus(res.reason === 'denied' ? 'denied' : 'offline');
-    setCloudMessage(res.error || 'Firestore işlemi başarısız');
+    setCloudMessage(res.error || 'Supabase işlemi başarısız');
   }, []);
 
   // Keep the admin panel's device row and the cloud document in step with real usage.
@@ -223,10 +251,10 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     (async () => {
       try {
         // Depoya gömülü config (+ eski kurulumlarda cihaz anahtarı) ve kalıcı oturum:
-        // ilk Firestore isteğinin Authorization başlığıyla gitmesi için önce yükle.
+        // ilk Supabase isteğinin Authorization başlığıyla gitmesi için önce yükle.
         await auth.ensureAuthConfigLoaded();
         await auth.currentIdToken().catch(() => null);
-        // Cihazda kalmış eski anahtar BAŞKA projeden token veriyorsa tüm Firestore
+        // Cihazda kalmış eski anahtar BAŞKA projeden token veriyorsa tüm Supabase
         // istekleri reddedilir. Fark edildiği anda temizlenir — kullanıcıdan bir şey
         // istenmez, sonraki açılış/istek depodaki doğru config ile gider.
         const healed = await auth.healForeignAuthProject().catch(() => ({ healed: false as const }));
@@ -235,7 +263,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           applyMember(null);
           setCloudStatus('online');
           setCloudMessage(
-            'Cihazda kayıtlı kimlik başka bir Firebase projesine aitti; temizlendi. Yeniden giriş yapman yeterli.'
+            'Cihazda kayıtlı kimlik başka bir Supabase projesine aitti; temizlendi. Yeniden giriş yapman yeterli.'
           );
         }
         const cached = await AsyncStorage.getItem(MEMBER_CACHE_KEY);
@@ -247,7 +275,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (id) {
           if (cached) {
             try {
-              applyMember(JSON.parse(cached) as MemberDoc);
+              // Stub'tan doldur: kimlik görünür, haklar buluttan gelince eklenir.
+              const stub = JSON.parse(cached) as Partial<MemberDoc>;
+              if (stub && stub.id) applyMember({ ...emptyMember(String(stub.id)), ...stub } as MemberDoc);
             } catch {
               /* ignore malformed cache */
             }
@@ -329,18 +359,17 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
    * (Boş bir “kural engelledi” uyarısı yerine ne yapacağını söyler.)
    */
   /**
-   * Reddin nedenini ölçer — ama artık kullanıcıya bir şey YAPTIRMAZ. Belge
-   * bulut kuyruğunda bekletildiği ve yazma kendini tekrar denediği için mesaj
-   * yalnızca olanı söyler: ne oldu, kim düzeltince ne olacak.
+   * Reddedilen bulut yazımının TEK cümlesi. Neden gelen yanıttan alınır — ayrı
+   * bir “teşhis” turu YOK (fazladan istek, okunacak rapor, kopyalanacak metne
+   * gerek yok). Yazma anlıktır ve cihazda kopya bekletilmediği için mesaj yalnız
+   * olanı söyler: ne oldu, kim neyi düzeltince tekrar denenebilir.
    */
-  const membershipDeniedMessage = useCallback(async (email?: string) => {
-    try {
-      const diag = await diagnoseMembershipAccess(email);
-      if (diag.cause === 'ok') return 'Yazma şu an serbest görünüyor — işlemi bir kez daha dene.';
-      return `${diag.headline} Belgen bu cihazda bekletiliyor; engel kalktığı anda uygulama yazmayı kendiliğinden yeniden deneyecek.`;
-    } catch {
-      return 'Üyelik yazması reddedildi; belgen bu cihazda bekletiliyor ve yazma kendini tekrar deneyecek.';
-    }
+  const membershipDeniedMessage = useCallback((detail?: string) => {
+    const why = String(detail || '')
+      .replace(/^Supabase HTTP \d+:\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `Buluta yazılamadı${why ? `: ${why.slice(0, 180)}` : ''}. Üyelik açılmadı — cihazda kopya bekletilmiyor; engel kalkınca “Üye ol”a tekrar bas.`;
   }, []);
 
 
@@ -371,22 +400,29 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       try {
         let authUid = '';
         if (authMode) {
-          // Kimlik Firebase Auth'ta: önce hesabı aç, sonra üyelik belgesini yaz.
-          const account = await auth.signUp(emailKey, input.password);
+          // Kimlik Supabase Auth'ta: önce hesabı aç, sonra üyelik belgesini yaz.
+          let account = await auth.signUp(emailKey, input.password);
+          if (!account.ok && /kayıtlı bir hesap var|already registered|already been registered/i.test(account.error || '')) {
+            // Önceki deneme yarım kalmış olabilir (Auth hesabı açıldı, satır
+            // yazılamadı). Şifre bilindiği için hesabı silmek yerine GİRİŞ yapılır
+            // ve kayıt kaldığı yerden tamamlanır — kullanıcıya iş çıkmaz.
+            account = await auth.signIn(emailKey, input.password);
+            if (account.ok) setCloudMessage('Hesabın zaten açıktı; giriş yapıldı ve üyelik tamamlanıyor.');
+          }
           if (!account.ok) {
             setError(account.error || 'Kayıt başarısız.');
             return { ok: false, reason: 'auth' };
           }
           authUid = account.session?.uid || '';
-          // Açılan hesap Firestore hedefinin projesinden mi? Değilse belge yazımı
+          // Açılan hesap Supabase hedefinin projesinden mi? Değilse belge yazımı
           // 401/403 alır; hesabı geri al + cihazdaki eski anahtarı sil.
           if (await auth.isForeignSessionToken()) {
             await auth.deleteAccount().catch(() => undefined);
             const healed = await auth.healForeignAuthProject().catch(() => ({ healed: false }));
             setError(
               healed.healed
-                ? 'Kayıt geri alındı: cihazda kayıtlı eski Firebase anahtarı başka bir projeye aitmiş, o kayıt silindi. Şimdi tekrar “Üye ol” diyebilirsin.'
-                : 'Kayıt geri alındı: API anahtarı başka bir Firebase projesine ait. Geliştirici `config/firebaseApp.ts` içindeki anahtarı hedef projeyle eşleştirmeli.'
+                ? 'Kayıt geri alındı: cihazda kayıtlı eski Supabase anahtarı başka bir projeye aitmiş, o kayıt silindi. Şimdi tekrar “Üye ol” diyebilirsin.'
+                : 'Kayıt geri alındı: oturum başka bir Supabase projesine ait. Geliştirici işi — `config/supabaseApp.ts` (yoksa .env.local) ve app.json → expo.extra.supabase.url aynı projeyi göstermeli.'
             );
             return { ok: false, reason: 'auth' };
           }
@@ -403,7 +439,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             return { ok: false, reason: 'lookup' };
           }
           if (!existing.ok && existing.reason === 'offline') {
-            setError('Firestore’a ulaşılamadı. İnternet bağlantınla üye olman gerekiyor.');
+            setError('Supabase’e ulaşılamadı. İnternet bağlantınla üye olman gerekiyor.');
             noteCloud(existing);
             return { ok: false, reason: 'offline' };
           }
@@ -434,13 +470,14 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         // create reddedilirse kuralın kabul ettiği alanlarla kısmi yazım.
         const created = await writeMembershipSelf(draft);
         if (!created.ok) {
-          // Üyelik VERİSİ cihazda tutulmaz: yazma olmadan hesap da yarım bırakılmaz.
-          // Firebase hesabı geri alınır ki tekrar deneme `EMAIL_EXISTS`e dönmesin.
-          if (authMode) await auth.deleteAccount();
+          // Üyelik VERİSİ cihazda tutulmaz: satır yazılamadıysa kayıt YOKTUR.
+          // Supabase Auth hesabı istemciden silinemez (service_role gerekir);
+          // oturum kapatılır, tekrar deneme aynı hesapla giriş üzerinden tamamlanır.
+          if (authMode) await auth.deleteAccount().catch(() => undefined);
           noteCloud(created);
           setError(
             created.reason === 'denied'
-              ? `${await membershipDeniedMessage(emailKey)} Kayıt açılmadı — cihazda da bir şey bırakılmadı.`
+              ? membershipDeniedMessage(created.error)
               : created.error
           );
           return { ok: false, reason: 'write' };
@@ -448,7 +485,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (created.adopted || created.degraded) {
           // Belge zaten varmış: yazma kabul edilen alanlarla güncellendi, hesap bağlandı.
           setCloudMessage(
-            'Bu e-postada üyelik belgesi zaten vardı; hesabın Firebase Auth’a bağlandı ve belge güncellendi.'
+            'Bu e-postada üyelik belgesi zaten vardı; hesabın Supabase Auth’a bağlandı ve belge güncellendi.'
           );
         }
         applyMember(created.data);
@@ -456,7 +493,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setCloudStatus('online');
         setCloudMessage(
           created.data?.status === 'pending'
-            ? 'Üyeliğin oluşturuldu ve Firestore’a yazıldı; durum: ONAY BEKLİYOR. Yönetici onaylayınca VIP/kota hakların açılır.'
+            ? 'Üyeliğin oluşturuldu ve Supabase’e yazıldı; durum: ONAY BEKLİYOR. Yönetici onaylayınca VIP/kota hakların açılır.'
             : null
         );
         setMembersVersion(v => v + 1);
@@ -484,15 +521,15 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (authMode) {
           const account = await auth.signIn(emailKey, password);
           if (!account.ok) {
-            // Firebase anahtarı sonradan eklendiyse eski üyelerin Firebase hesabı
+            // Supabase anahtarı sonradan eklendiyse eski üyelerin Supabase hesabı
             // yoktur (belgede yerel PBKDF2 hash’i durur). Parolayı yerel hash ile
             // doğrulayıp üyeliği içeri alıyoruz — kimse dışarıda kalmıyor.
             const legacy = account.code === 'EMAIL_NOT_FOUND' ? await fetchMemberByEmail(emailKey) : null;
             const legacyDoc = legacy?.ok ? legacy.data : null;
             const legacyOk =
-              !!legacyDoc && !isFirebaseAuthBundle(legacyDoc.password) && verifyPassword(password, legacyDoc.password);
+              !!legacyDoc && !isCloudAuthBundle(legacyDoc.password) && verifyPassword(password, legacyDoc.password);
             if (!legacyOk) {
-              setError(legacyDoc && !isFirebaseAuthBundle(legacyDoc.password) ? 'Mevcut parola hatalı.' : account.error || 'Giriş başarısız.');
+              setError(legacyDoc && !isCloudAuthBundle(legacyDoc.password) ? 'Mevcut parola hatalı.' : account.error || 'Giriş başarısız.');
               return { ok: false, reason: 'auth' };
             }
             authMode = false;
@@ -510,9 +547,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!found.ok && !missingDoc) {
           noteCloud(found);
           if (found.reason === 'offline')
-            setError('Firestore’a ulaşılamadı — üyelik verisi cihazda tutulmadığı için çevrimdışı giriş yok. Bağlanınca tekrar dene.');
+            setError('Supabase’e ulaşılamadı — üyelik verisi cihazda tutulmadığı için çevrimdışı giriş yok. Bağlanınca tekrar dene.');
           else if (found.reason === 'denied')
-            setError(await membershipDeniedMessage(emailKey));
+            setError(membershipDeniedMessage(found.error));
           else setError(found.error);
           return { ok: false, reason: found.reason };
         }
@@ -522,7 +559,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             setError('Bu e-posta ile kayıtlı üye bulunamadı.');
             return { ok: false, reason: 'notfound' };
           }
-          // Firebase hesabı var, üyelik belgesi yok (ör. eski veri/new project) → ilk girişte oluştur.
+          // Supabase hesabı var, üyelik belgesi yok (ör. eski veri/new project) → ilk girişte oluştur.
           const nowIso = new Date().toISOString();
           const draft: MemberDoc = {
             ...emptyMember(emailKey),
@@ -534,7 +571,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             status: membershipCfg.requireApproval ? 'pending' : 'active',
             createdAt: nowIso,
             lastLoginAt: nowIso,
-            note: 'Firebase Auth hesabıyla ilk girişte oluşturuldu.',
+            note: 'Supabase Auth hesabıyla ilk girişte oluşturuldu.',
           };
           const created = await writeMembershipSelf(draft);
           if (!created.ok) {
@@ -550,9 +587,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           return { ok: true };
         }
         if (!authMode) {
-          if (isFirebaseAuthBundle(doc.password)) {
+          if (isCloudAuthBundle(doc.password)) {
             setError(
-              'Bu hesap Firebase Auth ile oluşturulmuş. Anahtar `config/firebaseApp.ts` içine yazılınca (geliştirici işi) giriş kendiliğinden çalışır — senden bir şey girmen istenmiyor.'
+              'Bu hesap Supabase Auth ile oluşturulmuş. Anahtar `config/supabaseApp.ts` içine yazılınca (geliştirici işi) giriş kendiliğinden çalışır — senden bir şey girmen istenmiyor.'
             );
             return { ok: false, reason: 'authmode' };
           }
@@ -602,7 +639,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const sendPasswordReset = useCallback<MembershipContextValue['sendPasswordReset']>(
     async email => {
       if (!auth.isAuthConfigured())
-        return { ok: false, error: 'Parola sıfırlama için Firebase Auth gerekiyor (anahtar config/firebaseApp.ts içinde tanımlı olmalı).' };
+        return { ok: false, error: 'Parola sıfırlama için Supabase Auth gerekiyor (anahtar config/supabaseApp.ts içinde tanımlı olmalı).' };
       const res = await auth.sendPasswordResetEmail(normalizeEmail(email));
       if (!res.ok) {
         setError(res.error || 'Sıfırlama e-postası gönderilemedi.');
@@ -674,18 +711,18 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       try {
         let claimUid = '';
         if (authMode) {
-          // Mevcut parolayı Firebase ile doğrula: taze oturum, REQUIRES_RECENT_LOGIN olmaz.
+          // Mevcut parolayı Supabase ile doğrula: taze oturum, REQUIRES_RECENT_LOGIN olmaz.
           const check = await auth.signIn(current.email, current0);
-          if (!check.ok && check.code === 'EMAIL_NOT_FOUND' && !isFirebaseAuthBundle(current.password)) {
-            // Eski (yerel) hesap: parolayı belgedeki hash ile doğrula, Firebase
-            // hesabını YENİ parolayla aç ve belgeyi Firebase’e taşı.
+          if (!check.ok && check.code === 'EMAIL_NOT_FOUND' && !isCloudAuthBundle(current.password)) {
+            // Eski (yerel) hesap: parolayı belgedeki hash ile doğrula, Supabase
+            // hesabını YENİ parolayla aç ve belgeyi Supabase’e taşı.
             if (!verifyPassword(current0, current.password)) {
               setError('Mevcut parola hatalı.');
               return { ok: false, reason: 'password' };
             }
             const opened = await auth.signUp(current.email, next0);
             if (!opened.ok) {
-              setError(opened.error || 'Firebase hesabı açılamadı.');
+              setError(opened.error || 'Supabase hesabı açılamadı.');
               return { ok: false, reason: 'auth' };
             }
             claimUid = opened.session?.uid || '';
@@ -695,7 +732,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           } else {
             const res = await auth.updatePassword(next0);
             if (!res.ok) {
-              setError(res.error || 'Parola Firebase Auth’ta güncellenemedi.');
+              setError(res.error || 'Parola Supabase Auth’ta güncellenemedi.');
               return { ok: false, reason: 'auth' };
             }
           }
@@ -710,11 +747,11 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         );
         const merged: MemberDoc = { ...current, password: sec, ...(claimUid ? { authUid: claimUid } : {}) };
         if (!res.ok) {
-          // Parola yazması yarım bırakılmaz: belge Firestore’da kalmaya devam eder,
+          // Parola yazması yarım bırakılmaz: belge Supabase’da kalmaya devam eder,
           // cihazda “yarı güncel” bir kopya oluşturulmaz — kullanıcı aynı işlemi
           // tekrarladığında yine tek yerden (buluttan) okur.
           noteCloud(res);
-          setError(res.reason === 'denied' ? await membershipDeniedMessage(current.email) : res.error);
+          setError(res.reason === 'denied' ? membershipDeniedMessage(res.error) : res.error);
           return { ok: false, reason: res.reason };
         }
         applyMember(merged);
@@ -742,7 +779,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setError(res.error);
           return { ok: false, reason: res.reason };
         }
-        // Firebase Auth açıksa hesabı oradan da sil (e-posta tekrar kayıtta kullanılabilir).
+        // Supabase Auth açıksa hesabı oradan da sil (e-posta tekrar kayıtta kullanılabilir).
         if (auth.isAuthConfigured()) await auth.deleteAccount();
         await signOut();
         setMembersVersion(v => v + 1);
@@ -839,7 +876,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         },
       };
       applyMember(next);
-      // SAYAÇLAR BEKLETİLMEZ: test biter bitmez Firestore'a yazılır (debounce yok).
+      // SAYAÇLAR BEKLETİLMEZ: test biter bitmez Supabase'a yazılır (debounce yok).
       // Kasa yalnızca buluttaki belgeyi gösterir; cihazdaki sayaç kaynak değildir.
       const payload = {
         testsCompleted: next.testsCompleted,
@@ -996,6 +1033,19 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     [admin, noteCloud, signOut]
   );
 
+  const adminSetRole = useCallback<MembershipContextValue['adminSetRole']>(
+    async (memberId, role) => {
+      const res = await patchMemberDoc(memberId, { role } as Partial<MemberDoc> as MemberDoc);
+      noteCloud(res);
+      if (res.ok) {
+        setMembersVersion(v => v + 1);
+        admin.syncCloudMemberPatch(memberId, { role: role === 'user' ? 'user' : 'admin' });
+      }
+      return res.ok ? { ok: true, data: true } : res;
+    },
+    [admin, noteCloud]
+  );
+
   const adminDeleteMember = useCallback<MembershipContextValue['adminDeleteMember']>(
     async memberId => {
       const res = await deleteMemberDoc(memberId);
@@ -1043,6 +1093,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       adminUpsertMember,
       adminSetVip,
       adminSetStatus,
+      adminSetRole,
       adminDeleteMember,
       membersVersion,
     }),
@@ -1077,6 +1128,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       adminUpsertMember,
       adminSetVip,
       adminSetStatus,
+      adminSetRole,
       adminDeleteMember,
       membersVersion,
     ]

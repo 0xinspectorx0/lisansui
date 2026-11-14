@@ -104,7 +104,7 @@ export const MembershipPaywallScreen: React.FC = () => {
             <AdminSectionTitle label="Hak durumun" hint="Yerel deneme kayıtların + buluta yansıtan sayaçların birlikte sayılır" />
             <QuotaList rows={rows} />
 
-            <AdminSectionTitle label="Planlar" hint="Onay sonrası VIP, Firestore üyelik belgene yazılır" />
+            <AdminSectionTitle label="Planlar" hint="Onay sonrası VIP, Supabase üyelik belgene yazılır" />
             <View style={{ gap: 8 }}>
               {PLANS.map(plan => (
                 <AdminCard key={plan.id} pad={12}>

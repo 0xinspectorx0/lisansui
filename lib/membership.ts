@@ -1,7 +1,7 @@
 /**
  * Membership domain model + quota rules.
  *
- * A member is a single Firestore document; the app, the admin panel and every
+ * A member is a single Supabase document; the app, the admin panel and every
  * other device read the same document, which is what makes VIP state and the
  * "1 free test per course" limit enforceable across installs.
  */
@@ -18,7 +18,7 @@ export interface MemberDoc {
   emailNormalized: string;
   displayName: string;
   password: { verifier: string; salt: string; iterations: number; algo: string };
-  /** Firebase Auth uid'si (depoda config/firebaseApp.ts içinde anahtar varsa doldurulur). */
+  /** Supabase Auth uid'si (depoda config/supabaseApp.ts içinde anahtar varsa doldurulur). */
   authUid?: string;
   role: MemberRole;
   status: MembershipStatus;
@@ -104,7 +104,10 @@ export function expiryForPlan(plan: VipPlanId): string {
 
 export function daysLeft(iso: string | undefined | null): number | null {
   if (!iso) return null;
-  const t = new Date(`${iso}T23:59:59`).getTime();
+  // `vipExpiresAt` genelde yalnız tarih (YYYY-MM-DD) taşır; tam zaman damgası
+  // gelirse de (sunucu/panel yazması) sürenin DOLMUŞ sayılmaması hatasına düşmeyelim.
+  const date = String(iso).trim().slice(0, 10);
+  const t = new Date(`${date}T23:59:59`).getTime();
   if (Number.isNaN(t)) return null;
   return Math.ceil((t - Date.now()) / 86400000);
 }
@@ -188,7 +191,7 @@ export function canStartTest(state: QuotaState, used: number): boolean {
   return remainingTests(state, used) > 0;
 }
 
-/* ------------------------------------------------- Firestore field codecs */
+/* ------------------------------------------------- Supabase field codecs */
 
 type FbValue = any;
 

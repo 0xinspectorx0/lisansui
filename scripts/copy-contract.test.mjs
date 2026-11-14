@@ -1,166 +1,150 @@
 /**
- * lib/contentCopy.ts sözleşme testi — sahte Firestore REST'i (ağ gerekmez).
+ * lib/contentCopy.ts sözleşme testi — ağ gerekmez.
+ *
+ * Kopyalama artık İKİ Supabase projesi arasında yapılır: kaynak yalnız okunan
+ * bir projedir (panelde adres yazılır), hedef `config/supabaseApp.ts`'teki
+ * projedir. Bu test iki sahte proje kurar ve akışı geçit sözleşmesi üzerinden
+ * ölçer: plan → yazma → doğrulama → "var olanı atla" → red hâli.
+ *
  * Çalıştır: npm run test:copy
  */
-const s = id => ({ stringValue: id });
-const n = v => ({ integerValue: String(v) });
-const listOf = arr => ({ arrayValue: { values: arr.map(o => ({ mapValue: { fields: o } })) } });
+import { createFakeSupabase } from './db-contract-fake.mjs';
 
-/** Map<path "root'a göre tam yol", fields> biçiminde kaynak/hedef belgeleri tutar. */
-function makeFake({ src, dst, opts = {} }) {
-  const state = { srcWrites: 0, dstWrites: [], active: 0, maxActive: 0, reads: 0, failPaths: new Set(opts.failReadOn || []) };
-  const parentOf = p => p.split('/').slice(0, -1).join('/');
-
-  const listFrom = (map, collPath, query) => {
-    const keys = [...map.keys()].filter(k => parentOf(k) === collPath).sort();
-    if (!keys.length) return null; // 404
-    const size = Number(query.get('pageSize')) || 30;
-    const page = Number(query.get('pageToken') || '0');
-    const slice = keys.slice(page * size, page * size + size);
-    const body = { documents: slice.map(name => ({ name: `projects/P/databases/D/documents/${name}`, fields: map.get(name) })) };
-    if ((page + 1) * size < keys.length) body.nextPageToken = String(page + 1);
-    return body;
-  };
-
-  const handler = async (url, init) => {
-    const u = new URL(url);
-    const marker = '/documents/';
-    const i = u.pathname.indexOf(marker);
-    const rel = i >= 0 ? decodeURIComponent(u.pathname.slice(i + marker.length)) : '';
-    const isSrc = url.includes('/projects/SRC/');
-    const map = isSrc ? src : dst;
-    const method = (init?.method || 'GET').toUpperCase();
-    state.active++;
-    state.maxActive = Math.max(state.maxActive, state.active);
-    await new Promise(r => setTimeout(r, 1));
-    state.active--;
-    const reply = (status, body) => ({
-      ok: status >= 200 && status < 300,
-      status,
-      text: async () => (body == null ? '' : JSON.stringify(body)),
-      json: async () => body,
-    });
-    if (method === 'GET') {
-      state.reads++;
-      if (state.failPaths.has(rel)) return reply(500, { error: { message: 'simüle kaynak hatası' } });
-      if (u.searchParams.has('pageSize')) {
-        const body = listFrom(map, rel, u.searchParams);
-        return body ? reply(200, body) : reply(404, { error: { message: 'NOT_FOUND' } });
-      }
-      return map.has(rel) ? reply(200, { name: rel, fields: map.get(rel) }) : reply(404, { error: { message: 'NOT_FOUND' } });
-    }
-    if (method === 'PUT') {
-      const body = JSON.parse(init.body);
-      if (isSrc) state.srcWrites++;
-      else state.dstWrites.push({ path: rel, fields: body.fields });
-      map.set(rel, body.fields || {});
-      return reply(200, { name: rel, fields: body.fields || {} });
-    }
-    return reply(400, { error: { message: `UNSUPPORTED ${method}` } });
-  };
-  return { fetch: handler, state };
-};
-
-let pass = 0;
-let fail = 0;
+const SRC_URL = 'https://src.supabase.co';
 const ok = (cond, label, extra = '') => {
   if (cond) { pass++; console.log(`  \x1b[32mPASS\x1b[0m ${label}`); }
   else { fail++; console.log(`  \x1b[31mFAIL\x1b[0m ${label} ${extra}`); }
 };
+let pass = 0;
+let fail = 0;
+const head = t => console.log(`\x1b[1m${t}\x1b[0m`);
+
+/* ---------------------------------------------------------- iki sahte proje */
+
+const srcFake = createFakeSupabase();
+const dstFake = createFakeSupabase();
+
+// Kaynak içerik (devre dışı bırakılmış eski proje): 2 ders, 3 konu, 12 soru, 3 hap bilgi.
+srcFake.db.courses.set('tarih', { id: 'tarih', title: 'Tarih', order: 1, schemaVersion: 1 });
+srcFake.db.courses.set('cografya', { id: 'cografya', title: 'Coğrafya', order: 2, schemaVersion: 1 });
+srcFake.db.topics.set('tarih/t1', {
+  meta: { id: 't1', name: 'İlk konu', questionCount: 3, questions: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] },
+  questions: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+});
+srcFake.db.topics.set('tarih/t2', {
+  meta: { id: 't2', name: 'İkinci konu', questionCount: 7, questions: [{ id: 'd' }, { id: 'e' }, { id: 'f' }, { id: 'g' }, { id: 'h' }, { id: 'ı' }, { id: 'i' }] },
+  questions: [{ id: 'd' }, { id: 'e' }, { id: 'f' }, { id: 'g' }, { id: 'h' }, { id: 'ı' }, { id: 'i' }],
+});
+srcFake.db.topics.set('cografya/c1', {
+  meta: { id: 'c1', name: 'Coğrafya konu', questionCount: 2, questions: [{ id: 'x' }, { id: 'y' }] },
+  questions: [{ id: 'x' }, { id: 'y' }],
+});
+srcFake.db.tips.push({ body: '1' }, { body: '2' }, { body: '3' });
+// Hedef boş ama yönetici oturumu içerik yazabiliyor (içerik kilizi kapalı).
+dstFake.db.admins.add('admin@ornek.com');
+
+let maxActive = 0;
+let active = 0;
+const seen = [];
+// Kaynak adresi hangi projeyse o sahteye gider; gerisi hedef (deponun anahtarı).
+async function routeFetch(url, init) {
+  const u = String(url);
+  seen.push({ u, method: (init?.method || 'GET').toUpperCase(), body: init?.body ? String(init.body) : '' });
+  active++;
+  maxActive = Math.max(maxActive, active);
+  try {
+    return await (u.includes('//src.') ? srcFake : dstFake).fetchImpl(url, init);
+  } finally {
+    active--;
+  }
+}
+globalThis.fetch = routeFetch;
 
 const CC = await import('/tmp/copyBundle.mjs');
-const { planCopy, runCopy, describeCopyPlan, sourceBase, listCollection } = CC;
+const { planCopy, runCopy, describeCopyPlan, verifyCopy, sourceBase, normalizeSourceUrl, refOf, countQuestions, countTargetTopics, LEGACY_SOURCE } = CC;
 
-console.log('\x1b[1m[1] kaynak düzeni otomatik bulunuyor\x1b[0m');
-const legacySrc = new Map([
-  ['artifacts/SRC/public/data/courses/tarih', { id: s('tarih'), title: s('Tarih'), order: n(1) }],
-  ['artifacts/SRC/public/data/courses/tarih/topics/t1', { id: s('t1'), name: s('İlk konu'), questionCount: n(3), questions: listOf([{ id: s('a') }, { id: s('b') }, { id: s('c') }]) }],
-  ['artifacts/SRC/public/data/courses/tarih/topics/t2', { id: s('t2'), name: s('İkinci konu'), questionCount: n(7) }],
-  ['artifacts/SRC/public/data/courses/cografya/topics/c1', { id: s('c1'), name: s('Coğrafya konu'), questions: listOf([{ id: s('x') }, { id: s('y') }]) }],
-  ['artifacts/SRC/public/data/courses/cografya', { id: s('cografya'), title: s('Coğrafya'), order: n(2) }],
-  ['artifacts/SRC/public/data/daily_tips/main', { list: listOf([{ t: s('1') }, { t: s('2') }, { t: s('3') }]) }],
-]);
-const emptyDst = new Map();
-let fake = makeFake({ src: legacySrc, dst: emptyDst });
-globalThis.fetch = fake.fetch;
+head('\x1b[1m[1] kaynak adresi çözülüyor\x1b[0m');
+ok(LEGACY_SOURCE.url === '', 'deponun varsayılan kaynağı boş (kendi kendine kopya yok)');
+ok(normalizeSourceUrl('src') === SRC_URL, 'yalnız ref → tam adres', normalizeSourceUrl('src'));
+ok(normalizeSourceUrl('https://src.supabase.co/') === SRC_URL, 'gereksiz eğik çizgi temizleniyor', normalizeSourceUrl('https://src.supabase.co/'));
+ok(refOf(SRC_URL) === 'src', 'ref çözülüyor', refOf(SRC_URL));
+ok(sourceBase({ url: SRC_URL }).includes('/rest/v1'), 'kaynak tabanı Supabase REST geçidi', sourceBase({ url: SRC_URL }));
+const noSrc = await planCopy('');
+ok(noSrc.error === 'Kaynak adresi boş.', 'boş adres net cümleyle reddediliyor', JSON.stringify(noSrc).slice(0, 120));
+ok(noSrc.docs.length === 0 && noSrc.courses === 0, 'hatada plan boş');
 
-let plan = await planCopy('SRC');
+head('\x1b[1m[2] plan kaynak taranarak çıkıyor\x1b[0m');
+let plan = await planCopy('src');
 ok(!plan.error, 'plan alındı', plan.error);
-ok(plan.source.root === 'artifacts/SRC/public/data', 'legacy öneki bulundu: ' + plan.source.root);
-ok(plan.courses.length === 2, '2 ders', String(plan.courses.length));
-ok(plan.topics.length === 3, '3 konu', JSON.stringify(plan.topics.map(t => t.topicDocId)));
-ok(plan.totalQuestions === 12, `soru toplamı 12 olmalı, ${plan.totalQuestions} geldi`);
-ok(plan.tips === 3 && plan.tipsAvailable, 'hap bilgi 3');
-ok(/2 ders • 3 konu • 12 soru • 3 hap bilgi/.test(describeCopyPlan(plan)), 'özet metin biçimi', describeCopyPlan(plan));
-ok(plan.courses[0].title === 'Tarih' || plan.courses.find(c => c.title === 'Tarih'), 'ders başlığı okundu');
+ok(plan.courses === 2, '2 ders', String(plan.courses));
+ok(plan.topics === 3, '3 konu', String(plan.topics));
+ok(plan.tips === 1, 'hap bilgi belgesi planlandı', String(plan.tips));
+ok(plan.docs.reduce((n, d) => n + countQuestions(d.json), 0) === 12, '12 soru planlandı', String(plan.docs.length));
+ok(plan.docs.some(d => d.path === 'courses/tarih'), 'ders yolu olduğu gibi taşınıyor', JSON.stringify(plan.docs.map(d => d.path)).slice(0, 160));
+ok(plan.docs.some(d => d.path === 'courses/tarih/topics/t2'), 'konu tam yoluyla listede');
+ok(countQuestions(undefined) === 0 && countQuestions({ questions: 'yok' }) === 0, 'sorular dizi değilse sıfır sayılıyor');
+ok(/src → /.test(describeCopyPlan(plan)) && /2 ders • 3 konu • 1 hap bilgi/.test(describeCopyPlan(plan)), 'özet satır biçimi', describeCopyPlan(plan));
+const srcReads = seen.filter(s => s.u.includes('//src.') && (s.u.includes('kpss_read_doc') || s.u.includes('kpss_list_docs'))).length;
+const srcWrites = seen.filter(s => s.u.includes('//src.') && s.u.includes('kpss_write_doc')).length;
+ok(srcReads >= 5, 'kaynak listelenip konu konu okundu', String(srcReads));
+ok(srcWrites === 0, 'kaynağa hiçbir yazma gitmedi (salt-okunur)', String(srcWrites));
 
-console.log('\x1b[1m[2] kök düzeni (yeni tip kaynak)\x1b[0m');
-const rootSrc = new Map([['courses/tarih', { id: s('tarih'), title: s('Tarih') }], ['courses/tarih/topics/t1', { id: s('t1'), questions: listOf([{ id: s('a') }]) }]]);
-fake = makeFake({ src: rootSrc, dst: new Map() });
-globalThis.fetch = fake.fetch;
-plan = await planCopy('SRC');
-ok(plan.source.root === '' && plan.notes.some(x => /kök/.test(x)), 'kök düzenine düşüldü', JSON.stringify(plan.notes));
-ok(plan.totalQuestions === 1 && plan.tipsAvailable === false, 'konu sayıldı, hap bilgi yok diye işaretli');
-const noSrc = await planCopy('YOK-Proje');
-ok(!!noSrc.error && /proje kimliği/.test(noSrc.error), 'boş kaynakta anlaşılır hata', noSrc.error);
-
-console.log('\x1b[1m[3] kopyalama (PUT hedefe, fields olduğu gibi)\x1b[0m');
-const dst2 = new Map();
-fake = makeFake({ src: legacySrc, dst: dst2 });
-globalThis.fetch = fake.fetch;
-plan = await planCopy('SRC');
+head('\x1b[1m[3] kopya hedefe yazılıyor\x1b[0m');
+const auth = await import('/tmp/authBundle.mjs');
+const su = await auth.signUp('admin@ornek.com', 'GoodPass1');
+ok(su.ok === true, 'hedef yönetici oturumu açıldı (içerik yazması RLS’te yönetici ister)', su.error);
 const progress = [];
-const result = await runCopy(plan, { concurrency: 4, onProgress: p => progress.push({ ...p }) });
-ok(result.copied === 6, `6 belge yazılmalı (2 ders + 3 konu + tips), ${result.copied} yazıldı`, JSON.stringify(result.failed));
-ok(result.failed.length === 0, 'hata yok', JSON.stringify(result.failed));
-ok(dst2.has('courses/tarih'), 'hedef: kök düzeninde yazdı (ön ek yok)');
-ok(dst2.has('courses/tarih/topics/t2') && dst2.has('daily_tips/main'), 'konu ve hap bilgi hedefte');
-ok(
-  JSON.stringify(dst2.get('courses/tarih/topics/t1')) ===
-    JSON.stringify(legacySrc.get('artifacts/SRC/public/data/courses/tarih/topics/t1')),
-  'soru içeriği bayt bayt aynı (alan adları değişmedi)'
-);
-ok(fake.state.dstWrites.length === 6 && fake.state.srcWrites === 0, 'kaynağa hiç yazılmadı');
-ok(fake.state.maxActive <= 8, `eşzamanlılık sınırlı (tepe ${fake.state.maxActive})`);
-ok(progress.length === 6 && progress[5].done === 6, 'ilerleme her belgede raporlandı', JSON.stringify(progress.map(p => p.done)));
-ok(progress.every((p, idx) => idx === 0 || p.done >= progress[idx - 1].done), 'ilerleme monoton artıyor');
-ok(progress[progress.length - 1].questions === 12, 'ilerlemede soru sayacı 12');
+const res = await runCopy(plan, { onProgress: p => progress.push({ ...p }) });
+ok(!res.error, 'yazmalar tamamlandı', res.error);
+ok(res.copied === plan.docs.length, `${plan.docs.length} belge kopyalandı`, JSON.stringify(res).slice(0, 160));
+ok(res.failed.length === 0, 'başarısız belge yok', JSON.stringify(res.failed).slice(0, 160));
+ok(res.questions === 12, '12 soru hedefe geçti', String(res.questions));
+ok(dstFake.db.courses.has('tarih') && dstFake.db.courses.has('cografya'), 'ders satırları hedefte duruyor', JSON.stringify([...dstFake.db.courses.keys()]));
+ok(dstFake.db.topics.get('tarih/t2')?.questions?.length === 7, 'soru dizisi hedefte korunuyor', JSON.stringify(dstFake.db.topics.get('tarih/t2')?.questions?.length));
+ok(dstFake.db.tips.length === 3, 'hap bilgiler hedefte', String(dstFake.db.tips.length));
+ok((await countTargetTopics('tarih')) === 2, 'hedef konu sayımı listelemeden geldi', String(await countTargetTopics('tarih')));
+ok(verifyCopy(plan, res).startsWith('Doğrulandı'), 'doğrulama cümlesi', verifyCopy(plan, res));
+ok(progress.length >= plan.docs.length && progress[progress.length - 1].done === plan.docs.length, 'ilerleme akışı tamamlandı', JSON.stringify(progress.slice(-1)));
+ok(maxActive >= 1 && maxActive <= 8, `aynı anda en fazla 8 yazma (${maxActive})`);
+const writes = seen.filter(s => !s.u.includes('//src.') && s.u.includes('kpss_write_doc'));
+ok(writes.length === plan.docs.length, 'her belge tek yazma istediği', `${writes.length}/${plan.docs.length}`);
+ok(writes.every(s => s.body.includes('"p_path"')), 'yazma RPC gövdesi yolu taşıyor');
 
-console.log('\x1b[1m[4] skipExisting + hata toleransı\x1b[0m');
-const before = fake.state.dstWrites.length;
-const again = await runCopy(plan, { concurrency: 4, skipExisting: true });
-ok(again.skipped === 6 && again.copied === 0, `ikinci tur atlamalı (atlanan ${again.skipped})`);
-ok(fake.state.dstWrites.length === before, 'skipExisting hedefe hiç yazmadı');
-const badDst = new Map();
-const badFake = makeFake({
-  src: legacySrc,
-  dst: badDst,
-  // makeFake imzası: { src, dst, opts } — okuma hatası simülasyonu opts içinde
-  opts: { failReadOn: new Set(['artifacts/SRC/public/data/courses/tarih/topics/t2']) },
-});
-globalThis.fetch = badFake.fetch;
-const partial = await runCopy(await planCopy('SRC'), { concurrency: 2 });
-ok(partial.failed.length === 1 && /simüle kaynak hatası/.test(partial.failed[0]), 'bozulan belge raporlandı, diğerleri devam etti', JSON.stringify(partial.failed));
-ok(partial.copied === 5, `5 belge kopyalandı, ${partial.copied}`, JSON.stringify(partial));
+head('\x1b[1m[4] yarım işi devam ettirme ve red hâli\x1b[0m');
+const again = await runCopy(plan, { skipExisting: true });
+ok(again.copied === 0 && again.skipped === plan.docs.length, 'var olanlar atlandı (yarım iş yeniden tam yazmıyor)', JSON.stringify(again).slice(0, 160));
+const forced = await runCopy(plan);
+ok(forced.copied === plan.docs.length, '“atla” kapalıyken baştan yazılıyor', JSON.stringify(forced).slice(0, 120));
+ok(verifyCopy(plan, forced).startsWith('Doğrulandı'), 'zorlanmış kopya da doğrulanıyor');
 
-console.log('\x1b[1m[5] liste/okuma yardımcıları\x1b[0m');
-globalThis.fetch = makeFake({ src: legacySrc, dst: new Map() }).fetch;
-const pageList = await listCollection(sourceBase({ projectId: 'SRC', root: 'artifacts/SRC/public/data' }), 'courses', { pageSize: 1 });
-ok(pageList.docs.length === 2 && !pageList.error, 'pageToken ile sayfalama tamamlandı', JSON.stringify(pageList));
-const missing = await listCollection(sourceBase({ projectId: 'SRC', root: 'yok' }), 'courses', {});
-ok(missing.docs.length === 0 && !missing.error, 'olmayan koleksiyon = boş liste (hata değil)');
+// Sunucu yazmayı keserse (oturum düşmüş / kilit açık) hata yutulmaz: belge belge
+// başarısız listeye yazılır ve panelde gösterilecek cümleye dönüşür.
+dstFake.injectWith(() => ({ status: 403, body: { code: '42501', message: 'only an admin may write content rows' } }));
+const blocked = await runCopy({ ...plan, docs: [{ path: 'courses/biyoloji', json: { id: 'biyoloji', title: 'Biyoloji', order: 3 } }] });
+ok(!dstFake.db.courses.has('biyoloji'), 'reddedilen yazma hedefte satır bırakmadı');
+ok(blocked.copied === 0 && blocked.failed.length === 1, 'kimliksiz içerik yazması reddedildi', JSON.stringify(blocked).slice(0, 200));
+ok(/tekrar dene|kilizi|RLS/i.test(String(blocked.error)), 'ret mesajı sonraki adımı söylüyor', blocked.error);
+const emptyRun = await runCopy({ ...plan, docs: [] });
+ok(emptyRun.error === 'Kopyalanacak belge yok.', 'boş plan yazmaya kalkışmıyor', JSON.stringify(emptyRun));
+ok(verifyCopy(plan, { ...res, questions: 3 }).startsWith('Eksik'), 'eksik kopya “Eksik” diyor', verifyCopy(plan, { ...res, questions: 3 }));
+dstFake.clearInject();
+await auth.signOut();
+ok(await auth.currentIdToken() === null, 'oturum kapatılınca token yok (panel yeniden giriş ister)');
 
-console.log('\x1b[1m[6] panel bağı (kaynak düzeyinde)\x1b[0m');
-const fs = await import('node:fs');
-const panel = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
-ok(/from '\.\.\/lib\/contentCopy'/.test(panel), 'panel contentCopy modülünü kullanıyor');
-ok(/await planCopy\(copySrc\.trim\(\) \|\| LEGACY_SOURCE\.projectId\)/.test(panel), '“Kaynağı tara” düğmesi planCopy çağırıyor');
-ok(/runCopy\(copyPlan,\s*\{\s*concurrency: 4,\s*skipExisting: copySkip,/.test(panel), 'kopyalama 4 eşzamanlı + atla seçeneğiyle çalışıyor');
-ok(/setLockState\(await readLockState\(\)\)/.test(panel), 'kopyalama sonrası kilit rozeti tazeleniyor');
-ok(/meta\/content_lock var → içerik yazma kapalı/.test(panel), 'kilit durumunda uyarı gösteriliyor');
-const src = fs.readFileSync('lib/contentCopy.ts', 'utf8');
-ok(/CANDIDATE_ROOTS[\s\S]{0,140}?\[\s*`artifacts\/\$\{projectId\}\/public\/data`,\s*''/.test(src), 'kök adayı sırası: önce legacy öneki, sonra kök');
-ok(!/initializeApp|from ['\"]firebase/.test(src), 'içerik kopyalama Firebase SDK kullanmıyor (REST sadece)');
+head('\x1b[1m[5] kaynak çökerse plan dürüst kalıyor\x1b[0m');
+const broken = createFakeSupabase();
+globalThis.fetch = async (url, init) => (String(url).includes('//src.') ? json500() : broken.fetchImpl(url, init));
+function json500() {
+  return { ok: false, status: 500, text: async () => '{"error":"boom"}', json: async () => ({ error: 'boom' }) };
+}
+const badPlan = await planCopy('src');
+ok(badPlan.error === 'Kaynak okunamadı ya da içerik boş.', 'okunamayan kaynak uydurma plan üretmiyor', JSON.stringify(badPlan).slice(0, 140));
+ok(badPlan.docs.length === 0, 'okunamayan kaynakta belge listesi boş');
+globalThis.fetch = routeFetch;
+const selfPlan = await planCopy('kpssdemo');
+ok(selfPlan.notes.some(x => /Kaynak = hedef proje/.test(x)), 'kendi projesi kaynak seçilirse uyarı veriyor', JSON.stringify(selfPlan.notes));
+const srcDocWrites = seen.filter(s => s.u.includes('//src.') && s.method === 'POST' && s.u.includes('kpss_write_doc')).length;
+ok(srcDocWrites === 0, 'kaynak projeye hiçbir yazma RPC’si gitmedi (salt-okunur)', String(srcDocWrites));
 
-console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);
+console.log(`\n${fail ? '\x1b[31m✗' : '\x1b[32m✓'} ${pass}/${pass + fail} kopya sözleşmesi denetimi ${fail ? `${fail} başarısız` : 'geçti'}\x1b[0m`);
 process.exit(fail ? 1 : 0);

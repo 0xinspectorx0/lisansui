@@ -182,23 +182,32 @@ export interface PasswordBundle {
   /** Kept in the record so any device can recompute the same verifier. */
   iterations: number;
   /** `firebase-auth` = parola Firebase Auth'ta doğrulanır, belgede hash tutulmaz. */
-  algo: 'pbkdf2-sha256' | 'firebase-auth';
+  algo: 'pbkdf2-sha256' | 'supabase-auth' | 'firebase-auth';
 }
 
 /**
- * Firebase Auth kullanılırken üyelik belgesine yazılan işaretçi.
- * Doğrulama Firebase'de yapılır; belgede hash/salt tutulmaz.
+ * Supabase Auth kullanılırken üyelik satırına yazılan işaretçi.
+ * Doğrulama GoTrue'da (Supabase Auth) yapılır; Postgres'te hash/salt TUTULMAZ.
+ * `algo: 'firebase-auth'` eski satırların işaretçisidir — tanım gereği aynı
+ * anlama gelir (bulut doğrulaması), böylece eski projeden taşınan üyeler
+ * giriş yapmaya devam edebilir.
  */
+export const CLOUD_AUTH_ALGOS: readonly string[] = ['supabase-auth', 'firebase-auth'];
+
 export const AUTH_PASSWORD_BUNDLE: PasswordBundle = {
   verifier: '',
   salt: '',
   iterations: 0,
-  algo: 'firebase-auth',
+  algo: 'supabase-auth',
 };
 
-export function isFirebaseAuthBundle(record?: { algo?: string } | null): boolean {
-  return record?.algo === 'firebase-auth';
+/** Bu satırın parolası bulutta mı doğrulanıyor (yerel PBKDF2 değil)? */
+export function isCloudAuthBundle(record?: { algo?: string } | null): boolean {
+  return CLOUD_AUTH_ALGOS.includes(String(record?.algo || ''));
 }
+
+/** @deprecated eski ad; `isCloudAuthBundle` ile aynı şey. */
+export const isFirebaseAuthBundle = isCloudAuthBundle;
 
 const ITERATIONS = 1200;
 

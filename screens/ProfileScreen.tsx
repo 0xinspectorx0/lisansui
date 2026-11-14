@@ -166,7 +166,7 @@ export const ProfileScreen: React.FC = () => {
             <MiniCell label="Kayıtlı ders" value={String(Object.keys(member!.courseUsage || {}).length)} />
           </View>
           <Text style={{ fontSize: 11, color: colors.textMuted, lineHeight: 16 }}>
-            Üye kimliği: {member!.id} — bu kayıt doğrudan Firestore’daki üyelik belgen.
+            Üye kimliği: {member!.id} — bu kayıt doğrudan Supabase’daki üyelik belgen.
           </Text>
         </AdminCard>
 
@@ -180,7 +180,7 @@ export const ProfileScreen: React.FC = () => {
         <AdminSectionTitle label="Test hakların" hint={quota.enforced ? (quota.isVip ? 'VIP: sınır yok' : `Ücretsiz plan: dersten ${quota.freeTestsPerCourse} test`) : 'Hak sınırı kapalı'} />
         <QuotaList rows={rows} />
 
-        <AdminSectionTitle label="Bulut" hint="Sayılarını Firestore’a mirrora et, panelden onaylat" />
+        <AdminSectionTitle label="Bulut" hint="Sayılarını Supabase’e mirrora et, panelden onaylat" />
         <AdminCard>
           <AdminRow
             compact
@@ -224,7 +224,7 @@ export const ProfileScreen: React.FC = () => {
             compact
             icon={localUser.vip ? 'diamond' : 'diamond-outline'}
             title="Bu cihazı VIP göster (yalnızca yönetici)"
-            subtitle="Panelde açıkken çalışır; Firestore belgeni değiştirmez"
+            subtitle="Panelde açıkken çalışır; Supabase belgeni değiştirmez"
             onPress={() => admin.toggleVip(localUser.id)}
           />
         </AdminCard>
@@ -248,7 +248,7 @@ export const ProfileScreen: React.FC = () => {
             compact
             icon="trash-bin-outline"
             title="Hesabımı sil"
-            subtitle="Üyelik belgen Firestore’dan kalıcı olarak silinir"
+            subtitle="Üyelik belgen Supabase’dan kalıcı olarak silinir"
             right={<Ionicons name="chevron-forward" size={15} color={colors.textMuted} />}
             onPress={() => { setDeletePw(''); setConfirm('delete'); }}
             style={{ borderBottomWidth: 0 }}
@@ -338,7 +338,7 @@ export const ProfileScreen: React.FC = () => {
         }
       >
         <Text style={{ fontSize: 12.5, color: colors.textSecondary, lineHeight: 18, paddingBottom: 10 }}>
-          Üyelik belgen Firestore’dan silinir ve bu cihazda çıkış yapılır. Çalışma geçmişin
+          Üyelik belgen Supabase’dan silinir ve bu cihazda çıkış yapılır. Çalışma geçmişin
           (deneme, favori, hata defteri) cihazda kalmaya devam eder.
         </Text>
         <AdminField label="Onay için parolan" value={deletePw} onChangeText={setDeletePw} />

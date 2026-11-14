@@ -1,5 +1,5 @@
 /**
- * Üyelik paneli — every member record here is a Firestore document
+ * Üyelik paneli — every member record here is a Supabase document
  * (`memberships/{emailNormalized}`), read and written directly by this screen.
  * There is no local membership store to fall back to: if the cloud write fails,
  * the row is not changed.
@@ -118,7 +118,7 @@ export const AdminMembershipScreen: React.FC = () => {
       if (res.error) setNotice(res.error);
       else if (!silent) {
         setNotice(
-          `${count.cloud} üye Firestore’dan alındı${res.limited ? ' (liste sayfalı, tamamlanmadı)' : ''}.`
+          `${count.cloud} üye Supabase’dan alındı${res.limited ? ' (liste sayfalı, tamamlanmadı)' : ''}.`
         );
       }
       setLoading(false);
@@ -283,7 +283,7 @@ export const AdminMembershipScreen: React.FC = () => {
   return (
     <AdminScaffold
       title="Üyelikler"
-      subtitle={`${members.length} Firestore kaydı • ${vipCount} VIP • ${policy.enforce ? `her ders ${policy.freeTestsPerCourse} test` : 'limit kapalı'}`}
+      subtitle={`${members.length} Supabase kaydı • ${vipCount} VIP • ${policy.enforce ? `her ders ${policy.freeTestsPerCourse} test` : 'limit kapalı'}`}
       icon="person-badge-outline"
       right={
         <AdminChip
@@ -370,7 +370,7 @@ export const AdminMembershipScreen: React.FC = () => {
           />
           <View style={styles.divider} />
           <AdminToggle
-            label="VIP Firestore’dan okunsun"
+            label="VIP Supabase’dan okunsun"
             description="Kapatınca yalnızca bu cihazın yerel VIP etiketi geçerli olur (test amaçlı)."
             value={policy.cloudVip}
             onValueChange={v => patchPolicy({ cloudVip: v })}
@@ -378,7 +378,7 @@ export const AdminMembershipScreen: React.FC = () => {
           />
           <View style={styles.divider} />
           <AdminToggle
-            label="Panel listesi Firestore’u göstersin"
+            label="Panel listesi Supabase’u göstersin"
             description="Açıkken kullanıcı listesi demo kayıtlar yerine gerçek üyelik belgeleriyle doldurulur."
             value={policy.cloudMembers}
             onValueChange={v => patchPolicy({ cloudMembers: v })}
@@ -414,7 +414,7 @@ export const AdminMembershipScreen: React.FC = () => {
             icon="cloud-upload-outline"
             title={
               admin.policySource === 'cloud'
-                ? 'Politika Firestore’daki belgede'
+                ? 'Politika Supabase’daki belgede'
                 : admin.policySource === 'device'
                   ? 'Bulutta politika belgesi henüz yok'
                   : admin.policySource === 'denied'
@@ -469,7 +469,7 @@ export const AdminMembershipScreen: React.FC = () => {
         />
 
         {loading && members.length === 0 ? (
-          <AdminSpinner label="Firestore’dan üyelikler okunuyor…" />
+          <AdminSpinner label="Supabase’dan üyelikler okunuyor…" />
         ) : visible.length === 0 ? (
           <AdminEmpty
             icon="person-badge-outline"
@@ -629,7 +629,7 @@ export const AdminMembershipScreen: React.FC = () => {
           <View style={styles.sheetFooter}>
             <AdminButton label="Vazgeç" tone="ghost" flex onPress={() => setDraft(null)} />
             <AdminButton
-              label={saving ? 'Kaydediliyor…' : 'Firestore’a yaz'}
+              label={saving ? 'Kaydediliyor…' : 'Supabase’e yaz'}
               icon="cloud-upload-outline"
               flex
               disabled={saving || !draft}
@@ -665,7 +665,7 @@ export const AdminMembershipScreen: React.FC = () => {
               onChangeText={t => setDraft({ ...draft, password: t })}
               autoCapitalize="none"
               placeholder="en az 6 karakter"
-              hint="Cihazda PBKDF2-SHA256 ile hash’lenir; düz metin Firestore’a gitmez."
+              hint="Cihazda PBKDF2-SHA256 ile hash’lenir; düz metin Supabase’e gitmez."
             />
             <AdminSegmented
               label="Plan"
@@ -719,7 +719,7 @@ export const AdminMembershipScreen: React.FC = () => {
       <AdminConfirm
         visible={!!confirmDelete}
         title="Üyeliği sil"
-        message={`${confirmDelete?.email ?? ''} belgesi Firestore’dan kalıcı olarak silinecek. Test geçmişi cihazda kalır.`}
+        message={`${confirmDelete?.email ?? ''} belgesi Supabase’dan kalıcı olarak silinecek. Test geçmişi cihazda kalır.`}
         confirmLabel="Sil"
         onConfirm={() => void removeMember()}
         onCancel={() => setConfirmDelete(null)}
