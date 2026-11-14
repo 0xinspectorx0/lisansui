@@ -7,7 +7,6 @@ import { useAppTheme } from '../lib/theme';
 import {
   collectionPath,
   DEFAULT_TARGET,
-  describeTarget,
   firestoreTarget,
   probeUrls,
   type FirestoreTarget,
@@ -54,7 +53,6 @@ import {
 import { AdminGate } from '../components/admin/AdminGate';
 import {
   addAdminEmail,
-  probeMembershipWrite,
   readAdminList,
   readMembershipLockdown,
   ADMINS_DOC_PATH,
@@ -75,11 +73,7 @@ import {
   signOut as authSignOut,
 } from '../lib/authClient';
 import { hasRepoApiKey } from '../config/firebaseApp';
-import { FIRESTORE_RULES_LINES, FIRESTORE_RULES_TEXT } from '../config/firestoreRulesCopy';
-import { accessDiagReportText, diagnoseMembershipAccess, type AccessDiag } from '../lib/accessDiag';
 import { membershipBuildLabel } from '../lib/buildTag';
-import * as authClient from '../lib/authClient';
-import { copyText } from '../lib/clipboard';
 
 export const AdminSettingsScreen: React.FC = () => {
   const { colors } = useAppTheme();
@@ -149,140 +143,6 @@ export const AdminSettingsScreen: React.FC = () => {
       hasRepoApiKey()
         ? 'Cihaz kaydı silindi — depodaki anahtar (config/firebaseApp.ts) kullanılmaya devam ediyor.'
         : 'Cihaz kaydı silindi. Depoda anahtar yoksa yerel PBKDF2 moduna dönülür.'
-    );
-  };
-
-  /* erişim tanısı: “kural engelledi” uyarısının GERÇEK nedeni */
-  const [diag, setDiag] = useState<{ busy: boolean; data: AccessDiag | null }>({
-    busy: false,
-    data: null,
-  });
-  const [diagEmail, setDiagEmail] = useState(() => membership.member?.email || '');
-  const [writeProbe, setWriteProbe] = useState<{
-    busy: boolean;
-    text: string;
-    tone: 'info' | 'success' | 'danger';
-  }>({ busy: false, text: 'Henüz denenmedi', tone: 'info' });
-  const [rulesCopied, setRulesCopied] = useState<string | null>(null);
-  const [rulesOpen, setRulesOpen] = useState(false);
-  /** Tanı + sınama ölçümlerinin kopyalanabilir tek metni (geliştiriciye yapıştırılır). */
-  const [report, setReport] = useState<string | null>(null);
-  const [reportOpen, setReportOpen] = useState(false);
-  const [reportCopied, setReportCopied] = useState<string | null>(null);
-  /** `probeAuth()` ölçümü: E-posta/parola girişi kapalıysa hiçbir kural düzeltmesi yetmez. */
-  const [authProbeNote, setAuthProbeNote] = useState('');
-
-  const diagKey = String(diagEmail || '').trim().toLowerCase();
-
-  const runAccessDiag = async () => {
-    setDiag({ busy: true, data: null });
-    try {
-      // Önce kendi kendine iyileşebilen durumu (yanlış projeden token) temizle, sonra ölç.
-      const healed = await healForeignAuthProject().catch(() => ({
-        healed: false as const,
-        note: undefined as string | undefined,
-      }));
-      resetAuthConfigCache();
-      await ensureAuthConfigLoaded();
-      if (healed.healed) setRulesCopied(healed.note || 'Cihazdaki yabancı projeli anahtar kaydı temizlendi.');
-      const data = await diagnoseMembershipAccess(diagKey || undefined);
-      // Sağlayıcı durumu ayrı ölçülür: ağ kopuksa rapor yine de yazılabilir.
-      const ap = await authClient.probeAuth().catch(() => null);
-      if (ap) setAuthProbeNote(ap.note);
-      // Okuma tarafı temizse tek kanıt deneme yazmasıdır: düğümü aramadan kendimiz deneriz.
-      let probeLine: string | undefined;
-      if ((data.cause === 'write-needs-probe' || data.cause === 'lockdown-no-admin') && diagKey.includes('@'))
-        probeLine = await runWriteProbe();
-      setDiag({ busy: false, data });
-      setReport(
-        accessDiagReportText(data, {
-          email: diagKey || undefined,
-          authSource: authConfigSource() || 'yok',
-          probe: probeLine ?? (writeProbe.text === 'Henüz denenmedi' ? undefined : writeProbe.text),
-          authProbe: ap?.note,
-          appLabel: describeTarget(fsTarget),
-        })
-      );
-    } catch (e) {
-      setDiag({ busy: false, data: null });
-      setRulesCopied(`Tanı yapılamadı: ${String(e)}`);
-    }
-  };
-
-
-
-  /**
-   * Okuma tarafı temizse yazmanın durumu ancak DENEME YAZMASIYLA bilinir.
-   * `probeMembershipWrite` yalnızca o e-postanın KENDİ belgesine dokunur
-   * (lastLoginAt / tam biçimle create) ve hak alanlarına değmez.
-   */
-  const runWriteProbe = async (): Promise<string> => {
-    if (!diagKey.includes('@')) {
-      const hint = 'E-posta yazılmadığı için sınama yapılmadı.';
-      setWriteProbe({ busy: false, text: hint, tone: 'danger' });
-      return hint;
-    }
-    setWriteProbe({ busy: true, text: 'Kendi belgene yazma deneniyor…', tone: 'info' });
-    try {
-      const res = await probeMembershipWrite(diagKey);
-      const text = res.ok
-        ? res.created
-          ? `Yazma serbest — ${res.email} belgesi yoktu, kurala tam uygun biçimde oluşturuldu.`
-          : `Yazma serbest — ${res.email} belgesi güncellendi (yalnız lastLoginAt).`
-        : `Yazma engellendi (${res.cause || 'bilinmiyor'}): ${res.error || 'neden ölçülemedi'}`;
-      setWriteProbe({ busy: false, tone: res.ok ? 'success' : 'danger', text });
-      return text;
-    } catch (e) {
-      const text = `Sınama yapılamadı: ${String(e)}`;
-      setWriteProbe({ busy: false, tone: 'danger', text });
-      return text;
-    }
-  };
-
-  const copyReport = async () => {
-    const text =
-      report ??
-      (diag.data
-        ? accessDiagReportText(diag.data, {
-            email: diagKey || undefined,
-            authSource: authConfigSource() || 'yok',
-            probe: writeProbe.text === 'Henüz denenmedi' ? undefined : writeProbe.text,
-            authProbe: authProbeNote || undefined,
-            appLabel: describeTarget(fsTarget),
-          })
-        : '');
-    if (!text) {
-      setReportCopied('Önce “Tanı” düğmesine bas — rapor ölçümden sonra oluşuyor.');
-      return;
-    }
-    setReport(text);
-    setReportOpen(true);
-    const res = await copyText(text);
-    setReportCopied(
-      res === 'copied'
-        ? `Rapor kopyalandı (kod ${membershipBuildLabel()}) — geliştiriciye yapıştırman yeterli; ekran fotoğrafı gerekmez.`
-        : 'Panoya kopyalanamadı: aşağıdaki metni uzun basıp seç, sonra kopyala.'
-    );
-  };
-
-  const copyLockdownPath = async () => {
-    const path = diag.data?.detail.lockdownPath;
-    if (!path) return;
-    const res = await copyText(path);
-    setRulesCopied(
-      res === 'copied'
-        ? `${path} yolu kopyalandı — Console → Firestore → Documents → bu belgeyi sil, kilit kapanır.`
-        : `Bu belgeyi sil: Console → Firestore → Documents → ${path}`
-    );
-  };
-
-  const copyRulesText = async () => {
-    const res = await copyText(FIRESTORE_RULES_TEXT);
-    setRulesOpen(true);
-    setRulesCopied(
-      res === 'copied'
-        ? `${FIRESTORE_RULES_LINES} satırlık kural metni panoya kopyalandı — Console → Firestore → Rules → yapıştır → Publish.`
-        : 'Panoya kopyalanamadı. Aşağıdaki metne uzun bas, tümünü seç ve kopyala.'
     );
   };
 
@@ -745,180 +605,34 @@ export const AdminSettingsScreen: React.FC = () => {
           />
         </AdminCard>
 
-        {/* Erişim tanısı + kuralları yayınla */}
+        {/* Bulut kuyruğu — reddedilen üyelik yazmaları burada bekler ve kendini tekrar dener */}
         <AdminSectionTitle
-          label="Erişim tanısı ve kurallar"
-          hint="Üyelik okuma/yazma reddedilirse nedeni burada ölçülür: kural yayınlanmamış mı, bayat mı, kimlik başka projeden mi, kilit mi açık (kök ve legacy yolu da dahil). “Tanı” hiçbir şey yazmaz; yazmanın gerçekten çalışıp çalışmadığını “Yazma sınaması” ölçer — o da yalnızca kendi belgene dokunur."
+          label="Bulut kuyruğu"
+          hint={`Firestore yazmasına izin verilmeyen üyelikler cihazda bekletilir; uygulama yazmayı kendiliğinden yeniden dener. Engel kalktığı anda kuyruk tek dokunuşa gerek kalmadan boşalır. (Bu cihazdaki üyelik kodu: ${membershipBuildLabel()})`}
         />
         <AdminCard>
-          <AdminField
-            label="E-posta (isteğe bağlı — kesin tanı için)"
-            value={diagEmail}
-            onChangeText={setDiagEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            maxLength={180}
-            hint="Tanı ve yazma sınaması bu e-postanın KENDİ belgesi üzerinden ölçülür; üyelik belgesi e-posta ile adlandırılır."
-          />
           <AdminRow
-            icon="medkit-outline"
-            title="Neden engellendi?"
+            icon={membership.pendingWrites ? 'cloud-upload-outline' : 'cloud-done-outline'}
+            title={
+              membership.pendingWrites
+                ? `${membership.pendingWrites} üyelik yazması bekliyor`
+                : 'Bekleyen bulut yazması yok'
+            }
             subtitle={
-              diag.busy
-                ? 'Ölçülüyor…'
-                : diag.data
-                  ? diag.data.headline
-                  : 'Test edince yazar: içerik okuması, üyelik okuması ve kilit durumu ayrı ayrı denenir.'
+              membership.pendingWrites
+                ? 'Üyelikler bu cihazda açık ve kullanılabilir; buluta geçtiğinde kendini yeniler. İstersen şimdi zorlayabilirsin.'
+                : 'Üyelikler bulutla eşitlenmiş durumda.'
             }
-            right={
-              <AdminButton
-                small
-                tone={
-                  !diag.data || diag.data.cause === 'ok' || diag.data.cause === 'write-needs-probe'
-                    ? 'primary'
-                    : diag.data.cause === 'offline'
-                      ? 'neutral'
-                      : 'danger'
-                }
-                label={diag.busy ? 'Ölçülüyor' : 'Tanı'}
-                disabled={diag.busy}
-                onPress={() => void runAccessDiag()}
-              />
-            }
-          />
-          {diag.data && diag.data.cause !== 'ok' ? (
-            <View style={{ paddingHorizontal: 2, gap: 2, marginBottom: 6 }}>
-              {diag.data.steps.map((step, i) => (
-                <Text key={`step-${i}`} style={{ fontSize: 10.5, color: colors.textSecondary, lineHeight: 16 }}>
-                  {i + 1}) {step}
-                </Text>
-              ))}
-              <Text style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 15 }}>
-                {`proje ${diag.data.detail.projectId} • db ${diag.data.detail.databaseId} • ${diag.data.detail.membershipsPath} • içerik ${diag.data.detail.contentStatus} • üyelik ${diag.data.detail.membershipStatus}${diag.data.detail.membershipEmpty ? ' (boş)' : ''} • kilit ${diag.data.detail.lockdown}${diag.data.detail.lockdownPath ? ` @${diag.data.detail.lockdownPath}` : ''}${diag.data.detail.shapeProblems ? ` • biçim: ${diag.data.detail.shapeProblems}` : ''}`}
-              </Text>
-            </View>
-          ) : null}
-          {diag.data && diag.data.cause === 'ok' ? (
-            <Text style={{ fontSize: 11, color: colors.success, lineHeight: 16, marginBottom: 6 }}>
-              {diag.data.detail.selfMatch
-                ? 'Oturumun e-postası bu üyelik belgesiyle eşleşiyor: kendi kaydına okuma/yazma açık.'
-                : 'Okuma/yazma yolu açık görünüyor.'}
-            </Text>
-          ) : null}
-          <AdminRow
-            icon="pulse-outline"
-            title="Yazma sınaması (kendi belgen)"
-            subtitle={
-              writeProbe.busy
-                ? 'Deneme yazılıyor…'
-                : 'Okuma izinleri yazma iznini kanıtlamaz. Bu, yalnızca yazdığın e-postanın belgesine dokunur: belge yoksa kurala tam uygun biçimde oluşturulur, varsa sadece lastLoginAt yenilenir. VIP/rol/durum alanlarına dokunulmaz.'
-            }
-            right={
-              <AdminButton
-                small
-                tone={writeProbe.tone === 'success' ? 'success' : writeProbe.tone === 'danger' ? 'danger' : 'primary'}
-                label={writeProbe.busy ? 'Deneniyor' : 'Sına'}
-                disabled={writeProbe.busy}
-                onPress={() => void runWriteProbe()}
-              />
-            }
-          />
-          {writeProbe.text !== 'Henüz denenmedi' ? (
-            <Text
-              style={{
-                fontSize: 11,
-                lineHeight: 16,
-                marginBottom: 6,
-                color:
-                  writeProbe.tone === 'success'
-                    ? colors.success
-                    : writeProbe.tone === 'danger'
-                      ? colors.danger
-                      : colors.textSecondary,
-              }}
-            >
-              {writeProbe.text}
-            </Text>
-          ) : null}
-          <AdminRow
-            icon="document-text-outline"
-            title="Tanı raporunu kopyala"
-            subtitle="Ölçülen her şey tek metinde: HTTP yanıtları, kilit yolu, token projesi, biçim denetimi, sınama sonucu. Geliştiriciye yapıştır — tahmine gerek kalmaz."
-            right={<AdminButton small tone="neutral" label="Kopyala" onPress={() => void copyReport()} />}
-          />
-          <AdminRow
-            icon="document-text-outline"
-            title="Raporu göster"
-            subtitle={report
-                  ? `${report.split('\n').length} satırlık ölçüm • kod ${membershipBuildLabel()} — uzun basıp seçebilirsin`
-                  : `Önce “Tanı” çalıştır; ölçüm burada görünür (bu cihazdaki üyelik kodu: ${membershipBuildLabel()}).`}
             right={
               <AdminButton
                 small
                 tone="neutral"
-                label={reportOpen ? 'Gizle' : 'Göster'}
-                disabled={!report}
-                onPress={() => setReportOpen(v => !v)}
+                label="Şimdi dene"
+                disabled={!membership.pendingWrites}
+                onPress={() => void membership.flushPendingNow()}
               />
             }
           />
-          {reportOpen && report ? (
-            <Text
-              selectable
-              style={{ fontSize: 9.5, color: colors.text, fontFamily: 'monospace', lineHeight: 14, marginBottom: 6 }}
-            >
-              {report}
-            </Text>
-          ) : null}
-          {reportCopied ? (
-            <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16, marginBottom: 6 }}>
-              {reportCopied}
-            </Text>
-          ) : null}
-          {diag.data?.detail.lockdownPath ? (
-            <AdminRow
-              icon="copy-outline"
-              title="Kilit belge yolunu kopyala"
-              subtitle={`${diag.data.detail.lockdownPath} silinince üyelik kilidi kapanır — kuralı yeniden yayınlamanın gerekmez.`}
-              right={
-                <AdminButton small tone="neutral" label="Yol" onPress={() => void copyLockdownPath()} />
-              }
-            />
-          ) : null}
-          <AdminRow
-            icon="copy-outline"
-            title="firestore.rules metnini kopyala"
-            subtitle="Console → Firestore → Rules → yapıştır → Publish. Uygulamadaki kuralların aynısı; telefondayken de tek adımla yayınlanır."
-            right={
-              <AdminButton small tone="neutral" label="Kopyala" onPress={() => void copyRulesText()} />
-            }
-          />
-          <AdminRow
-            icon="document-text-outline"
-            title="Kural metnini göster"
-            subtitle={`${FIRESTORE_RULES_LINES} satır — kopyalanamıyorsa uzun basıp seçebilirsin`}
-            right={
-              <AdminButton
-                small
-                tone="neutral"
-                label={rulesOpen ? 'Gizle' : 'Göster'}
-                onPress={() => setRulesOpen(v => !v)}
-              />
-            }
-          />
-          {rulesOpen ? (
-            <Text
-              selectable
-              style={{ fontSize: 9.5, color: colors.text, fontFamily: 'monospace', lineHeight: 14, marginBottom: 6 }}
-            >
-              {FIRESTORE_RULES_TEXT}
-            </Text>
-          ) : null}
-          {rulesCopied ? (
-            <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16, marginBottom: 6 }}>
-              {rulesCopied}
-            </Text>
-          ) : null}
         </AdminCard>
 
         {/* Firebase Auth */}
