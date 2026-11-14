@@ -14,7 +14,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AppState, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { CourseId, TestResult, TopicMeta } from './types';
@@ -34,15 +34,7 @@ import {
 } from './membership';
 import { AUTH_PASSWORD_BUNDLE, hashPassword, isFirebaseAuthBundle, verifyPassword } from './crypto';
 import { diagnoseMembershipAccess } from './accessDiag';
-import { consumeApiKeyParamNotice } from './firestoreApi';
-import {
-  clearPendingWrite,
-  enqueuePendingDelete,
-  enqueuePendingWrite,
-  findPending,
-  loadPending,
-  syncPending,
-} from './memberPending';
+import { consumeApiKeyParamNotice, consumeTokenRefreshNotice } from './firestoreApi';
 import * as auth from './authClient';
 import {
   CloudOutcome,
@@ -73,10 +65,6 @@ interface MembershipContextValue {
 
   /** true ise kimlik doğrulama Firebase Auth üzerinden yapılır (anahtar depoda/.env’de tanımlı). */
   authMode: boolean;
-  /** Buluta yazılamayıp cihazda bekletilen üyelik yazmalarının sayısı (0 = her şey bulutta). */
-  pendingWrites: number;
-  /** Bekleyen yazmaları hemen göndermeyi dener; kural düzelince kuyruk kendiliğinden boşalır. */
-  flushPendingNow: () => Promise<{ pushed: string[]; held: number }>;
   /** Firebase Auth açıkken “şifremi unuttum” e-postası. */
   sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
 
@@ -179,7 +167,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>('unknown');
   const [cloudMessage, setCloudMessage] = useState<string | null>(null);
   const [membersVersion, setMembersVersion] = useState(0);
-  const [pendingWrites, setPendingWrites] = useState(0);
   const memberRef = useRef<MemberDoc | null>(null);
   memberRef.current = member;
 
@@ -197,11 +184,12 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   adminRef.current = admin;
 
   const noteCloud = useCallback((res: { ok: boolean; error?: string; reason?: string }) => {
-    // Kendi kendine iyileşen iki durum: (a) cihazda yabancı projeli anahtar,
-    // (b) Firestore isteklerinin web API anahtarı parametresi istemesi.
-    // Biri yaşandıysa kullanıcıya "ne oldu" tek cümleyle söylenir, suçlama değil.
+    // Kendi kendine iyileşen üç durum: (a) cihazda yabancı projeli anahtar,
+    // (b) isteklerin web API anahtarı parametresi istemesi, (c) bayat oturum
+    // token'ı. Biri yaşandıysa kullanıcıya "ne oldu" tek cümleyle söylenir.
     const healedKey = consumeApiKeyParamNotice();
     const healedToken = auth.consumeForeignTokenNotice();
+    const healedRefresh = consumeTokenRefreshNotice();
     if (res.ok) {
       setCloudStatus('online');
       setCloudMessage(
@@ -209,7 +197,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           ? 'Firestore istekleri artık web API anahtarı parametresiyle gönderiliyor — anahtarsız istekler geçit tarafından reddediliyormuş, kendiliğinden düzeltildi.'
           : healedToken
             ? 'Cihazda kayıtlı eski Firebase anahtarı başka bir projeye aitmiş; kaldırıldı, depodaki anahtar kullanılıyor.'
-            : null
+            : healedRefresh
+              ? 'Oturum tokenın bayattı — yenilenip aynı yazma gönderildi, işlem baştan denenmedi.'
+              : null
       );
       return;
     }
@@ -280,11 +270,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 applyMember(res.data);
                 setCloudStatus('online');
               }
-            } else if (await findPending(id)) {
-              // Belge daha buluta yazılamadı (kuyrukta): oturumu KAPATMIYORUZ, aksi
-              // halde her sayfa yenilemede üye “yok” sayılıp dışarı atılırdı.
-              setCloudStatus('denied');
-              setCloudMessage('Üyeliğin bu cihazda bekliyor; bulut yazması sıraya alınmış durumda.');
             } else {
               // Document deleted by the admin -> sign out locally.
               await sessionStore.remove(SESSION_KEY);
@@ -358,108 +343,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, []);
 
-  /**
-   * Kuyruğu boşaltmayı dener. Yazma kabul edilir edilmez belge buluta geçer,
-   * oturum buluttan tazelenir ve sayı kendiliğinden sıfırlanır.
-   */
-  const flushPending = useCallback(
-    async (opts?: { onlyDue?: boolean }) => {
-      const res = await syncPending(
-        async entry => {
-          // Kuyrukta iki iş türü var: kendi belgesini yazma ve silinememiş belgeyi
-          // kaldırma. İkisi de aynı geri çekilme/vade mantığını paylaşır.
-          if (entry.kind === 'delete') {
-            const gone = await deleteMemberDoc(entry.email);
-            return gone.ok ? { ok: true } : { ok: false, reason: gone.reason, error: gone.error };
-          }
-          const doc = entry.doc as MemberDoc;
-          const out = await writeMembershipSelf(entry.authUid ? { ...doc, authUid: entry.authUid } : doc);
-          return out.ok ? { ok: true } : { ok: false, reason: out.reason, error: out.error };
-        },
-        opts
-      );
-      setPendingWrites(res.held);
-      if (res.pushed.length) {
-        const id = memberRef.current?.id;
-        if (id && res.pushed.includes(id)) {
-          const fresh = await fetchMemberDoc(id);
-          if (fresh.ok && fresh.data) applyMember(fresh.data);
-        }
-        setCloudStatus('online');
-        setCloudMessage('Üyeliğin buluta aktarıldı — artık diğer cihazlardan da görünecek.');
-        setMembersVersion(v => v + 1);
-      }
-      return { pushed: res.pushed, held: res.held };
-    },
-    [applyMember]
-  );
-  const flushRef = useRef<typeof flushPending | null>(null);
-  flushRef.current = flushPending;
-  const flushPendingNow = useCallback(() => flushPending({ onlyDue: false }), [flushPending]);
-
-  /**
-   * Kuyrukta BEKLETİLEN belge sonradan düzenlenirse kuyruk da tazelenir; aksi
-   * halde sırası geldiğinde eski sürüm yazılır ve kullanıcının son değişiklikleri
-   * buharlaşır. Kuyrukta olmayan (bulutla eşitlenmiş) üyeye dokunmayız.
-   */
-  const refreshPendingDoc = useCallback(async (next: MemberDoc, res?: { ok?: boolean; reason?: string; error?: string }) => {
-    if (res && res.ok) return false;
-    const queued = await findPending(next.email || next.id);
-    if (!queued) return false;
-    await enqueuePendingWrite(next, {
-      reason: res?.reason === 'offline' ? 'offline' : 'denied',
-      authUid: next.authUid || queued.authUid,
-      error: res?.error || queued.lastError,
-    });
-    return true;
-  }, []);
-
-  // Kuyruk doluysa kendini hatırlatır: açılışta, odaklanmada, çevrimiçi olma anında
-  // ve kuyruk boşalana dek dakikada bir. Kural yayınlandığı anda kullanıcıya iş düşmez.
-  useEffect(() => {
-    let cancelled = false;
-    void loadPending().then(list => {
-      if (!cancelled) setPendingWrites(list.length);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  useEffect(() => {
-    if (!pendingWrites) return;
-    const tick = () => void flushRef.current?.();
-    tick();
-    const timer = setInterval(tick, 60_000);
-    const web = Platform.OS === 'web' && typeof window !== 'undefined';
-    const onOnline = () => tick();
-    const onFocus = () => tick();
-    let sub: { remove?: () => void } | null = null;
-    if (web) {
-      window.addEventListener('online', onOnline);
-      window.addEventListener('focus', onFocus);
-    } else {
-      try {
-        sub = AppState.addEventListener('change', state => {
-          if (state === 'active') tick();
-        }) as unknown as { remove?: () => void };
-      } catch {
-        sub = null;
-      }
-    }
-    return () => {
-      clearInterval(timer);
-      if (web) {
-        window.removeEventListener('online', onOnline);
-        window.removeEventListener('focus', onFocus);
-      } else {
-        try {
-          sub?.remove?.();
-        } catch {
-          /* eski RN sürümü: abonelik zaten kendiliğinden düşüyor */
-        }
-      }
-    };
-  }, [pendingWrites]);
 
   const signUp = useCallback<MembershipContextValue['signUp']>(
     async input => {
@@ -551,32 +434,15 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         // create reddedilirse kuralın kabul ettiği alanlarla kısmi yazım.
         const created = await writeMembershipSelf(draft);
         if (!created.ok) {
-          // KALICI ÇÖZÜM: bulut yazması reddedildiğinde üyeliği bloke etmeyiz.
-          // Belge kuyruğa alınır, oturum bu cihazda açılır ve yazma kendini
-          // tekrar dener — engel kalktığı anda bulut gerçek kaynak olur.
-          // (Gerçekten ulaşılamazlık da aynı yoldan gider: veri kaybı yok.)
-          if (created.reason === 'denied' || created.reason === 'offline') {
-            await enqueuePendingWrite(draft, {
-              reason: created.reason,
-              authUid: authUid || undefined,
-              error: created.error,
-            });
-            setPendingWrites(p => p + 1);
-            applyMember(draft);
-            await sessionStore.set(SESSION_KEY, draft.id);
-            setCloudStatus(created.reason === 'denied' ? 'denied' : 'offline');
-            setCloudMessage(
-              created.reason === 'denied'
-                ? 'Üyeliğin bu cihazda açıldı. Bulut yazmasına henüz izin verilmiyor; sıra bekledikçe kendiliğinden gönderilecek.'
-                : 'Üyeliğin bu cihazda açıldı. Bağlantı gelince buluta kendiliğinden aktarılacak.'
-            );
-            setMembersVersion(v => v + 1);
-            return { ok: true };
-          }
-          // Başka bir nedenle yazılamadıysa Firebase hesabını da geri al (tekrarda EMAIL_EXISTS olmasın).
+          // Üyelik VERİSİ cihazda tutulmaz: yazma olmadan hesap da yarım bırakılmaz.
+          // Firebase hesabı geri alınır ki tekrar deneme `EMAIL_EXISTS`e dönmesin.
           if (authMode) await auth.deleteAccount();
           noteCloud(created);
-          setError(created.error);
+          setError(
+            created.reason === 'denied'
+              ? `${await membershipDeniedMessage(emailKey)} Kayıt açılmadı — cihazda da bir şey bırakılmadı.`
+              : created.error
+          );
           return { ok: false, reason: 'write' };
         }
         if (created.adopted || created.degraded) {
@@ -638,29 +504,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const missingDoc =
           !found.ok && authMode && (found.reason === 'notfound' || found.reason === 'denied');
         if (!found.ok && !missingDoc) {
-          // Bulut okunamıyorsa SON ÇARE cihazdaki kuyruk değil, önce kuyruğa bak:
-          // bu cihazda yazması bekletilen üye, bulut erişilemeden de giriş yapabilir.
-          const queued = await findPending(emailKey);
-          if (queued && (authMode || !isFirebaseAuthBundle(queued.doc.password)) &&
-              (authMode || verifyPassword(password, queued.doc.password))) {
-            if (queued.doc.status === 'banned' || queued.doc.status === 'suspended') {
-              setError('Hesabın yönetim tarafından askıya alınmış/yasaklanmış.');
-              return { ok: false, reason: queued.doc.status };
-            }
-            const stamp: Partial<MemberDoc> = { lastLoginAt: new Date().toISOString() };
-            await patchMemberDoc(queued.doc.id, stamp).catch(() => undefined);
-            applyMember({ ...queued.doc, ...stamp });
-            await sessionStore.set(SESSION_KEY, queued.doc.id);
-            setCloudStatus(found.reason === 'denied' ? 'denied' : 'offline');
-            setCloudMessage(
-              'Giriş bu cihazdaki bekleyen üyelik kaydından yapıldı — bulut yazması sıraya alınmıştı, kendini tekrar deniyor.'
-            );
-            setMembersVersion(v => v + 1);
-            return { ok: true };
-          }
           noteCloud(found);
           if (found.reason === 'offline')
-            setError('Firestore’a ulaşılamadı ve bu cihazda bekleyen bir kaydın yok. İnternet gelince tekrar dene.');
+            setError('Firestore’a ulaşılamadı — üyelik verisi cihazda tutulmadığı için çevrimdışı giriş yok. Bağlanınca tekrar dene.');
           else if (found.reason === 'denied')
             setError(await membershipDeniedMessage(emailKey));
           else setError(found.error);
@@ -688,22 +534,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           };
           const created = await writeMembershipSelf(draft);
           if (!created.ok) {
-            if (created.reason === 'denied' || created.reason === 'offline') {
-              await enqueuePendingWrite(draft, {
-                reason: created.reason,
-                authUid: authUid || undefined,
-                error: created.error,
-              });
-              setPendingWrites(p => p + 1);
-              applyMember(draft);
-              await sessionStore.set(SESSION_KEY, draft.id);
-              setCloudStatus(created.reason === 'denied' ? 'denied' : 'offline');
-              setCloudMessage(
-                'Üyelik belgen bu cihazda açıldı ve bulut yazması sıraya alındı — engel kalkınca kendiliğinden gönderilecek.'
-              );
-              setMembersVersion(v => v + 1);
-              return { ok: true };
-            }
             noteCloud(created);
             setError(created.error);
             return { ok: false, reason: created.reason };
@@ -808,11 +638,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       try {
         const res = await patchMemberDoc(current.id, patch as MemberDoc);
         if (!res.ok) {
-          if (await refreshPendingDoc(next, res)) {
-            applyMember(next);
-            setCloudMessage('Değişiklik bu cihazda uygulandı; bulut yazması bekletildiği için sıradaki denemede o da gidecek.');
-            return { ok: true };
-          }
           noteCloud(res);
           setError(res.error);
           return { ok: false, reason: res.reason };
@@ -823,7 +648,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setBusy(false);
       }
     },
-    [applyMember, noteCloud, refreshPendingDoc]
+    [applyMember, noteCloud]
   );
 
   const changePassword = useCallback<MembershipContextValue['changePassword']>(
@@ -880,16 +705,11 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         );
         const merged: MemberDoc = { ...current, password: sec, ...(claimUid ? { authUid: claimUid } : {}) };
         if (!res.ok) {
-          // Parola kuyruktaki belgede de güncellenmeli: aksi halde sıradaki bulut
-          // denemesi ESKİ parola/uid ile gider ve kullanıcı yeni parolayla giremez.
-          if (await refreshPendingDoc(merged, res)) {
-            applyMember(merged);
-            setCloudMessage('Parolan bu cihazda güncellendi; bulut yazması sıradaki denemede o da gönderecek.');
-            setError(null);
-            return { ok: true };
-          }
+          // Parola yazması yarım bırakılmaz: belge Firestore’da kalmaya devam eder,
+          // cihazda “yarı güncel” bir kopya oluşturulmaz — kullanıcı aynı işlemi
+          // tekrarladığında yine tek yerden (buluttan) okur.
           noteCloud(res);
-          setError(res.error);
+          setError(res.reason === 'denied' ? await membershipDeniedMessage(current.email) : res.error);
           return { ok: false, reason: res.reason };
         }
         applyMember(merged);
@@ -899,7 +719,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setBusy(false);
       }
     },
-    [applyMember, noteCloud, refreshPendingDoc]
+    [applyMember, noteCloud]
   );
 
   const deleteAccount = useCallback<MembershipContextValue['deleteAccount']>(
@@ -914,37 +734,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       try {
         const res = await deleteMemberDoc(current.id);
         if (!res.ok) {
-          // Belge hiç buluta yazılamadıysa silme de reddedilir: kuyruğu temizle,
-          // cihaz kaydını düşür. Bulutta kalan yetim belge kalırsa admin listesinde
-          // görünür ve oradan silinir — kullanıcıya “silemedin” dedirtmiyoruz.
-          const queued = await findPending(current.email || current.id);
-          if (queued || res.reason === 'denied' || res.reason === 'offline') {
-            // Kuyrukta bekleyen bir belgeydi: gereksiz yazmayı sil. Bulutta olan bir
-            // belge silinemediyse SİLME işini kuyruğa al — aksi halde “sildim” denen
-            // hesap bir sonraki kural yayınında geri çıkar.
-            if (queued) await clearPendingWrite(current.email || current.id);
-            else
-              await enqueuePendingDelete(current.email || current.id, {
-                reason: res.reason === 'offline' ? 'offline' : 'denied',
-                error: res.error,
-              });
-            setPendingWrites(p => (queued ? Math.max(0, p - 1) : p + 1));
-            if (auth.isAuthConfigured()) await auth.deleteAccount();
-            await signOut();
-            setCloudMessage(
-              queued
-                ? 'Bekleyen üyelik kaydın silindi (bulutta belge oluşmamıştı).'
-                : 'Hesap bu cihazdan silindi; buluttaki belge yazma izni olunca kalıcı olarak silinecek.'
-            );
-            setMembersVersion(v => v + 1);
-            return { ok: true };
-          }
-          noteCloud(res);
           setError(res.error);
           return { ok: false, reason: res.reason };
         }
-        await clearPendingWrite(current.email || current.id);
-        setPendingWrites(p => Math.max(0, p - 1));
         // Firebase Auth açıksa hesabı oradan da sil (e-posta tekrar kayıtta kullanılabilir).
         if (auth.isAuthConfigured()) await auth.deleteAccount();
         await signOut();
@@ -1026,7 +818,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   }, [catalog, results, profileId]);
 
   /** Mirrors counters to the member document (best effort, debounced). */
-  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reportTestCompleted = useCallback<MembershipContextValue['reportTestCompleted']>(
     (courseId, r) => {
       const current = memberRef.current;
@@ -1043,22 +834,17 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         },
       };
       applyMember(next);
-      if (syncTimer.current) clearTimeout(syncTimer.current);
-      syncTimer.current = setTimeout(() => {
-        const payload = {
-          testsCompleted: next.testsCompleted,
-          questionsSolved: next.questionsSolved,
-          netSum: next.netSum,
-          courseUsage: next.courseUsage,
-        } as unknown as MemberDoc;
-        patchMemberDoc(next.id, payload).then(res => {
-          if (!res.ok) {
-            // Non-fatal: local counters already include this test, the mirror is
-            // best-effort. Surface it in the cloud banner instead.
-            noteCloud(res);
-          }
-        });
-      }, 900);
+      // SAYAÇLAR BEKLETİLMEZ: test biter bitmez Firestore'a yazılır (debounce yok).
+      // Kasa yalnızca buluttaki belgeyi gösterir; cihazdaki sayaç kaynak değildir.
+      const payload = {
+        testsCompleted: next.testsCompleted,
+        questionsSolved: next.questionsSolved,
+        netSum: next.netSum,
+        courseUsage: next.courseUsage,
+      } as unknown as MemberDoc;
+      void patchMemberDoc(next.id, payload).then(res => {
+        if (!res.ok) noteCloud(res);
+      });
     },
     [applyMember, noteCloud]
   );
@@ -1254,8 +1040,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       adminSetStatus,
       adminDeleteMember,
       membersVersion,
-      pendingWrites,
-      flushPendingNow,
     }),
     [
       ready,
@@ -1290,8 +1074,6 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       adminSetStatus,
       adminDeleteMember,
       membersVersion,
-      pendingWrites,
-      flushPendingNow,
     ]
   );
 

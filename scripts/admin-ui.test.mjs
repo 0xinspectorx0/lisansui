@@ -314,11 +314,9 @@ console.log('\x1b[1m[5] ayarlar ekranı — Firebase anahtarı kullanıcıdan is
   ok(!/Bu cihazda kayıtlı eski anahtar/.test(vis), 'cihaz anahtarı yoksa o satır da görünmüyor');
   ok(!vis.includes('Erişim tanısı ve kurallar'), 'tanı bölümü panelden kaldırıldı');
   ok(!vis.includes('Yazma sınaması') && !vis.includes('Raporu göster'), 'sınama/rapor satırları kaldırıldı');
-  ok(vis.includes('Bulut kuyruğu'), 'kuyruk bölümü görünüyor');
-  ok(vis.includes('üyelik yazması bekliyor'), 'kuyruk satırı sayıyla birlikte basılıyor');
-  ok(/Bekleyen bulut yazması yok/.test(fs.readFileSync(setFile, 'utf8')), 'kuyruk boşken söylenecek net durum metinde var');
-  ok(vis.includes('Şimdi dene'), 'kuyruğu zorlama düğmesi görünüyor');
-  ok(vis.includes('üyelik kodu: member-'), 'hangi derlemede olduğu satırda yazıyor');
+  ok(!vis.includes('Bulut kuyruğu') && !vis.includes('Şimdi dene'), 'bekletme/kuyruk arayüzü kaldırıldı — yazma anlık');
+  ok(vis.includes('cihazda kopya tutulmaz'), 'verinin tek kaynağının Firestore olduğu satırda yazıyor');
+  ok(vis.includes('kod member-'), 'hangi derlemede olduğu satırda yazıyor');
 }
 
 cleanup();

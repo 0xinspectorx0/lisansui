@@ -137,10 +137,31 @@ service cloud.firestore {
         && resource.data.email.lower() == sessionEmail();
     }
 
+    /**
+     * Kendi üyelik belgesini oluşturma.
+     *
+     * Oturum varsa e-posta eşleşmesi şarttır. Oturum YOKSA (E-posta/Parola
+     * sağlayıcısı kapalı ya da cihazda anahtar çözülemedi) create yine de
+     * geçmeli — aksi halde yeni üyelik HİÇBİR ZAMAN Firestore'a yazılamaz ve
+     * uygulamaya veriyi cihazda bekletmek kalır; o ise veri kaybı + çift kayıt
+     * demek. Kimlik burada belge yolunun kendisidir: \`memberId == email\`,
+     * \`memberCreateOk\` kuralın istediği tam biçimi (verifier/salt/iterations...)
+     * ve \`role in [user, editor]\` + \`status in [active, pending]\` denetimi
+     * zaten veriyor; \`authUidOk\` başkasının uid'sini yazmayı engelliyor.
+     *
+     * KİLİT (meta/membership_lockdown) açıkken kimliksiz create YOK: kilit
+     * tam da "yeni kayıt akışı kapansın" demek. Kilit kapalıyken uygulama
+     * tarafında kayıt zaten admin ayarıyla (\`registrationOpen\`) ayrıca
+     * kapatılabiliyor.
+     */
     function selfCreateOk(memberId) {
       return sessionEmail() != ''
-        && memberId == sessionEmail()
-        && request.resource.data.email.lower() == sessionEmail();
+        ? (memberId == sessionEmail()
+            && request.resource.data.email.lower() == sessionEmail())
+        : (!lockdownOn()
+            && memberId == request.resource.data.email.lower()
+            && request.resource.data.role == 'user'
+            && request.resource.data.status in ['active', 'pending']);
     }
 
     function selfUpdateOk(memberId) {
@@ -429,4 +450,4 @@ service cloud.firestore {
 `;
 
 /** Kopya kaç satırlık bir metin taşıyor (panel özeti için). */
-export const FIRESTORE_RULES_LINES = 420;
+export const FIRESTORE_RULES_LINES = 441;

@@ -543,7 +543,7 @@ export const AdminSettingsScreen: React.FC = () => {
           <AdminRow
             icon="person-badge-outline"
             title="Üyelik koleksiyonu"
-            subtitle="Kayıtlar ve panel listesi bu yolu kullanır"
+            subtitle={`Kayıtlar ve panel listesi bu yolu kullanır · üyelikler yalnızca Firestore’da, cihazda kopya tutulmaz (kod ${membershipBuildLabel()})`}
             right={
               <Text style={{ fontSize: 11, fontWeight: '800', color: colors.textMuted }} numberOfLines={1}>
                 {collectionPath('memberships')}
@@ -600,36 +600,6 @@ export const AdminSettingsScreen: React.FC = () => {
                 disabled={probe.busy}
                 tone={probe.tone === 'danger' ? 'danger' : probe.tone === 'success' ? 'success' : 'primary'}
                 onPress={() => void runProbe()}
-              />
-            }
-          />
-        </AdminCard>
-
-        {/* Bulut kuyruğu — reddedilen üyelik yazmaları burada bekler ve kendini tekrar dener */}
-        <AdminSectionTitle
-          label="Bulut kuyruğu"
-          hint={`Firestore yazmasına izin verilmeyen üyelikler cihazda bekletilir; uygulama yazmayı kendiliğinden yeniden dener. Engel kalktığı anda kuyruk tek dokunuşa gerek kalmadan boşalır. (Bu cihazdaki üyelik kodu: ${membershipBuildLabel()})`}
-        />
-        <AdminCard>
-          <AdminRow
-            icon={membership.pendingWrites ? 'cloud-upload-outline' : 'cloud-done-outline'}
-            title={
-              membership.pendingWrites
-                ? `${membership.pendingWrites} üyelik yazması bekliyor`
-                : 'Bekleyen bulut yazması yok'
-            }
-            subtitle={
-              membership.pendingWrites
-                ? 'Üyelikler bu cihazda açık ve kullanılabilir; buluta geçtiğinde kendini yeniler. İstersen şimdi zorlayabilirsin.'
-                : 'Üyelikler bulutla eşitlenmiş durumda.'
-            }
-            right={
-              <AdminButton
-                small
-                tone="neutral"
-                label="Şimdi dene"
-                disabled={!membership.pendingWrites}
-                onPress={() => void membership.flushPendingNow()}
               />
             }
           />
