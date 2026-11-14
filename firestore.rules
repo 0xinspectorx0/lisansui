@@ -4,10 +4,16 @@ rules_version = '2';
  * KPSS Asistanı — Firestore kuralları (yeni kurulum ve eski kurulum birlikte)
  * ===========================================================================
  * İki kimlik modu vardır (lib/MembershipContext.tsx bunu otomatik seçer):
- *   • Firebase Auth (önerilen): `.env.local` içinde EXPO_PUBLIC_FIREBASE_API_KEY
- *     tanımlıysa her istek `Authorization: Bearer <idToken>` taşır (lib/authClient.ts
- *     Identity Toolkit REST kullanır; ek paket yok). Parola Firestore'a HİÇ
- *     yazılmaz; belgede `algo: 'firebase-auth'` + `authUid` işaretçisi durur.
+ *   • Firebase Auth (önerilen): anahtar tanımlıysa (config/firebaseApp.ts ya da
+ *     EXPO_PUBLIC_FIREBASE_API_KEY) her istek `Authorization: Bearer <idToken>`
+ *     taşır (lib/authClient.ts Identity Toolkit REST kullanır; ek paket yok). Parola
+ *     Firestore'a HİÇ yazılmaz; belgede `algo: 'firebase-auth'` + `authUid` işaretçisi
+ *     durur. Token hedef projesinden değilse başlık hiç gönderilmez (lib/firestoreApi.ts),
+ *     böylece tek bir bayat anahtar tüm istekleri kilitleyemez.
+ *
+ * Bu dosyanın bir kopyası uygulamada durur (config/firestoreRulesCopy.ts) ki panel
+ * “Kuralları kopyala” ile tek dokunuşta Console'a yapıştırabilsin:
+ *   güncellemek için  →  npm run sync:rules   (test:auth bayat kopyayı yakalar).
  *   • Yerel mod (anahtar yoksa): üyelikler `memberships/{e-posta}` belgesinde,
  *     parola cihazda PBKDF2-SHA256 ile hash'lenir (lib/crypto.ts).
  *

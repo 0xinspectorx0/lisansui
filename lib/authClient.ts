@@ -276,6 +276,148 @@ export async function signOut(): Promise<void> {
   await persist(null);
 }
 
+/* ------------------------------------------------- token'ın projesi (koruma) */
+
+const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** base64url → UTF-8 metin (atob/Hermes farkı gözetmeyen küçük çözümleyici). */
+function b64urlDecode(input: string): string {
+  const clean = String(input || '').replace(/-/g, '+').replace(/_/g, '/');
+  const bytes: number[] = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const ch of clean) {
+    if (ch === '=') break;
+    const idx = B64_CHARS.indexOf(ch);
+    if (idx < 0) continue;
+    buffer = (buffer << 6) | idx;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+    }
+  }
+  let text = '';
+  for (let i = 0; i < bytes.length; ) {
+    const c = bytes[i];
+    if (c < 0x80) {
+      text += String.fromCharCode(c);
+      i += 1;
+    } else if (c < 0xe0) {
+      text += String.fromCharCode(((c & 31) << 6) | (bytes[i + 1] & 63));
+      i += 2;
+    } else if (c < 0xf0) {
+      text += String.fromCharCode(((c & 15) << 12) | ((bytes[i + 1] & 63) << 6) | (bytes[i + 2] & 63));
+      i += 3;
+    } else {
+      const cp =
+        ((c & 7) << 18) | ((bytes[i + 1] & 63) << 12) | ((bytes[i + 2] & 63) << 6) | (bytes[i + 3] & 63);
+      const v = cp - 0x10000;
+      text += String.fromCharCode(0xd800 + (v >> 10), 0xdc00 + (v & 1023));
+      i += 4;
+    }
+  }
+  return text;
+}
+
+export interface IdTokenInfo {
+  /** `iss: https://securetoken.google.com/<projectId>` — okunamazsa null. */
+  projectId: string | null;
+  email: string;
+  uid: string;
+  exp: number | null;
+}
+
+/** İmzayı DOĞRULAMAZ — yalnızca içindeki alanları okur (tanı/eşleştirme için yeterli). */
+export function decodeIdToken(token: string): IdTokenInfo {
+  const empty: IdTokenInfo = { projectId: null, email: '', uid: '', exp: null };
+  const parts = String(token || '').split('.');
+  if (parts.length < 2) return empty;
+  try {
+    const payload = JSON.parse(b64urlDecode(parts[1])) as Record<string, unknown>;
+    const iss = String(payload.iss || '');
+    const fromIss = iss.match(/securetoken\.google\.com\/([^/]+)/);
+    const pid = fromIss
+      ? fromIss[1]
+      : typeof payload.project_id === 'string'
+        ? payload.project_id
+        : null;
+    return {
+      projectId: pid || null,
+      email: String(payload.email || ''),
+      uid: String(payload.user_id || payload.local_id || ''),
+      exp: typeof payload.exp === 'number' ? payload.exp : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/** Oturum token'ı + projesi (ağ çağrısı YOK — depodaki token çözülür). */
+export async function sessionIdTokenInfo(): Promise<IdTokenInfo & { token: string | null }> {
+  const session = await restoreSession().catch(() => null);
+  const token = session?.idToken || null;
+  if (!token) return { token: null, projectId: null, email: '', uid: '', exp: null };
+  return { token, ...decodeIdToken(token) };
+}
+
+/** Firestore hedefiyle oturum token'ının projesi farklı mı? */
+export function tokenProjectMismatches(projectId: string | null): boolean {
+  if (!projectId) return false;
+  return projectId !== firestoreTarget().projectId;
+}
+
+let foreignCheckedToken: string | null = null;
+let foreignFlag = false;
+let foreignNotice = false;
+
+/** Yanlış projeden token tespit edildiyse istekler kimliksiz gönderilir (eski davranış). */
+export async function isForeignSessionToken(): Promise<boolean> {
+  const { token, projectId } = await sessionIdTokenInfo();
+  if (!token) return false;
+  if (foreignCheckedToken === token) return foreignFlag;
+  foreignCheckedToken = token;
+  foreignFlag = tokenProjectMismatches(projectId);
+  if (foreignFlag) foreignNotice = true;
+  return foreignFlag;
+}
+
+/** Panel/akışlar için: “yabancı token yakalandı” bayrağını oku ve temizle. */
+export function consumeForeignTokenNotice(): boolean {
+  const v = foreignNotice;
+  foreignNotice = false;
+  return v;
+}
+
+/**
+ * Cihazda kayıtlı ESKİ anahtar başka bir projeye aitse oturumu kapatır ve o kaydı
+ * siler; böylece depoya gömülü doğru config devreye girer. Kullanıcıdan bir şey
+ * istenmez — kendi kendine iyileşen tek durum budur.
+ */
+export async function healForeignAuthProject(): Promise<{ healed: boolean; note?: string }> {
+  const { token, projectId } = await sessionIdTokenInfo();
+  if (!token || !tokenProjectMismatches(projectId)) return { healed: false };
+  const cfg = resolveAuthConfig();
+  await signOut();
+  let keyDropped = false;
+  if (cfg?.source === 'device') {
+    await clearDeviceApiKey();
+    resetAuthConfigCache();
+    keyDropped = true;
+  }
+  foreignCheckedToken = null;
+  foreignFlag = false;
+  return {
+    healed: true,
+    note: keyDropped
+      ? `Token “${projectId}” projesindendi; cihazdaki eski anahtar kaydı silindi, depodaki config kullanılıyor.`
+      : `Token “${projectId}” projesindendi; oturum kapatıldı (anahtar .env/config kaynaklı — projeyi kontrol et).`,
+  };
+}
+
+/** Test/panel desteği: oturumun depolandığı anahtar. */
+export const AUTH_SESSION_KEY = SESSION_KEY;
+
 async function refresh(session: AuthSession): Promise<AuthSession | null> {
   const cfg = resolveAuthConfig();
   if (!cfg) return null;

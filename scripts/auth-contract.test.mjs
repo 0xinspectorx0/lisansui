@@ -241,7 +241,7 @@ ok(/auth\.updatePassword\(next0\)/.test(ctx), 'changePassword: Firebase’de gü
 ok(/auth\.signIn\(current\.email, current0\)/.test(ctx), 'changePassword: mevcut parola ile taze oturum');
 ok(/if \(auth\.isAuthConfigured\(\)\) await auth\.deleteAccount\(\);/.test(ctx), 'deleteAccount: Firebase hesabı da siliniyor');
 ok(/Authorization: `Bearer \$\{token\}`/.test(api), 'firestoreApi: idToken bearer olarak ekleniyor');
-ok(/const token = await currentIdToken\(\);/.test(api), 'firestoreApi: token yenileme dahil alınıyor');
+ok(/const token = await auth\.currentIdToken\(\);/.test(api), 'firestoreApi: token yenileme dahil alınıyor');
 ok(ctx.includes('authMode: auth.isAuthConfigured(),') && ctx.includes('sendPasswordReset,'), 'context: authMode + sendPasswordReset dışa açık');
 // Anahtar SONRADAN eklendiğinde eski (yerel PBKDF2) üyeler dışarıda kalmamalı.
 ok(/account\.code === 'EMAIL_NOT_FOUND' \? await fetchMemberByEmail\(emailKey\) : null/.test(ctx), 'signIn: Firebase hesabı olmayan eski üye belgeden aranıyor');
@@ -313,6 +313,7 @@ console.log('\x1b[1m[13] setup-firestore --api-key (gerçek yazma, geçici dizin
 const os = await import('node:os');
 const nodePath = await import('node:path');
 const cp = await import('node:child_process');
+const cp2 = cp;
 const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'lisansui-setup-'));
 try {
   fs.mkdirSync(nodePath.join(tmp, 'config'), { recursive: true });
@@ -336,6 +337,175 @@ try {
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
+
+
+console.log('\x1b[1m[14] erişim tanısı + yabancı projeli token koruması\x1b[0m');
+const b64url = obj => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
+const mkJwt = payload => `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url(payload)}.sig`;
+const jwt = mkJwt({
+  iss: 'https://securetoken.google.com/kpssasistani-01',
+  email: 'uyeler@例え.jp',
+  user_id: 'uid1234567890',
+  exp: Math.floor(Date.now() / 1000) + 3600,
+});
+const info = A.decodeIdToken(jwt);
+ok(info.projectId === 'kpssasistani-01', 'decodeIdToken: iss üzerinden proje kimliği okunuyor', JSON.stringify(info));
+ok(info.uid === 'uid1234567890', 'decodeIdToken: uid okunuyor');
+ok(info.email === 'uyeler@例え.jp', 'decodeIdToken: UTF-8 taban64 çözümlemesi (atob gerekmez)', info.email);
+ok(A.decodeIdToken('bozuk').projectId === null && A.decodeIdToken('').email === '', 'bozuk token sessizce null döner (kriz çıkarmaz)');
+ok(A.tokenProjectMismatches('baska-proje') === true && A.tokenProjectMismatches('kpssasistani-01') === false, 'hedef projeyle karşılaştırma');
+ok(A.tokenProjectMismatches(null) === false, 'proje okunamadığında “uyumsuz” denmiyor (yanlış yere ceza kesme)');
+
+// --- oturum deposuna sahte kimlik yaz (async-storage shim'i globalThis.__store kullanır)
+const putSession = (projectId, extra = {}) =>
+  mem.set(A.AUTH_SESSION_KEY, JSON.stringify({
+    uid: 'uid1234567890',
+    email: 'a@b.co',
+    idToken: mkJwt({
+      iss: `https://securetoken.google.com/${projectId}`,
+      email: 'a@b.co',
+      user_id: 'uid1234567890',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      ...extra,
+    }),
+    refreshToken: 'rt-x',
+    expiresAt: Date.now() + 3_600_000,
+  }));
+const dropSession = () => mem.delete(A.AUTH_SESSION_KEY);
+
+const D = await import('/tmp/accessDiagBundle.mjs');
+const F = await import('/tmp/firestoreApiBundle.mjs');
+
+// sahte Firestore: URL + başlık kaydı, durum kodları senaryoya göre
+let fsMode = {};
+const fsLog = [];
+const realFetch2 = globalThis.fetch;
+globalThis.fetch = async (url, init) => {
+  const u = String(url);
+  fsLog.push({ url: u, headers: init?.headers || {} });
+  const key = u.includes('/meta/membership_lockdown')
+    ? 'lockdown'
+    : u.includes('/memberships')
+      ? 'membership'
+      : 'content';
+  const status = fsMode[key] ?? 200;
+  if (status === 'network') throw new Error('ECONNRESET');
+  return { ok: status < 400, status, json: async () => ({}), text: async () => '{}' };
+};
+
+try {
+  dropSession();
+  fsMode = { content: 403, membership: 403, lockdown: 403 };
+  let d = await D.diagnoseMembershipAccess();
+  ok(d.cause === 'rules-not-published', 'her şey 403 → kurallar hiç yayınlanmamış', d.cause);
+  ok(/yayınlanmamış/.test(d.headline), 'başlık “yayınlanmamış” diyor', d.headline);
+  ok(d.steps.length > 0 && /Kuralları kopyala/.test(d.steps[0]), 'ilk adım paneldeki kopyalama düğmesine götürüyor', d.steps[0]);
+
+  fsMode = { content: 200, membership: 403, lockdown: 404 };
+  d = await D.diagnoseMembershipAccess();
+  ok(d.cause === 'rules-outdated', 'içerik okunuyor, üyelik okunamıyor → yayındaki kural ESKİ', d.cause);
+  ok(/ESKİ/.test(d.headline), 'başlık bayat kuralları işaret ediyor', d.headline);
+
+  fsMode = { content: 200, membership: 403, lockdown: 200 };
+  d = await D.diagnoseMembershipAccess();
+  ok(d.cause === 'lockdown-no-admin', 'kilit AÇIK + yönetici değil → panel işlemleri reddedilir', d.cause);
+  ok(/membership_lockdown/.test(d.headline), 'başlık kilidi işaret ediyor', d.headline);
+  ok(d.steps.some(x => /belgesini silmek/.test(x)), 'kilidi geri alma adımı da anlatılıyor');
+
+  fsMode = { content: 200, membership: 401, lockdown: 404 };
+  d = await D.diagnoseMembershipAccess();
+  ok(d.cause === 'foreign-auth-project', '401 → kimlik token’ı Firestore kabul etmedi', d.cause);
+
+  fsMode = { content: 'network', membership: 200, lockdown: 200 };
+  d = await D.diagnoseMembershipAccess();
+  ok(d.cause === 'offline', 'ağ yoksa “kural engelledi” DENMİYOR', d.cause);
+  ok(/bağlant/i.test(d.steps[0]), 'ağ çözümü öneriliyor', d.steps[0]);
+
+  fsMode = { content: 200, membership: 200, lockdown: 404 };
+  d = await D.diagnoseMembershipAccess();
+  ok(d.cause === 'shape-rejected', 'okuma açık + yazma yoksa biçim/kural farkına bakılıyor', d.cause);
+  ok(d.steps.every(x => !/anahtar.*yapıştır|API anahtarı gir/i.test(x)), 'tanı adımları kullanıcıdan anahtar istemiyor', JSON.stringify(d.steps));
+
+  // --- firestoreApi: yabancı projeden token GÖNDERİLMEZ (hedefin kendi token’ı gider)
+  // Not: her senaryo taze modül örneğiyle çalışır — authClient oturumu bellekte
+  // tuttuğu için aynı örnek üzerinden oturum değiştirmek yanıltıcı olur.
+  const freshF = async () => await import(`/tmp/firestoreApiBundle.mjs?v=${Date.now()}-${Math.random()}`);
+
+  dropSession();
+  let fx = await freshF();
+  fsLog.length = 0;
+  await fx.probeCloud();
+  ok(!fsLog.some(l => l.headers.Authorization), 'oturum yok → Authorization yok');
+
+  putSession('kpssasistani-01');
+  fx = await freshF();
+  fsLog.length = 0;
+  await fx.probeCloud();
+  ok(
+    fsLog.some(l => /^Bearer /.test(String(l.headers.Authorization || ''))),
+    'token hedef projesinden → başlık ekleniyor',
+    JSON.stringify(fsLog.map(l => Object.keys(l.headers)))
+  );
+
+  dropSession();
+  putSession('baska-proje');
+  fx = await freshF();
+  fsLog.length = 0;
+  await fx.probeCloud();
+  const foreignSent = fsLog.some(l => /^Bearer /.test(String(l.headers.Authorization || '')));
+  ok(!foreignSent, 'token BAŞKA projeden → istek kimliksiz gidiyor (401 zinciri yerine eski davranış)', JSON.stringify(fsLog.map(l => Object.keys(l.headers))));
+  ok(fx.consumedForeignTokenNotice() === true, 'yabancı token yakalaması üst katmana bildiriliyor');
+  ok(!/Authorization/.test(JSON.stringify(fsLog.map(l => Object.keys(l.headers)))), 'yabancı senaryoda hiçbir isteğe başlık sızmıyor');
+
+  // --- otomatik iyileşme: cihazdaki eski anahtar + yabancı oturum
+  dropSession();
+  await A.setDeviceApiKey('AIzaDEV-KEY_0123456789abcd');
+  A.resetAuthConfigCache();
+  await A.ensureAuthConfigLoaded();
+  putSession('baska-proje');
+  ok(await A.isForeignSessionToken() === true, 'cihaz anahtarı yabancı projeden token veriyor → yakalandı');
+  const heal = await A.healForeignAuthProject();
+  ok(heal.healed === true && /silindi/.test(heal.note || ''), 'heal: cihaz kaydı silindi + not verildi', JSON.stringify(heal));
+  ok((await A.readDeviceApiKey()) === null, 'heal: cihazdaki eski anahtar artık yok');
+  ok((await A.currentSession()) === null, 'heal: yabancı oturum kapatıldı');
+  A.resetAuthConfigCache();
+  await A.ensureAuthConfigLoaded();
+  ok(A.resolveAuthConfig()?.source === 'env', 'heal sonrası env/config değeri devrede', String(A.resolveAuthConfig()?.source));
+
+  // --- kaynağa bakış: reddedilen yazma artık tanıyla konuşuyor
+  ok(
+    /diagnoseMembershipAccess\(email\)/.test(ctx) && /membershipDeniedMessage\(emailKey\)/.test(ctx),
+    'context: reddedilen üyelik yazması tanı soruyor'
+  );
+  ok(!/firestore\.rules yayınlanmamış olabilir \(npm run deploy:rules/.test(ctx), 'context: kör “deploy:rules” uyarısı kaldırıldı');
+  ok(/await auth\.isForeignSessionToken\(\)/.test(ctx), 'signUp: açılan hesabın projesi yazmadan önce doğrulanıyor');
+  ok(/healForeignAuthProject\(\)/.test(ctx), 'context: yabancı projeli cihaz kaydı açılışta temizleniyor');
+  ok(/if \(await auth\.isForeignSessionToken\(\)\) return \{\};/.test(apiSrc), 'firestoreApi: yabancı token başlığa konmuyor');
+  const panel2 = fs.readFileSync('screens/AdminSettingsScreen.tsx', 'utf8');
+  ok(/copyText\(FIRESTORE_RULES_TEXT\)/.test(panel2), 'panel: kuralları tek dokunuşla panoya kopyalama var');
+  ok(/diagnoseMembershipAccess\(\)/.test(panel2), 'panel: “Tanı” düğmesi tanının kendisini çağırıyor');
+  ok(/Neden engellendi\?/.test(panel2), 'panel: sorunun başlığı kullanıcı dilinde');
+} finally {
+  globalThis.fetch = realFetch2;
+  dropSession();
+}
+
+console.log('\x1b[1m[15] firestore.rules kopyası ve alan sözleşmesi\x1b[0m');
+const RC = await import('/tmp/rulesCopyBundle.mjs');
+const rulesRaw = fs.readFileSync('firestore.rules', 'utf8');
+ok(RC.FIRESTORE_RULES_TEXT === rulesRaw, 'config/firestoreRulesCopy.ts = firestore.rules (bayt bayt)');
+ok(RC.FIRESTORE_RULES_LINES === rulesRaw.split('\n').length, 'satır sayısı paneldeki özetle aynı');
+const sync = cp2.execFileSync(process.execPath, ['scripts/sync-rules-copy.mjs', '--check'], { encoding: 'utf8' });
+ok(/güncel/.test(sync), 'npm run sync:rules --check temiz geçiyor');
+const required = (rulesRaw.match(/data\.keys\(\)\.hasAll\(\[([\s\S]*?)\]\)/) || [])[1] || '';
+const requiredKeys = required.split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean);
+ok(requiredKeys.length > 15, `kural ${requiredKeys.length} zorunlu alan istiyor`);
+const membershipSrc = fs.readFileSync('lib/membership.ts', 'utf8');
+const mtfStart = membershipSrc.indexOf('export function memberToFields');
+const written = membershipSrc.slice(mtfStart, membershipSrc.indexOf('\n}', mtfStart));
+const writtenKeys = new Set((written.match(/^\s{4}([A-Za-z][A-Za-z0-9]*):/gm) || []).map(x => x.trim().replace(/:$/, '')));
+const missing = requiredKeys.filter(k => !writtenKeys.has(k));
+ok(missing.length === 0, 'uygulamanın yazdığı alanlar kuralın istediği listeyi kapsıyor', missing.join(', '));
 
 console.log(`\n\x1b[1m${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass}/${pass + fail} kontrol\x1b[0m\n`);
 process.exit(fail ? 1 : 0);
