@@ -38,8 +38,8 @@ create table if not exists public.membership_policy (
   "enforce"            boolean not null default false,
   "freeTestsPerCourse" int     not null default 1 check ("freeTestsPerCourse" between 0 and 100),
   "defaultTrialDays"   int     not null default 7   check ("defaultTrialDays" between 0 and 3650),
-  "cloudVip"           boolean not null default false,
-  "cloudMembers"       boolean not null default false,
+  "cloudVip"           boolean not null default true,
+  "cloudMembers"       boolean not null default true,
   "membershipLockdown" boolean not null default false,
   "contentLock"        boolean not null default false,
   "schemaVersion"      int     not null default 1 check ("schemaVersion" = 1),
@@ -780,10 +780,16 @@ begin
     if v_cols is null or v_sets is null then
       return jsonb_build_object('status', 400, 'error', 'nothing writable in document');
     end if;
-    execute 'insert into public.members (' || v_cols || ') select ' || v_cols
-         || ' from jsonb_populate_record(null::public.members, $1) x'
-         || ' on conflict ("email") do update set ' || v_sets
-      using v_doc;
+    if kpss_session_email() = '' and p_mode = 'replace' then
+      execute 'insert into public.members (' || v_cols || ') select ' || v_cols
+           || ' from jsonb_populate_record(null::public.members, $1) x'
+        using v_doc;
+    else
+      execute 'insert into public.members (' || v_cols || ') select ' || v_cols
+           || ' from jsonb_populate_record(null::public.members, $1) x'
+           || ' on conflict ("email") do update set ' || v_sets
+        using v_doc;
+    end if;
     return jsonb_build_object('status', 200, 'name', p_path);
   end if;
 

@@ -692,8 +692,8 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         membership: {
           enforce: p.enforce,
           freeTestsPerCourse: p.freeTestsPerCourse,
-          cloudVip: p.cloudVip,
-          cloudMembers: p.cloudMembers,
+          cloudVip: true,
+          cloudMembers: true,
           defaultTrialDays: p.defaultTrialDays,
           requireApproval: p.requireApproval,
         },

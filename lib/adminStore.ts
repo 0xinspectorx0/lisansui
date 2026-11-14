@@ -29,7 +29,7 @@ export const ALL_COURSE_IDS: CourseId[] = [
 
 export type VipPlan = 'free' | 'monthly' | 'yearly' | 'lifetime';
 export type AdminRole = 'owner' | 'admin' | 'editor' | 'user';
-export type UserStatus = 'active' | 'suspended' | 'banned';
+export type UserStatus = 'active' | 'pending' | 'suspended' | 'banned';
 
 export interface AdminUser {
   id: string;
