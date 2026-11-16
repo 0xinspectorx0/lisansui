@@ -228,3 +228,8 @@ Hap bilgilerin de açık cihazlarda canlı yenilenmesi için mevcut projelerde a
 kullanılamazsa uygulama öne geldiğinde veya bağlantı yeniden kurulduğunda bulutu kontrol eder.
 `supabase/migrations/0006_fix_content_delete.sql` dosyası da mevcut projeye uygulanmalıdır.
 Yeni hap bilgi düzenlemeleri otomatik gönderilir, başarısız yazımlar yeniden denenir.
+
+Supabase `DELETE requires a WHERE clause` hatasını önlemek için mevcut projelerde
+`supabase/migrations/0007_safeupdate_tips.sql` dosyasını SQL Editor'de çalıştırın.
+Bu migration 0006'daki hap bilgi yazma düzeltmelerini de içerir; Realtime için
+0005 ayrıca uygulanmalıdır. İşlem mevcut hap bilgileri silmez.
