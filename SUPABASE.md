@@ -223,3 +223,9 @@ bildirimiyle açık cihazlarda yeniden okunur; bağlantı kurulduğunda ve uygul
 kontrol eder. Değişiklikler yalnızca sunucuya başarıyla kaydedildikten sonra
 başka cihazlara ulaşır. Devam eden sınavın soru listesi değiştirilmez. Yönetici
 cihazındaki kaydedilmemiş veya başarısız taslaklar korunur.
+
+Hap bilgilerin de açık cihazlarda canlı yenilenmesi için mevcut projelerde ayrıca
+`supabase/migrations/0005_tips_realtime.sql` dosyasını çalıştırın. Realtime
+kullanılamazsa uygulama öne geldiğinde ve 30 saniyede bir bulutu kontrol eder.
+Yönetici ekranında bulut yazma hatası ve yeniden deneme gösterilir. Eski bir yerel
+hap bilgi taslağı elle buluta gönderilebilir; bu işlem tüm bulut listesini değiştirir.

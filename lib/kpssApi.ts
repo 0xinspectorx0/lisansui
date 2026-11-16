@@ -255,17 +255,20 @@ export async function buildGeneralMixedExam(
  * Returns the RAW (cloud/seed) tip list. Admin overrides are applied by the
  * consumer (AppContext) so the untouched source stays addressable for resets.
  */
-export async function fetchLiveDailyTips(): Promise<string[]> {
+/** null means the cloud could not be read; [] is an authoritative empty list. */
+export async function fetchCloudDailyTips(): Promise<string[] | null> {
   try {
     const read = await readDocument('daily_tips/main');
-    if (!read.ok) throw new Error(read.error);
+    if (!read.ok) return null;
     const values = ((read.data as any)?.list?.arrayValue?.values || []) as any[];
-    const tips = values
+    return values
       .map((v: any) => String(v?.stringValue || '').trim())
-      .filter((s: string) => s.length > 3);
-    if (tips.length > 0) return tips;
+      .filter((s: string) => s.length > 0);
   } catch {
-    // Offline fallback
+    return null;
   }
-  return INITIAL_DAILY_TIPS;
+}
+
+export async function fetchLiveDailyTips(): Promise<string[]> {
+  return (await fetchCloudDailyTips()) ?? INITIAL_DAILY_TIPS;
 }

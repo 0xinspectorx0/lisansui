@@ -21,7 +21,7 @@ import {
   TopicMeta,
 } from './types';
 import {
-  fetchLiveDailyTips,
+  fetchCloudDailyTips,
   invalidateLiveContent,
   getInitialCatalog,
   refreshCourseTopics,
@@ -179,7 +179,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [totalFocusMinutes, setTotalFocusMinutes] = useState<number>(0);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [adminRevision, setAdminRevision] = useState(0);
-  const tipsBaseRef = useRef<string[]>(INITIAL_DAILY_TIPS);
+  const tipsRequestRef = useRef(0);
+  const hasCloudTipsRef = useRef(false);
+
+  const refreshTips = useCallback(async () => {
+    const request = ++tipsRequestRef.current;
+    const tips = await fetchCloudDailyTips();
+    if (request !== tipsRequestRef.current || tips === null) return;
+    hasCloudTipsRef.current = true;
+    setDailyTips(tips);
+  }, []);
 
   /**
    * TEK yazma kapısı: yerel anahtar yalnız OKUMA ÖNBELLEĞİDİR; veri aynı anda
@@ -316,15 +325,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     })();
 
-    // Sync live daily tips from kpssasistani.com in background
-    fetchLiveDailyTips()
-      .then(liveTips => {
-        if (liveTips && liveTips.length > 0) {
-          tipsBaseRef.current = liveTips;
-          setDailyTips(applyAdminTips(liveTips));
-        }
-      })
-      .catch(() => {});
   }, []);
 
   // The admin panel is a second source of truth for content. Whenever it
@@ -334,7 +334,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (adminRevision === 0) return;
     setCatalog(getInitialCatalog());
-    setDailyTips(applyAdminTips(tipsBaseRef.current));
+    if (!hasCloudTipsRef.current) setDailyTips(applyAdminTips(INITIAL_DAILY_TIPS));
   }, [adminRevision]);
 
   const refreshCourse = useCallback(async (courseId: CourseId) => {
@@ -358,15 +358,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         return next;
       });
-      const tips = await fetchLiveDailyTips();
-      if (tips.length > 0) {
-        tipsBaseRef.current = tips;
-        setDailyTips(applyAdminTips(tips));
-      }
+      await refreshTips();
     } catch {
       // keep whatever is cached
     }
-  }, []);
+  }, [refreshTips]);
 
   // Serialize invalidations: an event during a fetch schedules one more pass.
   useEffect(() => {
@@ -375,6 +371,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let pending = false;
     const update = async () => {
       invalidateLiveContent();
+      void refreshTips();
       pending = true;
       if (running) return;
       running = true;
@@ -396,15 +393,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unsubscribe = watchContentUpdates(() => { void update(); });
     void update();
     return () => { stopped = true; unsubscribe(); };
-  }, []);
-
-  const refreshTips = useCallback(async () => {
-    const updated = await fetchLiveDailyTips();
-    if (updated.length > 0) {
-      tipsBaseRef.current = updated;
-      setDailyTips(applyAdminTips(updated));
-    }
-  }, []);
+  }, [refreshTips]);
 
   const toggleFavorite = useCallback((q: Question) => {
     setFavorites(prev => {
