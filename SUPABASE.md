@@ -233,3 +233,19 @@ Supabase `DELETE requires a WHERE clause` hatasını önlemek için mevcut proje
 `supabase/migrations/0007_safeupdate_tips.sql` dosyasını SQL Editor'de çalıştırın.
 Bu migration 0006'daki hap bilgi yazma düzeltmelerini de içerir; Realtime için
 0005 ayrıca uygulanmalıdır. İşlem mevcut hap bilgileri silmez.
+
+### Kişisel ilerleme eşitlemesi
+
+Mevcut projelerde `0008_personal_data_realtime.sql` ve ardından
+`0009_personal_test_keys.sql` migration'larını uygulayın. Bunlar kişisel veri
+bildirimlerini açar ve test anahtarlarını kullanıcıya göre ayırır; mevcut test
+satırları korunur. `0009` uygulama güncellemesinden önce uygulanmalıdır.
+
+Onaylı oturumun verileri kullanıcıya özel cihaz önbelleğinden gösterilir, bulut
+okumasıyla yenilenir. İlk kez kullanılan bir cihazın bulut verilerini indirmesi
+ağ bağlantısına bağlıdır. Misafir verileri otomatik olarak bir hesaba taşınmaz.
+Bağlantı veya yetki hatalarında veri diğer cihazlara ulaştı varsayılmamalıdır.
+Kişisel veri türleri halen bütün belge olarak yazıldığından, aynı alanın iki
+cihazda eşzamanlı değiştirilmesi çakışabilir; çevrimdışı yazılar için kalıcı
+otomatik yeniden gönderme kuyruğu henüz yoktur. Realtime devre dışıysa açık
+cihazlar, uygulama tekrar öne geldiğinde yeniden okur.

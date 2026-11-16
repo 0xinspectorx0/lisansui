@@ -99,10 +99,18 @@ export interface MemberBinding {
 }
 
 let bound: MemberBinding | null = null;
+const bindingListeners = new Set<() => void>();
+export function subscribeBinding(listener: () => void): () => void {
+  bindingListeners.add(listener);
+  return () => bindingListeners.delete(listener);
+}
 
 /** Üyelik oturumu açıldığında çağrılır (MembershipContext bunu bildirir). */
 export function bindMember(next: MemberBinding | null): void {
-  bound = next && next.email ? { email: next.email.toLowerCase(), userId: next.userId || null } : null;
+  const updated = next && next.email ? { email: next.email.toLowerCase(), userId: next.userId || null } : null;
+  if (bound?.email === updated?.email && bound?.userId === updated?.userId) return;
+  bound = updated;
+  bindingListeners.forEach(listener => listener());
   emit({
     bound: !!bound,
     email: bound?.email || '',
@@ -203,6 +211,12 @@ export async function pullUserData(): Promise<{
         body: JSON.stringify({ p_member_email: binding.email }),
       }),
     ]);
+    if ((rows && !rows.ok) || !tests.ok) {
+      const message = `Kullanıcı verisi okunamadı (HTTP ${rows && !rows.ok ? rows.status : tests.status})`;
+      emit({ error: message });
+      return { ok: false, error: message };
+    }
+    if (bound?.email !== binding.email || bound?.userId !== binding.userId) return { ok: false, error: 'session-changed' };
     const out: Partial<Record<UserDataKind, unknown>> & { results?: TestResult[] } = {};
     if (rows && rows.ok) {
       const json = await rows.json();
@@ -274,4 +288,40 @@ export function resetUserDataStatus(): void {
 /** Test/derleme kapısı: bekletme zamanlayıcısı ve yerel kaynak kullanılmıyor. */
 export function __chainCount(): number {
   return chains.size;
+}
+
+/** Apply only changed test rows, instead of replacing another device's entire list. */
+export function syncUserTestChanges(
+  previous: Record<string, TestResult>, next: Record<string, TestResult>,
+  previousDesired: Record<string, TestResult> = previous
+): Promise<{ ok: boolean; error?: string }> {
+  const binding = bound;
+  if (!binding?.userId) return Promise.resolve({ ok: false, error: 'no-cloud-identity' });
+  const rows = Object.entries(next).filter(([key, row]) => JSON.stringify(row) !== JSON.stringify(previous[key]));
+  const removed = [...new Set([...Object.keys(previous), ...Object.keys(previousDesired)])].filter(key => !(key in next));
+  return enqueue('tests', async () => {
+    try {
+      if (rows.length) {
+        const body = rows.map(([key, r]) => ({
+          key, memberEmail: binding.email, userId: binding.userId, courseId: r.courseId,
+          topicDocId: r.topicDocId || null, title: r.title, correct: r.correct, wrong: r.wrong,
+          blank: r.blank, total: r.total, net: r.net, durationSec: r.durationSec, completedAt: r.completedAt,
+        }));
+        const res = await restFetch('user_tests', 'on_conflict=memberEmail,key', {
+          method: 'POST', headers: { Prefer: 'return=minimal,resolution=merge-duplicates' }, body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`Supabase test kaydını reddetti (HTTP ${res.status})`);
+      }
+      for (const key of removed) {
+        const res = await restFetch('user_tests', `memberEmail=eq.${encodeURIComponent(binding.email)}&key=eq.${encodeURIComponent(key)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`Supabase test silmeyi reddetti (HTTP ${res.status})`);
+      }
+      bumpOk();
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      bumpFail(message);
+      return { ok: false, error: message };
+    }
+  });
 }

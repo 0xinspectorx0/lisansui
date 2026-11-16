@@ -22,7 +22,7 @@ try {
     grant execute on function auth.uid() to anon, authenticated;
   `);
   await setClaims('{}');
-  for (const name of ['0001_init.sql', '0002_fix_member_write_format.sql', '0003_approval_queue.sql', '0006_fix_content_delete.sql', '0007_safeupdate_tips.sql']) {
+  for (const name of ['0001_init.sql', '0002_fix_member_write_format.sql', '0003_approval_queue.sql', '0006_fix_content_delete.sql', '0007_safeupdate_tips.sql', '0009_personal_test_keys.sql']) {
     await db.exec(readFileSync(`supabase/migrations/${name}`, 'utf8'));
   }
   // Existing configuration cannot disable the approval requirement.
@@ -60,7 +60,24 @@ try {
   await assert.rejects(db.query("select public.kpss_write_doc('daily_tips/main', $1::jsonb)", [JSON.stringify({list:['Yetkisiz'], schemaVersion:1})]), /row-level security|permission denied/i);
   await db.exec(`insert into public.user_data ("userId", "kind", "payload") values ('${userId}', 'favorites', '[]'::jsonb)`);
   assert.equal((await db.query('select count(*)::int as n from public.user_data')).rows[0].n, 1);
-  console.log('✓ PostgreSQL approval trigger, RLS, admin approval and active access');
+  // Equal topic/test keys belong to different accounts and cannot overwrite each other.
+  const otherId = '33333333-3333-4333-8333-333333333333';
+  await db.exec('reset role');
+  await setClaims(claims(adminId, 'admin@example.com'));
+  await db.exec(`insert into auth.users values ('${otherId}', 'other@example.com', now(), '{}')`);
+  await db.exec("set role authenticated; update public.members set status='active' where email='other@example.com'");
+  await setClaims(claims(userId, 'learner@example.com'));
+  await db.exec(`insert into public.user_tests ("key","memberEmail","userId","courseId") values ('same-test','learner@example.com','${userId}','tarih')`);
+  await db.exec(`insert into public.user_tests ("key","memberEmail","userId","courseId") select 'history-' || i, 'learner@example.com', '${userId}', 'tarih' from generate_series(1, 501) i`);
+  const history = await db.query("select jsonb_array_length(public.kpss_pull_tests('learner@example.com')->'rows') as n");
+  assert.equal(history.rows[0].n, 502, 'all results are returned, including history past 500');
+  await setClaims(claims(otherId, 'other@example.com'));
+  await db.exec(`insert into public.user_tests ("key","memberEmail","userId","courseId") values ('same-test','other@example.com','${otherId}','turkce')`);
+  assert.deepEqual((await db.query('select "courseId" from public.user_tests')).rows, [{courseId:'turkce'}]);
+  await assert.rejects(db.exec(`insert into public.user_tests ("key","memberEmail","userId","courseId") values ('forged','learner@example.com','${userId}','tarih')`), /row-level security/);
+  await db.exec('reset role');
+  assert.equal((await db.query("select count(*)::int as n from public.user_tests where key='same-test'")).rows[0].n, 2);
+  console.log('✓ PostgreSQL approval, personal data RLS and independent test keys');
 } finally {
   await db.close();
 }
