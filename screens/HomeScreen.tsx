@@ -257,7 +257,7 @@ export const HomeScreen: React.FC = () => {
       >
         {/* Clean Header */}
         <View style={styles.header}>
-          <View>
+          <View style={styles.headerTitle}>
             <Text style={[styles.appTitle, { color: colors.text }]}>
               KPSS Asistanı
             </Text>
@@ -274,6 +274,7 @@ export const HomeScreen: React.FC = () => {
             />
             {admin.featureOn('streak') && streak.current > 0 && (
               <View
+                accessibilityLabel={`${streak.current} günlük seri`}
                 style={[
                   styles.streakPill,
                   {
@@ -283,7 +284,7 @@ export const HomeScreen: React.FC = () => {
                 ]}
               >
                 <Ionicons name="flame" size={15} color={colors.warning} />
-                <Text style={[styles.streakText, { color: colors.warning }]}>
+                <Text numberOfLines={1} style={[styles.streakText, { color: colors.warning }]}>
                   {streak.current} gün
                 </Text>
               </View>
@@ -301,6 +302,8 @@ export const HomeScreen: React.FC = () => {
             )}
 
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={colors.isDark ? 'Aydınlık moda geç' : 'Karanlık moda geç'}
               onPress={toggleTheme}
               style={[
                 styles.iconBtn,
@@ -827,6 +830,8 @@ export const HomeScreen: React.FC = () => {
   );
 };
 
+const HEADER_CONTROL_HEIGHT = 38;
+
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
@@ -840,7 +845,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: 16,
+  },
+  headerTitle: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 140,
+    maxWidth: '100%',
   },
   appTitle: {
     fontSize: 24,
@@ -883,6 +896,10 @@ const styles = StyleSheet.create({
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    flexShrink: 1,
+    maxWidth: '100%',
     gap: 8,
   },
   streakPill: {
@@ -890,17 +907,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    height: HEADER_CONTROL_HEIGHT,
+    maxWidth: 116,
     borderRadius: 999,
     borderWidth: 1,
   },
   streakText: {
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: '700',
   },
   iconBtn: {
-    width: 38,
-    height: 38,
+    width: HEADER_CONTROL_HEIGHT,
+    height: HEADER_CONTROL_HEIGHT,
     borderRadius: 19,
     borderWidth: 1,
     alignItems: 'center',
