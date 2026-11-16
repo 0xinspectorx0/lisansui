@@ -40,9 +40,9 @@ export const ProfileButton: React.FC<{
 };
 
 const styles = StyleSheet.create({
-  control: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  avatar: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  vipAvatar: { position: 'absolute', top: 5, width: 25, height: 25, borderRadius: 13 },
-  crown: { position: 'absolute', top: -5, alignSelf: 'center' },
+  control: { width: 41.8, height: 38, alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 41.8, height: 41.8, borderRadius: 20.9, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  vipAvatar: { position: 'absolute', top: 2.5, width: 27.5, height: 27.5, borderRadius: 13.75 },
+  crown: { position: 'absolute', top: -2.5, alignSelf: 'center' },
   vipLabel: { position: 'absolute', bottom: 0, fontSize: 8, lineHeight: 8, fontWeight: '900' },
 });
