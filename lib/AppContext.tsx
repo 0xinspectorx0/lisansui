@@ -1,4 +1,5 @@
 import { watchContentUpdates } from './contentUpdates';
+import { watchUserData } from './watchUserData';
 import React, {
   createContext,
   useCallback,
@@ -33,8 +34,9 @@ import {
   currentBinding,
   pullUserData,
   pushUserData,
-  pushUserTests,
-  subscribeUserData,
+  syncUserTestChanges,
+  subscribeBinding,
+  type MemberBinding,
   type UserDataKind,
 } from './userDataSync';
 import { calcKpssNet } from './textUtils';
@@ -51,6 +53,12 @@ const STORAGE_KEYS = {
   FOCUS_TOTAL: '@kpss_focus_total_v2',
   SETTINGS: '@kpss_settings_v2',
 };
+
+/** Guest data and each account have separate on-device caches. */
+export function personalCacheKey(key: string, binding: MemberBinding | null): string {
+  if (!binding) return key;
+  return `@kpss_user:${encodeURIComponent(binding.userId || binding.email.toLowerCase())}:${key}`;
+}
 
 export interface ExamPreset {
   id: string;
@@ -196,136 +204,112 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
    * ve reddedilirse durum akışından görünür olur.
    */
   const pendingRef = useRef<Record<string, unknown>>({});
+  const revisionsRef = useRef<Record<string, number>>({});
+  const resultSnapshotRef = useRef<Record<string, TestResult>>({});
+  const resultDesiredRef = useRef<Record<string, TestResult>>({});
+  const [binding, setBinding] = useState<MemberBinding | null>(currentBinding);
   const persistLocal = useCallback((key: string, value: unknown) => {
+    const owner = currentBinding();
     const raw = typeof value === 'string' ? value : JSON.stringify(value);
-    AsyncStorage.setItem(key, raw).catch(() => {});
+    AsyncStorage.setItem(personalCacheKey(key, owner), raw).catch(() => {});
     const kind = STORAGE_KIND[key] as UserDataKind | undefined;
+    const revision = (revisionsRef.current[key] || 0) + 1;
+    revisionsRef.current[key] = revision;
+    if (!owner) return;
     pendingRef.current[key] = value;
-    if (kind) void pushUserData(kind, value);
-    if (key === STORAGE_KEYS.RESULTS && value && typeof value === 'object') {
-      void pushUserTests(Object.values(value as Record<string, unknown>) as never);
-    }
+    const nextResults = key === STORAGE_KEYS.RESULTS && value && typeof value === 'object'
+      ? value as Record<string, TestResult> : null;
+    const request = kind ? pushUserData(kind, value)
+      : nextResults ? syncUserTestChanges(resultSnapshotRef.current, nextResults, resultDesiredRef.current) : null;
+    if (nextResults) resultDesiredRef.current = nextResults;
+    if (request) void request.then(res => {
+      if (res.ok && currentBinding()?.email === owner.email && currentBinding()?.userId === owner.userId
+          && revisionsRef.current[key] === revision) {
+        if (nextResults) resultSnapshotRef.current = nextResults;
+        delete pendingRef.current[key];
+      }
+    });
   }, []);
 
-  // Üyelik oturumu bağlandığında bulut asıldır: önbellek buluttakiyle yenilenir.
-  // (Bağlantıyı MembershipContext kurar; buradan import YOK — döngü olmaz.)
-  const [cloudTick, setCloudTick] = useState(0);
-  useEffect(() => subscribeUserData(() => setCloudTick(t => t + 1)), []);
+  // Binding changes are independent of write-status updates: a successful read
+  // must never cause another read (or a write of the just-read results).
+  useEffect(() => {
+    const unsubscribe = subscribeBinding(() => setBinding(currentBinding()));
+    setBinding(currentBinding());
+    return unsubscribe;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    const binding = currentBinding();
-    (async () => {
-      if (!binding?.email) return;
-      const res = await pullUserData();
-      if (cancelled || !res.ok || !res.data) return;
-      const d = res.data;
-      const apply = (key: string, value: unknown, set: (v: never) => void) => {
-        if (value === undefined || value === null) return;
-        set(value as never);
-        AsyncStorage.setItem(key, JSON.stringify(value)).catch(() => {});
-      };
-      apply(STORAGE_KEYS.MISTAKES, d.mistakes, setMistakes as never);
-      apply(STORAGE_KEYS.FAVORITES, d.favorites, setFavorites as never);
-      apply(STORAGE_KEYS.STUDIED_TOPICS, d.studiedTopics, setStudiedTopics as never);
-      apply(STORAGE_KEYS.LEARNED_TIPS, d.learnedTips, setLearnedTips as never);
-      apply(STORAGE_KEYS.SAVED_TIPS, d.savedTips, setSavedTips as never);
-      apply(STORAGE_KEYS.DAILY_STATS, d.dailyStats, setTodayStats as never);
-      apply(STORAGE_KEYS.SETTINGS, d.settings, setSettings as never);
-      if (Array.isArray(d.results)) {
-        const map: Record<string, TestResult> = {};
-        for (const row of d.results) if (row?.key) map[row.key] = row;
-        setResults(map);
-        persistLocal(STORAGE_KEYS.RESULTS, map);
-      } else if (Object.keys(pendingRef.current).length === 0) {
-        // Bulutta hiç satır yoksa bu cihazdaki ilk kullanım olabilir: bir kez yukarı
-        // yüklenir, sonra kaynak her zaman bulut olur.
-        for (const [key, value] of Object.entries(pendingRef.current)) {
-          const kind = STORAGE_KIND[key] as UserDataKind | undefined;
-          if (kind) void pushUserData(kind, value);
-        }
-      }
-    })().catch(() => {});
-    return () => {
-      cancelled = true;
+    let requestId = 0;
+    let cacheReady = false;
+    let refreshPending = false;
+    pendingRef.current = {};
+    revisionsRef.current = {};
+    resultSnapshotRef.current = {};
+    resultDesiredRef.current = {};
+    const keys = Object.values(STORAGE_KEYS);
+    const defaults: Record<string, unknown> = {
+      [STORAGE_KEYS.RESULTS]: {}, [STORAGE_KEYS.MISTAKES]: [], [STORAGE_KEYS.FAVORITES]: [],
+      [STORAGE_KEYS.STUDIED_TOPICS]: {}, [STORAGE_KEYS.LEARNED_TIPS]: {}, [STORAGE_KEYS.SAVED_TIPS]: {},
+      [STORAGE_KEYS.STREAK]: { current: 0, best: 0, lastDate: null },
+      [STORAGE_KEYS.DAILY_STATS]: { date: getTodayKey(), solved: 0, correct: 0, wrong: 0, focusMinutes: 0 },
+      [STORAGE_KEYS.FOCUS_TOTAL]: 0, [STORAGE_KEYS.SETTINGS]: DEFAULT_SETTINGS,
     };
-  }, [cloudTick]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const keysToLoad = [
-          STORAGE_KEYS.RESULTS,
-          STORAGE_KEYS.MISTAKES,
-          STORAGE_KEYS.FAVORITES,
-          STORAGE_KEYS.STUDIED_TOPICS,
-          STORAGE_KEYS.LEARNED_TIPS,
-          STORAGE_KEYS.SAVED_TIPS,
-          STORAGE_KEYS.STREAK,
-          STORAGE_KEYS.DAILY_STATS,
-          STORAGE_KEYS.FOCUS_TOTAL,
-          STORAGE_KEYS.SETTINGS,
-        ];
-        const entries = await Promise.all(
-          keysToLoad.map(async k => [k, await AsyncStorage.getItem(k)] as const)
-        );
-        const map = Object.fromEntries(entries);
-
-        if (map[STORAGE_KEYS.RESULTS]) {
-          setResults(JSON.parse(map[STORAGE_KEYS.RESULTS]!));
-        }
-        if (map[STORAGE_KEYS.MISTAKES]) {
-          setMistakes(JSON.parse(map[STORAGE_KEYS.MISTAKES]!));
-        }
-        if (map[STORAGE_KEYS.FAVORITES]) {
-          setFavorites(JSON.parse(map[STORAGE_KEYS.FAVORITES]!));
-        }
-        if (map[STORAGE_KEYS.STUDIED_TOPICS]) {
-          setStudiedTopics(JSON.parse(map[STORAGE_KEYS.STUDIED_TOPICS]!));
-        }
-        if (map[STORAGE_KEYS.LEARNED_TIPS]) {
-          setLearnedTips(JSON.parse(map[STORAGE_KEYS.LEARNED_TIPS]!));
-        }
-        if (map[STORAGE_KEYS.SAVED_TIPS]) {
-          setSavedTips(JSON.parse(map[STORAGE_KEYS.SAVED_TIPS]!));
-        }
-        if (map[STORAGE_KEYS.STREAK]) {
-          const parsedStreak: StreakData = JSON.parse(map[STORAGE_KEYS.STREAK]!);
-          const today = getTodayKey();
-          const yesterday = getYesterdayKey();
-          if (
-            parsedStreak.lastDate &&
-            parsedStreak.lastDate !== today &&
-            parsedStreak.lastDate !== yesterday
-          ) {
-            setStreak({ ...parsedStreak, current: 0 });
-          } else {
-            setStreak(parsedStreak);
-          }
-        }
-        if (map[STORAGE_KEYS.DAILY_STATS]) {
-          const parsedDaily: DailyStats = JSON.parse(map[STORAGE_KEYS.DAILY_STATS]!);
-          if (parsedDaily.date === getTodayKey()) {
-            setTodayStats(parsedDaily);
-          }
-        }
-        if (map[STORAGE_KEYS.FOCUS_TOTAL]) {
-          setTotalFocusMinutes(Number(map[STORAGE_KEYS.FOCUS_TOTAL]) || 0);
-        }
-        if (map[STORAGE_KEYS.SETTINGS]) {
-          setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(map[STORAGE_KEYS.SETTINGS]!) });
-        } else {
-          // No personal choice yet — respect the admin-defined defaults.
-          const adminSettings = getAdminState().settings;
-          setSettings(prev => ({ ...prev, dailyGoal: adminSettings.dailyGoalDefault }));
-        }
-      } catch {
-        // Ignore storage read errors
-      } finally {
-        setIsHydrated(true);
+    const apply = (key: string, value: any) => {
+      if (value == null) return;
+      switch (key) {
+        case STORAGE_KEYS.RESULTS: resultSnapshotRef.current = value; resultDesiredRef.current = value; setResults(value); break;
+        case STORAGE_KEYS.MISTAKES: setMistakes(value); break;
+        case STORAGE_KEYS.FAVORITES: setFavorites(value); break;
+        case STORAGE_KEYS.STUDIED_TOPICS: setStudiedTopics(value); break;
+        case STORAGE_KEYS.LEARNED_TIPS: setLearnedTips(value); break;
+        case STORAGE_KEYS.SAVED_TIPS: setSavedTips(value); break;
+        case STORAGE_KEYS.STREAK:
+          setStreak(value.lastDate && value.lastDate !== getTodayKey() && value.lastDate !== getYesterdayKey()
+            ? { ...value, current: 0 } : value); break;
+        case STORAGE_KEYS.DAILY_STATS:
+          setTodayStats(value.date === getTodayKey() ? value : defaults[key] as DailyStats); break;
+        case STORAGE_KEYS.FOCUS_TOTAL: setTotalFocusMinutes(Number(value) || 0); break;
+        case STORAGE_KEYS.SETTINGS: setSettings({ ...DEFAULT_SETTINGS, ...value }); break;
       }
-    })();
-
-  }, []);
+    };
+    const initialRevisions = { ...revisionsRef.current };
+    keys.forEach(key => apply(key, defaults[key]));
+    const refresh = async () => {
+      if (!binding?.email || cancelled) return;
+      if (!cacheReady) { refreshPending = true; return; }
+      const request = ++requestId;
+      const versions = { ...revisionsRef.current };
+      const response = await pullUserData();
+      if (cancelled || request !== requestId || !response.ok || !response.data) return;
+      const data = response.data;
+      for (const key of keys) {
+        const kind = STORAGE_KIND[key];
+        let value: unknown = kind ? data[kind] : undefined;
+        if (key === STORAGE_KEYS.RESULTS && Array.isArray(data.results)) {
+          value = Object.fromEntries(data.results.filter(row => row?.key).map(row => [row.key, row]));
+        }
+        if (value === undefined || value === null || key in pendingRef.current ||
+            (versions[key] || 0) !== (revisionsRef.current[key] || 0)) continue;
+        apply(key, value);
+        void AsyncStorage.setItem(personalCacheKey(key, binding), JSON.stringify(value)).catch(() => {});
+      }
+    };
+    const stopWatching = binding ? watchUserData(binding, () => void refresh()) : () => {};
+    void (async () => {
+      const entries = await Promise.all(keys.map(async key => [key, await AsyncStorage.getItem(personalCacheKey(key, binding))] as const));
+      if (cancelled) return;
+      for (const [key, raw] of entries) {
+        if (!raw || (initialRevisions[key] || 0) !== (revisionsRef.current[key] || 0)) continue;
+        try { apply(key, JSON.parse(raw)); } catch { /* ignore a damaged cache entry */ }
+      }
+      cacheReady = true;
+      setIsHydrated(true);
+      if (binding || refreshPending) void refresh();
+    })().catch(() => { if (!cancelled) { cacheReady = true; setIsHydrated(true); void refresh(); } });
+    return () => { cancelled = true; stopWatching(); };
+  }, [binding]);
 
   // The admin panel is a second source of truth for content. Whenever it
   // mutates (or finishes hydrating) we re-resolve the catalog and tips.
@@ -677,7 +661,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       STORAGE_KEYS.DAILY_STATS,
       STORAGE_KEYS.FOCUS_TOTAL,
     ];
-    await Promise.all(keysToClear.map(k => AsyncStorage.removeItem(k)));
+    const empty: Record<string, unknown> = {
+      [STORAGE_KEYS.RESULTS]: {}, [STORAGE_KEYS.MISTAKES]: [], [STORAGE_KEYS.FAVORITES]: [],
+      [STORAGE_KEYS.STUDIED_TOPICS]: {}, [STORAGE_KEYS.LEARNED_TIPS]: {}, [STORAGE_KEYS.SAVED_TIPS]: {},
+      [STORAGE_KEYS.STREAK]: { current: 0, best: 0, lastDate: null },
+      [STORAGE_KEYS.DAILY_STATS]: { date: getTodayKey(), solved: 0, correct: 0, wrong: 0, focusMinutes: 0 },
+      [STORAGE_KEYS.FOCUS_TOTAL]: 0,
+    };
+    keysToClear.forEach(key => persistLocal(key, empty[key]));
     setResults({});
     setMistakes([]);
     setFavorites([]);

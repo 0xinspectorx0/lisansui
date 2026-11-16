@@ -622,7 +622,7 @@ head('\x1b[1m[6] kullanıcı verisi — cihaz yalnız önbellek\x1b[0m');
   ok(unmapped.length === 0, 'kişisel verinin her anahtarı eşlenmiş', unmapped.join(','));
   ok(/persistLocal\(/.test(ctx), 'AppContext tek yazma kapısını kullanıyor');
   ok(!/AsyncStorage\.setItem\(STORAGE_KEYS\.[A-Z_]+, JSON\.stringify/.test(ctx), 'AppContext doğrudan AsyncStorage’a yazmıyor (her değişim buluta da gidiyor)');
-  ok(/pushUserTests\(/.test(ctx) && /pullUserData\(/.test(ctx), 'test sonuçları ve geri çekme AppContext’te bağlı');
+  ok(/syncUserTestChanges\(/.test(ctx) && /pullUserData\(/.test(ctx), 'test sonuçları ve geri çekme AppContext’te bağlı');
   const memCtx = read('lib/MembershipContext.tsx');
   ok(/bindMember\(/.test(memCtx), 'üyelik bağlandığında veri bağı kuruluyor');
   ok(!/vip|vipPlan|vipExpiresAt|testsCompleted|courseUsage/.test(memCtx.match(/function memberCacheStub[\s\S]*?\n\}/)[0]), 'cihaz önbelleği hak/sayaç taşımıyor');
