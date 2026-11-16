@@ -12,16 +12,7 @@ assert.equal(styles.streakPill.height, styles.iconBtn.height);
 assert.equal(styles.streakPill.width, 64);
 assert.equal(styles.header.flexWrap, 'nowrap');
 assert.equal(styles.headerRight.flexWrap, 'nowrap');
-const profileSource = readFileSync('components/ProfileButton.tsx', 'utf8');
-const profileStyles = vm.runInNewContext(profileSource.slice(profileSource.indexOf('const styles = StyleSheet.create(')).replace('const styles = StyleSheet.create(', 'globalThis.styles = StyleSheet.create(') + '\n;globalThis.styles;', { StyleSheet:{create:x=>x} });
-assert.equal(profileStyles.control.height, styles.iconBtn.height);
-assert.equal(profileStyles.control.width, 41.8);
-assert.ok(Math.abs(profileStyles.avatar.width - 38 * 1.1) < 0.001);
-assert.ok(Math.abs(profileStyles.avatar.height - 38 * 1.1) < 0.001);
-assert.ok(Math.abs(profileStyles.vipAvatar.width - 25 * 1.1) < 0.001);
-assert.ok(Math.abs(profileStyles.vipAvatar.height - 25 * 1.1) < 0.001);
-assert.equal(profileStyles.vipAvatar.top + profileStyles.crown.top, 0, 'crown stays within the control bounds');
-assert.equal(profileStyles.vipLabel.bottom, 0);
+assert.doesNotMatch(source, /<ProfileButton/);
 assert.match(source, /accessibilityLabel=\{colors\.isDark \? 'Aydınlık moda geç' : 'Karanlık moda geç'\}/);
 const directions={row:Yoga.FLEX_DIRECTION_ROW,column:Yoga.FLEX_DIRECTION_COLUMN};
 const aligns={center:Yoga.ALIGN_CENTER};
@@ -44,7 +35,6 @@ for (const width of [280,320,360,375,390,430,768]) for(const vip of [false,true]
   const title=Yoga.Node.create();apply(title,styles.headerTitle);title.setMeasureFunc((w,mode)=>({width:mode===Yoga.MEASURE_MODE_UNDEFINED?180:Math.min(w,180),height:50}));root.insertChild(title,0);
   const right=Yoga.Node.create();apply(right,styles.headerRight);root.insertChild(right,1);
   let index=0; const add=(w,h)=>{const n=Yoga.Node.create();n.setWidth(w);n.setHeight(h);right.insertChild(n,index++);return n;};
-  const profile = add(profileStyles.control.width, profileStyles.control.height);
   let pill;
   if(streak) pill=add(styles.streakPill.width,styles.streakPill.height);
   if(admin) add(38,styles.iconBtn.height);
@@ -52,7 +42,6 @@ for (const width of [280,320,360,375,390,430,768]) for(const vip of [false,true]
   root.calculateLayout(undefined,undefined,Yoga.DIRECTION_LTR);
   const r=right.getComputedLayout(), t=theme.getComputedLayout();
   assert.ok(r.left+t.left>=-0.01 && r.left+t.left+t.width<=width-36+0.01, `theme exceeds ${width}px viewport (vip=${vip}, admin=${admin}, streak=${streak})`);
-  assert.equal(profile.getComputedTop(), theme.getComputedTop(), 'profile and theme stay on the same line');
   if(pill) {
     assert.equal(pill.getComputedHeight(),theme.getComputedHeight());
     assert.equal(pill.getComputedTop(), theme.getComputedTop(), 'streak and theme stay on the same line');

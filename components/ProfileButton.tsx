@@ -1,48 +1,29 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useAppTheme } from '../lib/theme';
 
-/** One accessible profile control; VIP decoration does not intercept presses. */
-export const ProfileButton: React.FC<{
+/** Tab icon only; the navigator owns the accessible press target and label. */
+export const ProfileIcon: React.FC<{
   signedIn: boolean;
   isVip: boolean;
-  onPress: () => void;
-}> = ({ signedIn, isVip, onPress }) => {
+  color: string;
+}> = ({ signedIn, isVip, color }) => {
   const { colors } = useAppTheme();
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={signedIn ? (isVip ? 'Hesabım, VIP üye' : 'Hesabım') : 'Giriş yap'}
-      onPress={onPress}
-      hitSlop={8}
-      style={styles.control}
-    >
-      <View style={[styles.avatar, isVip && styles.vipAvatar, {
-        backgroundColor: signedIn ? colors.successSoft : colors.surface,
-        borderColor: isVip ? colors.warning : colors.border,
-      }]}>
-        <Ionicons
-          name={signedIn ? 'person' : 'person-add-outline'}
-          size={isVip ? 14 : 19}
-          color={signedIn ? colors.success : colors.text}
-        />
-        {isVip && (
-          <View pointerEvents="none" style={styles.crown}>
-            <MaterialCommunityIcons name="crown" size={12} color={colors.warning} />
-          </View>
-        )}
-      </View>
-      {isVip && <Text style={[styles.vipLabel, { color: colors.warning }]}>VIP</Text>}
-    </Pressable>
+    <View style={[styles.avatar, { borderColor: isVip ? colors.warning : color }]}>
+      <Ionicons name={signedIn ? 'person' : 'person-add-outline'} size={17} color={color} />
+      {isVip && (
+        <View pointerEvents="none" style={styles.crown}>
+          <MaterialCommunityIcons name="crown" size={10} color={colors.warning} />
+        </View>
+      )}
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  control: { width: 41.8, height: 38, alignItems: 'center', justifyContent: 'center' },
-  avatar: { width: 41.8, height: 41.8, borderRadius: 20.9, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  vipAvatar: { position: 'absolute', top: 2.5, width: 27.5, height: 27.5, borderRadius: 13.75 },
-  crown: { position: 'absolute', top: -2.5, alignSelf: 'center' },
-  vipLabel: { position: 'absolute', bottom: 0, fontSize: 8, lineHeight: 8, fontWeight: '900' },
+  avatar: { width: 24, height: 24, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  crown: { position: 'absolute', top: -4, alignSelf: 'center' },
 });
