@@ -142,7 +142,7 @@ export async function fetchTopicQuestions(
 /**
  * Refreshes topic list & live question counts for a course from kpssasistani.com
  */
-export async function refreshCourseTopics(courseId: CourseId): Promise<TopicMeta[]> {
+export async function refreshCourseTopics(courseId: CourseId, strict = false): Promise<TopicMeta[]> {
   const generation = cacheGeneration;
   try {
     const listed = await listDocuments(`courses/${courseId}/topics`, { pageSize: 100 });
@@ -166,10 +166,11 @@ export async function refreshCourseTopics(courseId: CourseId): Promise<TopicMeta
       a.name.localeCompare(b.name, 'tr', { numeric: true, sensitivity: 'base' })
     );
 
-    if (generation !== cacheGeneration) return refreshCourseTopics(courseId);
+    if (generation !== cacheGeneration) return refreshCourseTopics(courseId, strict);
     catalogCache.set(courseId, topics);
     return topics;
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     // Keep cached/seed catalog
   }
   return catalogCache.get(courseId) ?? applyAdminTopics(

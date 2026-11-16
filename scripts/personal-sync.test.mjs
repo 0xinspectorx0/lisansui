@@ -26,3 +26,21 @@ const app=readFileSync('lib/AppContext.tsx','utf8');
 assert.match(app,/case STORAGE_KEYS\.STREAK:/);assert.match(app,/case STORAGE_KEYS\.FOCUS_TOTAL:/);assert.match(app,/personalCacheKey\(key, binding\)/);assert.doesNotMatch(app,/persistLocal\(STORAGE_KEYS\.RESULTS, map\)/);
 assert.match(readFileSync('supabase/migrations/0009_personal_test_keys.sql','utf8'),/primary key \("memberEmail", "key"\)/i);
 console.log('✓ Personal sync errors, binding notifications, scoped caches and incremental test changes');
+
+// First-login readiness must wait for the matching account, report failures and
+// never allow an old account's delayed completion to unblock a newer one.
+const barrierBuild = await build({entryPoints:['lib/personalLoadBarrier.ts'],bundle:true,platform:'node',format:'cjs',write:false});
+const bm = new Module(path.join(process.cwd(),'scripts/_barrier.cjs')); bm.filename=path.join(process.cwd(),'scripts/_barrier.cjs'); bm._compile(barrierBuild.outputFiles[0].text,bm.filename); const B=bm.exports;
+const a={email:'a@example.com',userId:'a'}, b={email:'b@example.com',userId:'b'};
+B.beginPersonalLoad(a); let done=false; const first=B.waitForPersonalLoad(a).then(v=>{done=true;return v});
+await Promise.resolve(); assert.equal(done,false); B.finishPersonalLoad(a,true); assert.equal(await first,true);
+B.beginPersonalLoad(a); const switched=B.waitForPersonalLoad(a); B.beginPersonalLoad(b); B.finishPersonalLoad(a,true); assert.equal(await switched,false);
+const next=B.waitForPersonalLoad(b); B.finishPersonalLoad(b,false); assert.equal(await next,false);
+B.beginPersonalLoad(b); assert.equal(await B.waitForPersonalLoad(b,5),false);
+sync.bindMember({email:'missing@example.com',userId:null}); calls=[]; assert.equal((await sync.pullUserData()).ok,false); assert.equal(calls.length,0); sync.bindMember(null);
+const membership=readFileSync('lib/MembershipContext.tsx','utf8');
+assert.match(membership,/applyMember\(\{ \.\.\.doc, \.\.\.stamp, \.\.\.\(authUid/);
+assert.doesNotMatch(membership,/applyMember\(patched\.ok/);
+const auth=readFileSync('screens/AuthScreen.tsx','utf8');
+assert.match(auth,/waitForPersonalLoad\(binding\)/); assert.match(auth,/refreshAllCourses\(true\)/); assert.match(auth,/invalidateLiveContent\(\)/);
+console.log('✓ Login readiness, account switching, UID and authenticated content refresh');

@@ -613,8 +613,11 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           lastLoginAt: new Date().toISOString(),
           ...(authUid && doc.authUid !== authUid ? { authUid } : {}),
         };
-        const patched = await patchMemberDoc(doc.id, stamp);
-        applyMember(patched.ok && patched.data ? patched.data : { ...doc, ...stamp });
+        // PATCH RPC returns an acknowledgement, not a complete member document.
+        // Retain the verified server record and the authenticated UID; otherwise
+        // the first login binds a fabricated empty member and cannot load data.
+        await patchMemberDoc(doc.id, stamp);
+        applyMember({ ...doc, ...stamp, ...(authUid ? { authUid } : {}) });
         await sessionStore.set(SESSION_KEY, doc.id);
         setCloudStatus('online');
         setCloudMessage(null);
@@ -790,7 +793,8 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setError(res.error);
           return { ok: false, reason: res.reason };
         }
-        applyMember(res.data);
+        // A successful PATCH can return only an acknowledgement/partial fields.
+        applyMember(next);
         return { ok: true };
       } finally {
         setBusy(false);
