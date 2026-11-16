@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
@@ -57,7 +57,7 @@ export const MembershipPaywallScreen: React.FC = () => {
         </Pressable>
       </View>
 
-      <View style={styles.body}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <CloudStatusBanner compact />
 
         {isVip ? (
@@ -154,7 +154,7 @@ export const MembershipPaywallScreen: React.FC = () => {
             )}
           </>
         )}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -205,7 +205,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 },
   backBtn: { width: 34, height: 34, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, fontSize: 18, fontWeight: '900' },
-  body: { flex: 1, paddingHorizontal: 16, paddingBottom: 30 },
+  body: { paddingHorizontal: 16, paddingBottom: 34 },
   iconWrap: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   goalRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   foot: { fontSize: 11.5, textAlign: 'center', marginTop: 12, lineHeight: 16 },

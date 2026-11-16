@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
@@ -78,7 +78,7 @@ export const ProfileScreen: React.FC = () => {
           </Pressable>
           <Text style={[styles.title, { color: colors.text }]}>Hesabım</Text>
         </View>
-        <View style={{ padding: 16, gap: 12 }}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 34, gap: 12 }} keyboardShouldPersistTaps="handled">
           <CloudStatusBanner />
           <AdminCard style={{ alignItems: 'center', gap: 10, paddingVertical: 22 }}>
             <View style={[styles.avatar, { backgroundColor: colors.surfaceSecondary }]}>
@@ -105,7 +105,7 @@ export const ProfileScreen: React.FC = () => {
             </View>
           </AdminCard>
           <MembershipCta reason="guest" />
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -122,7 +122,7 @@ export const ProfileScreen: React.FC = () => {
         </Pressable>
       </View>
 
-      <View style={{ paddingHorizontal: 16, paddingBottom: 30, gap: 12 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 34, gap: 12 }} keyboardShouldPersistTaps="handled">
         <CloudStatusBanner compact />
         {!!note && (
           <View style={[styles.note, { backgroundColor: colors.successSoft, borderColor: colors.border }]}>
@@ -258,7 +258,7 @@ export const ProfileScreen: React.FC = () => {
             style={{ borderBottomWidth: 0 }}
           />
         </AdminCard>
-      </View>
+      </ScrollView>
 
       <AdminSheet
         visible={editSheet}

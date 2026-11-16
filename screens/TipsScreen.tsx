@@ -4,6 +4,7 @@ import {
   Platform,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -209,7 +210,7 @@ export const TipsScreen: React.FC = () => {
       </View>
 
       {viewMode === 'card' ? (
-        <View style={styles.deckContainer}>
+        <ScrollView style={styles.deckScroll} contentContainerStyle={styles.deckContainer}>
           {!currentTip ? (
             <View
               style={[
@@ -374,7 +375,7 @@ export const TipsScreen: React.FC = () => {
               </View>
             </>
           )}
-        </View>
+        </ScrollView>
       ) : (
         <View style={styles.listWrap}>
           <View
@@ -537,15 +538,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  deckScroll: { flex: 1 },
   deckContainer: {
-    flex: 1,
+    flexGrow: 1,
     paddingHorizontal: 18,
     paddingBottom: 24,
     justifyContent: 'space-between',
   },
   flashcard: {
-    flex: 1,
-    maxHeight: 400,
+    flexGrow: 1,
+    flexShrink: 0,
+    minHeight: 260,
     borderRadius: 24,
     borderWidth: 1,
     padding: 22,
