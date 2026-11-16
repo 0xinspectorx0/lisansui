@@ -20,7 +20,7 @@ import * as Haptics from 'expo-haptics';
 import { COURSE_LIST, COURSES, useAppTheme } from '../lib/theme';
 import { EXAM_PRESETS, useApp } from '../lib/AppContext';
 import { useAdmin } from '../lib/AdminContext';
-import { VipBadge } from '../components/admin/VipGate';
+import { ProfileButton } from '../components/ProfileButton';
 import { MembershipPill } from '../components/membership/ui';
 import { useMembership } from '../lib/MembershipContext';
 import { useAdminAccess } from '../lib/AdminAccessContext';
@@ -267,28 +267,11 @@ export const HomeScreen: React.FC = () => {
           </View>
 
           <View style={styles.headerRight}>
-            <Pressable
-              onPress={() =>
-                stackNav.navigate(membership.signedIn ? 'Profile' : 'Auth')
-              }
-              style={[
-                styles.iconBtn,
-                {
-                  backgroundColor: membership.signedIn
-                    ? colors.successSoft
-                    : colors.surface,
-                  borderColor: colors.border,
-                },
-              ]}
-              hitSlop={8}
-            >
-              <Ionicons
-                name={membership.signedIn ? 'person' : 'person-add-outline'}
-                size={19}
-                color={membership.signedIn ? colors.success : colors.text}
-              />
-            </Pressable>
-            <VipBadge />
+            <ProfileButton
+              signedIn={membership.signedIn}
+              isVip={membership.isVip}
+              onPress={() => stackNav.navigate(membership.signedIn ? 'Profile' : 'Auth')}
+            />
             {admin.featureOn('streak') && streak.current > 0 && (
               <View
                 style={[
