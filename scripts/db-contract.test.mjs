@@ -247,6 +247,23 @@ ok(
     pendingConfirm.code === 'EMAIL_CONFIRMATION_REQUIRED',
   'e-posta doğrulaması açıkken kayıt hata vermez, confirmationRequired=true döner'
 );
+{
+  const token = makeToken({ sub: 'u-confirm', email: 'onaybekleyen@ornek.com', iss: `https://${REF}.supabase.co`, exp: Math.floor(Date.now() / 1000) + 3600 });
+  globalThis.window = { location: { origin: 'https://app.example', hash: `#access_token=${token}&refresh_token=rt&type=signup`, search: '' }, history: { replaceState() {} } };
+  fake.injectWith(url => url.includes('/auth/v1/user')
+    ? { status: 200, body: { id: 'u-confirm', email: 'onaybekleyen@ornek.com', user_metadata: { display_name: 'Onay Bekleyen', city: 'Elazığ' } } }
+    : null);
+  const redirectAuth = await freshAuth();
+  const redirect = await redirectAuth.consumeAuthRedirect();
+  const session = await redirectAuth.currentSession();
+  const userRequest = at('/auth/v1/user', 'GET').at(-1);
+  ok(redirect?.kind === 'signup' && redirect?.userMetadata?.displayName === 'Onay Bekleyen' && session?.idToken === token,
+    'doğrulama yönlendirmesi oturumu bekleyerek kaydeder ve metadata okur', JSON.stringify(redirect?.userMetadata));
+  ok(userRequest?.headers?.apikey === 'eyJTESTANONKEY.abcdef.0123456789', 'doğrulama kullanıcı okumasında doğru public anahtar gönderilir');
+  await redirectAuth.signOut();
+  fake.clearInject();
+  delete globalThis.window;
+}
 
 head('\x1b[1m[2b] bayat token: kendiliğinden tazeleme, kullanıcıya iş yok\x1b[0m');
 await A.signOut();
@@ -538,7 +555,26 @@ head('\x1b[1m[5] supabase/migrations — tablo + bekçi + politika + grant\x1b[0
   ok(sql.includes("and a.attname <> 'id'"), 'id kolonu listeye alınmaz; bekçi e-postadan doldurur');
   ok(sql.includes('on conflict ("email") do update set'), 'çakışma anahtarı e-posta (PK)');
   ok(!/select x\.\* from jsonb_populate_record/.test(sql), 'tüm kolonlu eski `select x.*` yazma yolu kaldırıldı');
-  ok(flat.includes('not exists (select 1 from public.admins)'), 'ilk yönetici kendisini ekleyebiliyor (bootstrap), sonrası yöneticide');
+  ok(!flat.includes('with check (kpss_is_admin() or not exists (select 1 from public.admins))'), 'anon istemci ilk yönetici olamaz');
+  const approvalSql = read('supabase/migrations/0003_approval_queue.sql');
+  ok(approvalSql.includes(fnBody('kpss_guard_member_write') + '$$;'), 'mevcut kurulumlar aynı zorunlu onay bekçisini alır');
+  ok(approvalSql.includes('after insert or update of email_confirmed_at on auth.users') &&
+    approvalSql.includes('on conflict ("email") do nothing') && approvalSql.includes("'supabase-auth', 'user', 'pending'"),
+    'doğrulanan Auth kullanıcısı için tekrar güvenli bekleyen kayıt');
+  ok(approvalSql.includes('set search_path = pg_catalog, public') &&
+    approvalSql.includes('revoke all on function public.kpss_auth_confirmed_member() from public, anon, authenticated'),
+    'Auth tetikleyicisinin ayrıcalıkları ve search_path kısıtlı');
+  ok(approvalSql.includes('public.kpss_member_is_active()') && approvalSql.includes('create policy user_data_self'),
+    'onaysız hesap tokenı kullanıcı verisine erişemez');
+  const ctx = read('lib/MembershipContext.tsx');
+  ok(ctx.includes('if (!canEnterMembership(doc.status))') && ctx.includes('if (authenticated && !admitted) await auth.signOut()'),
+    'giriş yalnız aktif üyeye verilir, başarısız girişte Auth oturumu kapatılır');
+  ok(ctx.includes('if (!canEnterMembership(res.data.status))') && !ctx.includes('Stub\'tan doldur'),
+    'eski veya onaysız üyelik önbellekten oturum açamaz');
+  ok(M.canEnterMembership('active') && !M.canEnterMembership('pending') &&
+    !M.canEnterMembership('suspended') && !M.canEnterMembership('banned') && !M.canEnterMembership(null),
+    'üyelik giriş kararı yalnız active durumunu kabul eder');
+  ok(read('lib/authClient.ts').includes('apikey: cfg.apiKey'), 'doğrulama bağlantısında doğru API anahtarı kullanılır');
   ok(sql.indexOf('create table if not exists public.admins') < sql.indexOf('create or replace function kpss_is_admin('),
     'public.admins tablosu kpss_is_admin() fonksiyonundan önce oluşturuluyor (42P01 hatası olmaz)');
   ok(sql.indexOf('create table if not exists public.membership_policy') < sql.indexOf('create or replace function kpss_membership_locked('),

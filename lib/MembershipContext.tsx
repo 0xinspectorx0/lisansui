@@ -24,6 +24,7 @@ import {
   QuotaState,
   VipPlanId,
   canStartTest,
+  canEnterMembership,
   countCourseTests,
   emptyMember,
   expiryForPlan,
@@ -37,7 +38,6 @@ import { consumeApiKeyParamNotice, consumeTokenRefreshNotice } from './cloudApi'
 import * as auth from './authClient';
 import {
   CloudOutcome,
-  addAdminEmail,
   deleteMemberDoc,
   fetchMemberByEmail,
   fetchMemberDoc,
@@ -90,7 +90,7 @@ interface MembershipContextValue {
   /** E-posta doğrulama mailini tekrar gönderir. */
   resendConfirmation: (email: string) => Promise<{ ok: boolean; error?: string }>;
   /** E-posta onay bağlantısına tıklandığında üyelik kaydını (pending) oluşturup oturumu kapatır. */
-  completeSignupConfirmation: (redirect: auth.AuthRedirectState) => Promise<void>;
+  completeSignupConfirmation: (redirect: auth.AuthRedirectState) => Promise<{ ok: boolean; error?: string }>;
   /** Şifre sıfırlama bağlantısından gelindiğinde yeni şifreyi kaydeder. */
   completePasswordRecovery: (newPassword: string) => Promise<{ ok: boolean; email?: string; error?: string }>;
 
@@ -280,27 +280,22 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await AsyncStorage.removeItem(MEMBER_CACHE_KEY);
         }
         if (id) {
-          if (cached) {
-            try {
-              // Stub'tan doldur: kimlik görünür, haklar buluttan gelince eklenir.
-              const stub = JSON.parse(cached) as Partial<MemberDoc>;
-              if (stub && stub.id) applyMember({ ...emptyMember(String(stub.id)), ...stub } as MemberDoc);
-            } catch {
-              /* ignore malformed cache */
-            }
-          }
-          // Pull the authoritative doc (admin may have changed VIP meanwhile).
+          // Do not restore an authenticated member from a stale cache: approval
+          // and suspension must be checked against the server first.
           const res = await fetchMemberDoc(id);
           if (cancelled) return;
           if (res.ok) {
             if (res.data) {
-              if (res.data.status === 'banned' || res.data.status === 'suspended') {
+              if (!canEnterMembership(res.data.status)) {
                 await sessionStore.remove(SESSION_KEY);
+                await auth.signOut();
                 applyMember(null);
                 setCloudMessage(
-                  res.data.status === 'banned'
-                    ? 'Hesabın yasaklandı. Yönetici ile iletişime geç.'
-                    : 'Hesabın askıya alındı.'
+                  res.data.status === 'pending'
+                    ? 'Üyeliğin yönetici onayını bekliyor.'
+                    : res.data.status === 'banned'
+                      ? 'Hesabın yasaklandı. Yönetici ile iletişime geç.'
+                      : 'Hesabın askıya alındı.'
                 );
                 setCloudStatus('online');
               } else {
@@ -308,8 +303,9 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 setCloudStatus('online');
               }
             } else {
-              // Document deleted by the admin -> sign out locally.
+              // Document deleted by the admin -> remove both local sessions.
               await sessionStore.remove(SESSION_KEY);
+              await auth.signOut();
               applyMember(null);
               setCloudStatus('online');
               setCloudMessage('Üyelik kaydın bulutta bulunamadı, çıkış yapıldı.');
@@ -457,6 +453,12 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             return { ok: false, reason: 'offline' };
           }
         }
+        // With email verification enabled, Auth has no verified session yet.
+        // The database confirmation trigger creates the pending row; the redirect
+        // handler also retries it for installations without that migration.
+        if (confirmationRequired) {
+          return { ok: true, confirmationRequired: true };
+        }
         const sec = authMode ? AUTH_PASSWORD_BUNDLE : hashPassword(input.password);
         const now = new Date().toISOString();
         const trial = Math.max(0, membershipCfg.defaultTrialDays);
@@ -471,7 +473,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           password: sec,
           city: input.city?.trim() || '',
           exam: input.exam?.trim() || 'KPSS Lisans (GY-GK)',
-          status: membershipCfg.requireApproval ? 'pending' : 'active',
+          status: 'pending',
           vip: trial > 0,
           vipPlan: trial > 0 ? 'monthly' : 'free',
           vipExpiresAt: trial > 0 ? expiryForPlan('monthly') : '',
@@ -483,16 +485,8 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         // create reddedilirse kuralın kabul ettiği alanlarla kısmi yazım.
         const created = await writeMembershipSelf(draft);
         if (!created.ok) {
-          // E-posta onayı beklenirken satır daha önce yazılmışsa veya oturum
-          // onaydan sonra açılacaksa kullanıcıyı engelleme; ilk girişte tamamlanır.
-          if (confirmationRequired) {
-            setCloudStatus('online');
-            return { ok: true, confirmationRequired: true };
-          }
-          // Üyelik VERİSİ cihazda tutulmaz: satır yazılamadıysa kayıt YOKTUR.
-          // Supabase Auth hesabı istemciden silinemez (service_role gerekir);
-          // oturum kapatılır, tekrar deneme aynı hesapla giriş üzerinden tamamlanır.
-          if (authMode) await auth.deleteAccount().catch(() => undefined);
+          // Auth hesabı zaten açılmış olabilir; başarısız yazmayı gizleme.
+          if (authMode) await auth.signOut();
           noteCloud(created);
           setError(
             created.reason === 'denied'
@@ -501,27 +495,13 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           );
           return { ok: false, reason: 'write' };
         }
-        if (confirmationRequired) {
-          setCloudStatus('online');
-          setMembersVersion(v => v + 1);
-          return { ok: true, confirmationRequired: true };
-        }
-        if (created.adopted || created.degraded) {
-          // Belge zaten varmış: yazma kabul edilen alanlarla güncellendi, hesap bağlandı.
-          setCloudMessage(
-            'Bu e-postada üyelik belgesi zaten vardı; hesabın Supabase Auth’a bağlandı ve belge güncellendi.'
-          );
-        }
-        applyMember(created.data);
-        await sessionStore.set(SESSION_KEY, created.data.id);
+        // Kayıt, giriş anlamına gelmez; onaylı olsa bile kullanıcı giriş ekranını kullanır.
+        if (authMode) await auth.signOut();
+        applyMember(null);
+        await sessionStore.remove(SESSION_KEY);
         setCloudStatus('online');
-        setCloudMessage(
-          created.data?.status === 'pending'
-            ? 'Üyeliğin oluşturuldu ve Supabase’e yazıldı; durum: ONAY BEKLİYOR. Yönetici onaylayınca VIP/kota hakların açılır.'
-            : null
-        );
         setMembersVersion(v => v + 1);
-        return { ok: true };
+        return { ok: true, confirmationRequired: false };
       } finally {
         setBusy(false);
       }
@@ -539,6 +519,8 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       await auth.ensureAuthConfigLoaded();
       let authMode = auth.isAuthConfigured();
+      let authenticated = false;
+      let admitted = false;
       setBusy(true);
       try {
         let authUid = '';
@@ -559,6 +541,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }
             authMode = false;
           } else {
+            authenticated = true;
             authUid = account.session?.uid || '';
             authMeta = account.session?.userMetadata;
           }
@@ -579,7 +562,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           else setError(found.error);
           return { ok: false, reason: found.reason };
         }
-        const doc = found.ok ? found.data : null;
+        let doc = found.ok ? found.data : null;
         if (!doc) {
           if (!authMode) {
             setError('Bu e-posta ile kayıtlı üye bulunamadı.');
@@ -596,7 +579,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             exam: authMeta?.exam || 'KPSS Lisans (GY-GK)',
             password: AUTH_PASSWORD_BUNDLE,
             ...(authUid ? { authUid } : {}),
-            status: membershipCfg.requireApproval ? 'pending' : 'active',
+            status: 'pending',
             createdAt: nowIso,
             lastLoginAt: nowIso,
             note: 'Supabase Auth hesabıyla ilk girişte oluşturuldu.',
@@ -607,12 +590,8 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             setError(created.error);
             return { ok: false, reason: created.reason };
           }
-          applyMember(created.data);
-          await sessionStore.set(SESSION_KEY, created.data.id);
-          setCloudStatus('online');
-          setCloudMessage(null);
+          doc = created.data;
           setMembersVersion(v => v + 1);
-          return { ok: true };
         }
         if (!authMode) {
           if (isCloudAuthBundle(doc.password)) {
@@ -626,19 +605,16 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             return { ok: false, reason: 'password' };
           }
         }
-        if (doc.status === 'banned' || doc.status === 'suspended') {
+        if (!canEnterMembership(doc.status)) {
           setError(
-            doc.status === 'banned'
-              ? 'Hesabın yasaklandı. Yönetici ile iletişime geç.'
-              : 'Hesabın askıya alındı. Yönetici onayı gerekiyor.'
+            doc.status === 'pending'
+              ? 'Üyeliğin yönetici onayını bekliyor. Onaylandıktan sonra giriş yapabilirsin.'
+              : doc.status === 'banned'
+                ? 'Hesabın yasaklandı. Yönetici ile iletişime geç.'
+                : 'Hesabın askıya alındı. Yönetici ile iletişime geç.'
           );
           return { ok: false, reason: doc.status };
         }
-        // Onay bekleyen üye KAPIDAN DÖNMEZ: içeri girer, ücretsiz kotasını
-        // kullanır ve durumunu görür; VIP/kota hakkı onayla açılır (isVipActive
-        // `pending`i dışlıyor). Böylece "üyelik aktif değil" kuralı hem ara
-        // yüzde hem hakedişte aynı şeyi söyler.
-        if (doc.status === 'pending') setCloudMessage('Üyeliğin yönetim onayında — onaylanana kadar yalnız ücretsiz haklar geçerli.');
         const stamp: Partial<MemberDoc> = {
           lastLoginAt: new Date().toISOString(),
           ...(authUid && doc.authUid !== authUid ? { authUid } : {}),
@@ -649,12 +625,14 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setCloudStatus('online');
         setCloudMessage(null);
         setMembersVersion(v => v + 1);
+        admitted = true;
         return { ok: true };
       } finally {
+        if (authenticated && !admitted) await auth.signOut();
         setBusy(false);
       }
     },
-    [applyMember, membershipCfg.requireApproval, noteCloud]
+    [applyMember, noteCloud]
   );
 
   const signOut = useCallback(async () => {
@@ -710,10 +688,13 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     async redirect => {
       try {
         const emailKey = normalizeEmail(redirect.email || '');
-        if (emailKey && emailPattern.test(emailKey)) {
+        if (!emailKey || !emailPattern.test(emailKey)) {
+          return { ok: false, error: 'E-posta doğrulandı ancak hesap bilgisi alınamadı. Giriş yapmayı deneyin.' };
+        }
+        {
           const existing = await fetchMemberByEmail(emailKey);
-          const hasDoc = existing.ok && !!existing.data;
-          if (!hasDoc) {
+          if (!existing.ok) return { ok: false, error: existing.error };
+          if (!existing.data) {
             const nowIso = new Date().toISOString();
             const trial = Math.max(0, membershipCfg.defaultTrialDays);
             const draft: MemberDoc = {
@@ -728,7 +709,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               exam: redirect.userMetadata?.exam?.trim() || 'KPSS Lisans (GY-GK)',
               password: AUTH_PASSWORD_BUNDLE,
               ...(redirect.uid ? { authUid: redirect.uid } : {}),
-              status: membershipCfg.requireApproval ? 'pending' : 'active',
+              status: 'pending',
               vip: trial > 0,
               vipPlan: trial > 0 ? 'monthly' : 'free',
               vipExpiresAt: trial > 0 ? expiryForPlan('monthly') : '',
@@ -736,17 +717,19 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               lastLoginAt: nowIso,
               note: 'E-posta onayı tamamlandığında oluşturuldu.',
             };
-            await writeMembershipSelf(draft);
+            const written = await writeMembershipSelf(draft);
+            if (!written.ok) return { ok: false, error: written.error };
             setMembersVersion(v => v + 1);
           }
         }
+        return { ok: true };
       } finally {
         applyMember(null);
         await sessionStore.remove(SESSION_KEY);
         await auth.signOut();
       }
     },
-    [applyMember, membershipCfg.defaultTrialDays, membershipCfg.requireApproval]
+    [applyMember, membershipCfg.defaultTrialDays]
   );
 
   const completePasswordRecovery = useCallback<MembershipContextValue['completePasswordRecovery']>(
@@ -781,13 +764,16 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const id = memberRef.current?.id;
     if (!id) return;
     const res = await fetchMemberDoc(id);
-    if (res.ok && res.data) {
+    if (res.ok && res.data && canEnterMembership(res.data.status)) {
       applyMember(res.data);
       setCloudStatus('online');
-    } else if (!res.ok) {
+    } else if (res.ok) {
+      await signOut();
+      setCloudMessage(res.data?.status === 'pending' ? 'Üyeliğin yönetici onayını bekliyor.' : 'Üyeliğin aktif değil.');
+    } else {
       noteCloud(res);
     }
-  }, [applyMember, noteCloud]);
+  }, [applyMember, noteCloud, signOut]);
 
   const updateProfile = useCallback<MembershipContextValue['updateProfile']>(
     async patch => {
@@ -1077,20 +1063,10 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const adminListMembers = useCallback<MembershipContextValue['adminListMembers']>(async () => {
     let res = await listMembers();
     if (res.limited && /kural|403|izin/i.test(res.error || '')) {
-      const session = await auth.currentSession().catch(() => null);
-      const currentEmail = normalizeEmail(memberRef.current?.email || session?.email || '');
-      if (currentEmail && currentEmail.includes('@')) {
-        const promoted = await addAdminEmail(currentEmail).catch(() => ({ ok: false as const }));
-        if (promoted.ok) {
-          res = await listMembers();
-        }
-      } else {
-        res = {
-          ...res,
-          error:
-            'Supabase üye listesini görmek ve onaylamak için önce Üyelik ekranından kendi yönetici e-posta hesabınızla giriş yapın (ilk yönetici hesabı otomatik olarak public.admins tablosuna eklenir).',
-        };
-      }
+      res = {
+        ...res,
+        error: 'Üye listesini görmek için aktif bir yönetici hesabıyla giriş yapın. İlk yönetici Supabase SQL Editor üzerinden public.admins tablosuna eklenmelidir.',
+      };
     }
     setCloudStatus(res.limited ? (res.error?.includes('kural') || res.error?.includes('yönetici') ? 'denied' : 'offline') : 'online');
     setCloudMessage(res.limited ? res.error || null : null);

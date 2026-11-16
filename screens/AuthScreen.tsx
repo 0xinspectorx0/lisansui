@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -91,26 +91,28 @@ export const AuthScreen: React.FC = () => {
     setMode(prev => (prev === fromRoute ? prev : fromRoute));
   }, [route?.params?.mode]);
 
-  // E-postadaki onay veya şifre sıfırlama bağlantısından gelindiyse yakala
+  // Keep the one-shot redirect across context re-renders and Strict Mode effects.
+  const membershipRef = useRef(membership);
+  membershipRef.current = membership;
+  const redirectPromiseRef = useRef<ReturnType<typeof consumeAuthRedirect> | null>(null);
   useEffect(() => {
     let active = true;
+    const pending = redirectPromiseRef.current ?? (redirectPromiseRef.current = consumeAuthRedirect());
     void (async () => {
-      const redirected = await consumeAuthRedirect();
+      const redirected = await pending;
       if (!active || !redirected) return;
       if (redirected.email) setEmail(redirected.email);
       if (redirected.kind === 'signup') {
-        await membership.completeSignupConfirmation(redirected);
+        const result = await membershipRef.current.completeSignupConfirmation(redirected);
         if (!active) return;
         setMode('signin');
-        setLocalError(null);
-        membership.clearError();
-        setLocalNotice(
-          'E-posta adresiniz onaylandı ve kaydınız yönetici onayına gönderildi! Şimdi e-posta adresiniz ve parolanızla giriş yapabilirsiniz.'
-        );
+        membershipRef.current.clearError();
+        setLocalError(result.ok ? null : `E-posta doğrulandı fakat üyelik kaydı kontrol edilemedi: ${result.error || 'Bilinmeyen hata'}. Giriş yapmayı tekrar deneyin.`);
+        setLocalNotice(result.ok ? 'E-posta adresiniz doğrulandı. Yönetici onayından sonra giriş yapabilirsiniz.' : null);
       } else if (redirected.kind === 'recovery') {
         setMode('recovery');
         setLocalError(null);
-        membership.clearError();
+        membershipRef.current.clearError();
         setLocalNotice('Şifre sıfırlama bağlantısı doğrulandı. Lütfen yeni parolanızı belirleyin.');
       } else if (redirected.kind === 'error') {
         setMode('signin');
@@ -121,7 +123,7 @@ export const AuthScreen: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [membership]);
+  }, []);
 
   const doResetRequest = useCallback(async () => {
     if (cooldownSec > 0) return;
@@ -201,11 +203,13 @@ export const AuthScreen: React.FC = () => {
     const res = await membership.signUp({ email, password, displayName: name, city, exam });
     if (res.ok) {
       setPassword('');
-      setCooldownSec(60);
-      setAwaitingEmailConfirm(true);
+      setCooldownSec(res.confirmationRequired ? 60 : 0);
+      setAwaitingEmailConfirm(Boolean(res.confirmationRequired));
       switchMode(
         'signin',
-        'Kaydınız alındı! Onay maili gönderildi (ulaşması 1-2 dakika sürebilir). Lütfen e-posta kutunuzu ve Spam (Gereksiz) klasörünü kontrol edin; gelen bağlantıya tıkladıktan sonra giriş yapabilirsiniz.'
+        res.confirmationRequired
+          ? 'Onay e-postası gönderildi. Bağlantıya tıklayın; ardından yönetici onayını bekleyin.'
+          : 'Kaydınız alındı. Yönetici onayından sonra giriş yapabilirsiniz.'
       );
     }
   }, [city, doCompleteRecovery, doResetRequest, email, exam, goHomeOrBack, membership, mode, name, password, switchMode]);

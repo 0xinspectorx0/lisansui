@@ -44,6 +44,39 @@ Secret anahtarı yanlışlıkla **yazmak** da mümkün değil: `--anon-key sb_se
 `config/supabaseApp.ts` yazıldıktan sonra dosya geri okunarak tekrarlanır ve
 `npm run check:supabase` bozuk depoyla yoklama yapmaz.
 
+## Üyelik onayı ve mevcut kurulumun güncellenmesi
+
+Mevcut projelerde `supabase/migrations/0002_fix_member_write_format.sql` ve ardından
+`0003_approval_queue.sql` sırasıyla Supabase SQL Editor'de çalıştırılmalıdır (ya da
+migration aracıyla uygulanmalıdır). Git'e almak veya web uygulamasını yayınlamak SQL'i
+kendiliğinden çalıştırmaz. `0003`, e-posta doğrulandığında `auth.users` tetikleyicisiyle
+`pending` üyelik oluşturur; var olan üyelikleri veya kullanıcı verisini topluca değiştirmez.
+Önceden doğrulanmış fakat `members` satırı olmayan eski hesaplar bir kez giriş denediğinde
+bekleyen kayıt oluşturulur. Toplu geri doldurma yapılmaz; böylece daha önce silinen
+hesaplar sessizce yeniden oluşturulmaz.
+
+Güvenlik nedeniyle ilk yönetici artık istemciden otomatik atanmaz. `public.admins`
+içinde zaten yönetici varsa mevcut kayıt korunur. Yoksa, önce e-postası doğrulanmış
+ve `members` satırı oluşmuş kendi yönetici hesabınızı oluşturun. Ardından yalnızca
+Supabase Dashboard'daki yetkili SQL Editor'de, aşağıdaki örnekte iki e-posta değerini
+kendi adresinizle değiştirerek çalıştırın. Bu işlem yalnız ilgili hesabı etkinleştirir;
+sonrasında aynı hesapla uygulamaya giriş yapıp panelden diğer üyeleri onaylayabilirsiniz.
+
+```sql
+begin;
+-- Yalnız SQL Editor gibi ayrıcalıklı bir oturumda kullanın.
+select set_config('request.jwt.claims', '{"app_admin":true}', true);
+insert into public.admins (email) values (lower('yonetici@example.com'))
+  on conflict (email) do nothing;
+update public.members set status = 'active'
+  where email = lower('yonetici@example.com');
+commit;
+```
+
+`UPDATE 0` görülürse hesap için `members` kaydı yoktur; önce e-postayı doğrulayıp bir
+kez giriş deneyin. Bu işlem Supabase Auth hesabının varlığını veya e-posta doğrulamasını
+oluşturmaz. Admin PIN'i tek başına Supabase yönetici yetkisi vermez.
+
 ## 2) Bir kez: tablolar ve RLS
 
 ```bash

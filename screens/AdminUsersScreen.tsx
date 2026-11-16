@@ -8,6 +8,7 @@ import { useAdmin } from '../lib/AdminContext';
 import { AdminRole, AdminUser, UserStatus, VipPlan } from '../lib/adminStore';
 import { useMembership } from '../lib/MembershipContext';
 import { useMemberListRefresh } from '../lib/useMemberListRefresh';
+import { CloudStatusBanner } from '../components/membership/ui';
 import { normalizeEmail, type MemberDoc } from '../lib/membership';
 import {
   AdminButton,
@@ -305,6 +306,7 @@ export const AdminUsersScreen: React.FC = () => {
       }
     >
       <AdminGate>
+        <CloudStatusBanner />
         <AdminSearchBar value={search} onChangeText={setSearch} placeholder="İsim, e-posta, şehir ara" />
 
         <View style={styles.filterRow}>

@@ -693,16 +693,6 @@ function detectInitialAuthRedirect(): AuthRedirectState | null {
   const expiresIn = Number(params.expires_in || 3600) || 3600;
   const refreshToken = params.refresh_token || '';
 
-  if (accessToken) {
-    void persist({
-      uid: decoded.uid || '',
-      email: decoded.email || '',
-      idToken: accessToken,
-      refreshToken,
-      expiresAt: Date.now() + expiresIn * 1000,
-    });
-  }
-
   return {
     kind,
     email: decoded.email || params.email || '',
@@ -750,6 +740,15 @@ export async function consumeAuthRedirect(): Promise<AuthRedirectState | null> {
       userMetadata: session.userMetadata,
     };
   }
+  if (current.accessToken) {
+    await persist({
+      uid: current.uid || '',
+      email: current.email || '',
+      idToken: current.accessToken,
+      refreshToken: current.refreshToken || '',
+      expiresAt: Date.now() + (current.expiresIn || 3600) * 1000,
+    });
+  }
   if (current.accessToken && current.kind === 'signup') {
     await ensureAuthConfigLoaded();
     const cfg = resolveAuthConfig();
@@ -758,7 +757,7 @@ export async function consumeAuthRedirect(): Promise<AuthRedirectState | null> {
         const res = await fetch(`${authRoot()}/user`, {
           method: 'GET',
           headers: {
-            apikey: cfg.anonKey,
+            apikey: cfg.apiKey,
             Authorization: `Bearer ${current.accessToken}`,
           },
         });
@@ -770,7 +769,7 @@ export async function consumeAuthRedirect(): Promise<AuthRedirectState | null> {
             email: String(user?.email || current.email || '').trim().toLowerCase(),
             uid: String(user?.id || current.uid || ''),
             userMetadata: {
-              displayName: typeof meta.displayName === 'string' ? meta.displayName : undefined,
+              displayName: typeof meta.display_name === 'string' ? meta.display_name : typeof meta.displayName === 'string' ? meta.displayName : undefined,
               city: typeof meta.city === 'string' ? meta.city : undefined,
               exam: typeof meta.exam === 'string' ? meta.exam : undefined,
             },

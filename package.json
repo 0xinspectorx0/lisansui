@@ -27,6 +27,7 @@
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
   },
@@ -49,8 +50,9 @@
     "sync:sql": "node scripts/sync-sql-copy.mjs",
     "sync:sql:check": "node scripts/sync-sql-copy.mjs --check",
     "test:db": "bash scripts/db-contract.sh",
+    "test:approval-db": "node scripts/approval-db.test.mjs",
     "prebuild": "node scripts/sync-sql-copy.mjs --check",
-    "verify": "npm run sync:sql:check && npm run test:db && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest",
+    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest",
     "migrate:content": "node scripts/migrate-to-supabase.mjs"
   },
   "private": true

@@ -368,7 +368,7 @@ begin
           using errcode = '42501';
       end if;
       -- ONAY: “admin onayı olmadan üyelik aktif olmaz” kuralı burada uygulanır.
-      if coalesce(v_policy."requireApproval", true) is true and new."status" <> 'pending' then
+      if new."status" <> 'pending' then
         raise exception 'new members stay pending until an admin approves'
           using errcode = '42501';
       end if;
@@ -423,8 +423,7 @@ begin
      or new."iterations" is distinct from old."iterations" then
     raise exception 'password material is written only by an admin' using errcode = '42501';
   end if;
-  if coalesce(v_policy."requireApproval", true) is true
-     and old."status" = 'pending' and new."status" = 'active' then
+  if old."status" = 'pending' and new."status" = 'active' then
     raise exception 'approval is admin-only' using errcode = '42501';
   end if;
   if not kpss_signed_in() and kpss_membership_locked() then
@@ -1140,7 +1139,7 @@ create policy members_self_select on public.members for select
 
 drop policy if exists members_self_insert on public.members;
 create policy members_self_insert on public.members for insert
-  with check (kpss_is_admin() or (not kpss_membership_locked() and "role" = 'user'));
+  with check (kpss_is_admin() or (kpss_signed_in() and "email"::text = kpss_session_email() and not kpss_membership_locked() and "role" = 'user'));
 
 drop policy if exists members_self_update on public.members;
 create policy members_self_update on public.members for update
@@ -1158,7 +1157,7 @@ create policy policy_write on public.membership_policy for update
 
 drop policy if exists admins_insert on public.admins;
 create policy admins_insert on public.admins for insert
-  with check (kpss_is_admin() or not exists (select 1 from public.admins));
+  with check (kpss_is_admin());
 drop policy if exists admins_delete on public.admins;
 create policy admins_delete on public.admins for delete using (kpss_is_admin());
 
@@ -1175,24 +1174,35 @@ drop policy if exists tips_write on public.tips;
 create policy tips_write on public.tips for all
   using (kpss_is_admin()) with check (kpss_is_admin());
 
-/* --- kullanıcı verisi: yalnız kendi satırların */
+/* --- kullanıcı verisi: yalnız onaylı üyelerin kendi satırları */
+create or replace function public.kpss_member_is_active()
+returns boolean language sql stable security invoker
+set search_path = pg_catalog, public
+as $$
+  select exists (select 1 from public.members m
+                 where m."email"::text = public.kpss_session_email()
+                   and m."status" = 'active');
+$$;
 
 drop policy if exists user_tests_self on public.user_tests;
 create policy user_tests_self on public.user_tests for all
   using (
-    kpss_is_admin()
-    or "memberEmail"::text = kpss_session_email()
-    or (auth.uid() is not null and "userId" = auth.uid())
+    kpss_is_admin() or (public.kpss_member_is_active() and (
+      "memberEmail"::text = kpss_session_email()
+      or (auth.uid() is not null and "userId" = auth.uid())
+    ))
   )
   with check (
-    "memberEmail"::text = kpss_session_email()
-    or (auth.uid() is not null and "userId" = auth.uid())
+    (kpss_is_admin() or public.kpss_member_is_active()) and (
+      "memberEmail"::text = kpss_session_email()
+      or (auth.uid() is not null and "userId" = auth.uid())
+    )
   );
 
 drop policy if exists user_data_self on public.user_data;
 create policy user_data_self on public.user_data for all
-  using (auth.uid() is not null and "userId" = auth.uid())
-  with check (auth.uid() is not null and "userId" = auth.uid());
+  using ((kpss_is_admin() or public.kpss_member_is_active()) and auth.uid() is not null and "userId" = auth.uid())
+  with check ((kpss_is_admin() or public.kpss_member_is_active()) and auth.uid() is not null and "userId" = auth.uid());
 
 /* ======================================================================= yetkiler */
 

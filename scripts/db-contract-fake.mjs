@@ -254,7 +254,7 @@ export function createFakeSupabase(opts = {}) {
           if (db.policy.registrationOpen !== true) return deny('registration is closed by the admin');
           if (next.role !== 'user') return deny('role must be user on self signup');
           if (!['pending','active'].includes(next.status)) return deny('status must be pending or active on self signup');
-          if (db.policy.requireApproval === true && next.status !== 'pending')
+          if (next.status !== 'pending')
             return deny('new members stay pending until an admin approves');
           if (session && emailOf() && emailOf() !== who) return deny('email must match the session');
           // hak alanlarını istemci değil, politika belirler (sunucu normalizasyonu)
@@ -328,7 +328,7 @@ export function createFakeSupabase(opts = {}) {
       return json(200, { status: 200, name: p });
     }
     if (kind === 'admins') {
-      if (!isAdmin() && db.admins.size) return deny('only an admin may edit the admin list');
+      if (!isAdmin()) return deny('only an admin may edit the admin list');
       if (!Array.isArray(doc.emails)) return deny('admins document needs an emails array');
       db.admins = new Set(doc.emails.map(lower));
       return json(200, { status: 200, name: p });
