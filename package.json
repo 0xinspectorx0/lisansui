@@ -55,10 +55,11 @@
     "test:approval-db": "node scripts/approval-db.test.mjs",
     "test:admin-gate": "node scripts/admin-gate.test.mjs",
     "prebuild": "node scripts/sync-sql-copy.mjs --check",
-    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:content-sync && npm run test:admin-gate && npm run test:scroll && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest",
+    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:content-sync && npm run test:admin-gate && npm run test:profile-badge && npm run test:scroll && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest",
     "migrate:content": "node scripts/migrate-to-supabase.mjs",
     "test:content-sync": "node scripts/content-sync.test.mjs",
-    "test:scroll": "node scripts/scroll-layout.test.mjs"
+    "test:scroll": "node scripts/scroll-layout.test.mjs",
+    "test:profile-badge": "node scripts/profile-badge.test.mjs"
   },
   "private": true
 }
