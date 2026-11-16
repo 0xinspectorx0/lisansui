@@ -56,6 +56,7 @@ const A = await import('/tmp/authBundle.mjs');
 const store = mem;
 const freshAuth = async () => await import(`/tmp/authBundle.mjs?u=${Date.now()}-${Math.random()}`);
 const Api = () => import(`/tmp/cloudApiBundle.mjs?u=${Date.now()}-${Math.random()}`);
+const AdminAccess = () => import(`/tmp/adminAccessBundle.mjs?u=${Date.now()}-${Math.random()}`);
 const Sync = () => import(`/tmp/userDataSyncBundle.mjs?u=${Date.now()}-${Math.random()}`);
 const CW = () => import(`/tmp/cloudWriteBundle.mjs?u=${Date.now()}-${Math.random()}`);
 const Shape = () => import(`/tmp/memberShapeBundle.mjs?u=${Date.now()}-${Math.random()}`);
@@ -263,6 +264,29 @@ ok(
   await redirectAuth.signOut();
   fake.clearInject();
   delete globalThis.window;
+}
+
+head('\x1b[1m[2a] yönetici yetkisi — oturum ve sunucu kararı\x1b[0m');
+{
+  const login = await freshAuth();
+  await login.signOut();
+  ok(await (await AdminAccess()).checkAdminAccess('ogrenci@ornek.com') === 'denied', 'oturumsuz yönetici erişimi reddedilir');
+  await login.signIn('ogrenci@ornek.com', 'GoodPass1');
+  let answer = true;
+  fake.injectWith(url => url.includes('/rpc/kpss_is_admin') ? { status: 200, body: answer } : null);
+  const access = await AdminAccess();
+  ok(await access.checkAdminAccess('ogrenci@ornek.com') === 'allowed', 'sunucu yönetici derse erişim verilir');
+  const sent = at('/rpc/kpss_is_admin', 'POST').at(-1);
+  ok(/^Bearer /.test(sent?.headers?.Authorization || ''), 'yetki kontrolü doğrulanmış oturumla gönderilir');
+  answer = false;
+  ok(await access.checkAdminAccess('ogrenci@ornek.com') === 'denied', 'sunucu reddi erişimi kapatır');
+  answer = 'true';
+  ok(await access.checkAdminAccess('ogrenci@ornek.com') === 'denied', 'yalnız boolean true yetki verir');
+  ok(await access.checkAdminAccess('baska@ornek.com') === 'denied', 'farklı hesap oturumu kabul edilmez');
+  fake.injectWith(url => url.includes('/rpc/kpss_is_admin') ? { status: 503, body: { message: 'offline' } } : null);
+  ok(await access.checkAdminAccess('ogrenci@ornek.com') === 'error', 'sunucu hatasında erişim verilmez');
+  fake.clearInject();
+  await login.signOut();
 }
 
 head('\x1b[1m[2b] bayat token: kendiliğinden tazeleme, kullanıcıya iş yok\x1b[0m');

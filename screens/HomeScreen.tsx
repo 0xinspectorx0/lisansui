@@ -23,6 +23,7 @@ import { useAdmin } from '../lib/AdminContext';
 import { VipBadge } from '../components/admin/VipGate';
 import { MembershipPill } from '../components/membership/ui';
 import { useMembership } from '../lib/MembershipContext';
+import { useAdminAccess } from '../lib/AdminAccessContext';
 import {
   CourseId,
   MainTabParamList,
@@ -57,6 +58,7 @@ export const HomeScreen: React.FC = () => {
   } = useApp();
   const admin = useAdmin();
   const membership = useMembership();
+  const { allowed: isAdmin } = useAdminAccess();
 
   const [tipIndex, setTipIndex] = useState<number>(() =>
     dailyTips.length > 0 ? Math.floor(Math.random() * dailyTips.length) : 0
@@ -304,27 +306,16 @@ export const HomeScreen: React.FC = () => {
               </View>
             )}
 
-            <Pressable
-              onPress={() =>
-                stackNav.navigate(admin.unlocked ? 'AdminPanel' : 'AdminLogin')
-              }
-              style={[
-                styles.iconBtn,
-                {
-                  backgroundColor: admin.unlocked
-                    ? colors.primarySoft
-                    : colors.surface,
-                  borderColor: colors.border,
-                },
-              ]}
-              hitSlop={8}
-            >
-              <Ionicons
-                name={admin.unlocked ? 'shield-checkmark' : 'shield-outline'}
-                size={19}
-                color={admin.unlocked ? colors.primary : colors.text}
-              />
-            </Pressable>
+            {isAdmin && (
+              <Pressable
+                accessibilityLabel="Yönetim paneli"
+                onPress={() => stackNav.navigate('AdminPanel')}
+                style={[styles.iconBtn, { backgroundColor: colors.primarySoft, borderColor: colors.border }]}
+                hitSlop={8}
+              >
+                <Ionicons name="shield-checkmark" size={19} color={colors.primary} />
+              </Pressable>
+            )}
 
             <Pressable
               onPress={toggleTheme}
@@ -826,24 +817,19 @@ export const HomeScreen: React.FC = () => {
               })}
             </View>
 
-            <Pressable
-              onPress={() => {
-                setGoalModalOpen(false);
-                stackNav.navigate(admin.unlocked ? 'AdminPanel' : 'AdminLogin');
-              }}
-              style={[
-                styles.adminEntryBtn,
-                { backgroundColor: colors.surfaceSecondary, borderColor: colors.border },
-              ]}
-            >
-              <Ionicons name="shield-checkmark-outline" size={16} color={colors.primary} />
-              <Text style={[styles.adminEntryText, { color: colors.text }]}>
-                Yönetim Paneli
-              </Text>
-              <Text style={[styles.adminEntryHint, { color: colors.textMuted }]}>
-                {admin.unlocked ? 'kilit açık' : 'PIN ile korumalı'}
-              </Text>
-            </Pressable>
+            {isAdmin && (
+              <Pressable
+                onPress={() => {
+                  setGoalModalOpen(false);
+                  stackNav.navigate('AdminPanel');
+                }}
+                style={[styles.adminEntryBtn, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}
+              >
+                <Ionicons name="shield-checkmark-outline" size={16} color={colors.primary} />
+                <Text style={[styles.adminEntryText, { color: colors.text }]}>Yönetim Paneli</Text>
+                <Text style={[styles.adminEntryHint, { color: colors.textMuted }]}>Yönetici hesabı</Text>
+              </Pressable>
+            )}
 
             <Pressable
               onPress={() => setGoalModalOpen(false)}

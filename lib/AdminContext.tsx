@@ -56,8 +56,6 @@ import {
 } from './cloudWrite';
 import { useApp } from './AppContext';
 
-const UNLOCK_TTL_MS = 15 * 60 * 1000;
-
 export type VipGateKey = keyof AdminSettings['vipGates'];
 export type FeatureKey = keyof AdminSettings['featureFlags'];
 
@@ -67,12 +65,6 @@ interface AdminContextValue {
   users: AdminUser[];
   activity: AdminActivity[];
   overrides: ReturnType<typeof countOverrides>;
-
-  /* session */
-  unlocked: boolean;
-  unlock: (pin: string) => boolean;
-  lock: () => void;
-  pinIsDefault: boolean;
 
   /* access control derived from the local profile */
   localUser: AdminUser;
@@ -187,7 +179,6 @@ interface AdminContextValue {
   pullMembershipPolicy: () => Promise<boolean>;
   /** Mevcut politikayı buluta yaz (panel “buluta gönder” dokunuşu). */
   pushMembershipPolicy: () => void;
-  setPin: (pin: string) => void;
   setCourseOrder: (order: CourseId[]) => void;
   toggleCourseHidden: (courseId: CourseId) => void;
   renameCourse: (courseId: CourseId, title: string) => void;
@@ -204,23 +195,11 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [policySource, setPolicySource] = useState<'unknown' | 'cloud' | 'device' | 'denied'>('unknown');
   const { catalog, dailyTips, refreshAllCourses, streak, results, favorites, mistakes } =
     useApp();
-  const [unlockedUntil, setUnlockedUntil] = useState<number>(0);
-
   // Loading the saved overrides bumps the store revision, which makes AppContext
   // re-resolve the catalog and tip list — no cache drop needed.
   useEffect(() => {
     hydrateAdminState();
   }, []);
-
-  const unlocked = unlockedUntil > Date.now();
-
-  useEffect(() => {
-    if (!unlocked) return undefined;
-    const t = setInterval(() => {
-      if (Date.now() > unlockedUntil) setUnlockedUntil(0);
-    }, 30_000);
-    return () => clearInterval(t);
-  }, [unlocked, unlockedUntil]);
 
   /** Logs one admin action. The kpss read caches keep the raw cloud lists and the
    *  admin overrides shadow them at read time, so they stay valid across edits. */
@@ -229,18 +208,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updateAdminState(s => s, activity);
     }
   }, []);
-
-  /* ----------------------------------------------------------- session */
-
-  const unlock = useCallback((pin: string) => {
-    if (pin.trim() === getAdminState().settings.pin) {
-      setUnlockedUntil(Date.now() + UNLOCK_TTL_MS);
-      return true;
-    }
-    return false;
-  }, []);
-
-  const lock = useCallback(() => setUnlockedUntil(0), []);
 
   /* ------------------------------------------------------------ topics */
 
@@ -955,16 +922,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [pushMembershipPolicy]
   );
 
-  const setPin = useCallback((pin: string) => {
-    const clean = pin.replace(/\D/g, '').slice(0, 8);
-    if (clean.length < 4) return;
-    updateAdminSettings({ pin: clean });
-    updateAdminState(s => s, {
-      icon: 'lock-closed-outline',
-      label: 'Yönetici PIN’i değiştirildi',
-    });
-  }, []);
-
   const setCourseOrder = useCallback(
     (order: CourseId[]) => {
       const normalized = [...order.filter(id => ALL_COURSE_IDS.includes(id))];
@@ -1083,10 +1040,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       users: state.users,
       activity: state.activity,
       overrides,
-      unlocked,
-      unlock,
-      lock,
-      pinIsDefault: state.settings.pin === '2468',
       localUser,
       isVip,
       isVipGated,
@@ -1143,7 +1096,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       policySource,
       pullMembershipPolicy,
       pushMembershipPolicy,
-      setPin,
       setCourseOrder,
       toggleCourseHidden,
       renameCourse,
@@ -1154,9 +1106,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [
       state,
       overrides,
-      unlocked,
-      unlock,
-      lock,
       localUser,
       isVip,
       isVipGated,
@@ -1208,7 +1157,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       policySource,
       pullMembershipPolicy,
       pushMembershipPolicy,
-      setPin,
       setCourseOrder,
       toggleCourseHidden,
       renameCourse,

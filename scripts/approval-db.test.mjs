@@ -35,6 +35,7 @@ try {
   assert.deepEqual(member, [{ status: 'pending', displayName: 'Learner', authUid: userId }]);
   await db.exec('set role authenticated');
   await setClaims(claims(userId, 'learner@example.com'));
+  assert.equal((await db.query('select public.kpss_is_admin() as allowed')).rows[0].allowed, false);
   await assert.rejects(db.exec("update public.members set status='active' where email='learner@example.com'"), /admin-only/);
   await assert.rejects(db.exec(`insert into public.user_data ("userId", "kind", "payload") values ('${userId}', 'favorites', '[]'::jsonb)`), /row-level security/);
   await assert.rejects(db.exec("insert into public.admins(email) values ('learner@example.com')"), /row-level security/);
@@ -42,6 +43,7 @@ try {
   await db.exec("insert into public.admins(email) values ('admin@example.com')");
   await setClaims(claims(adminId, 'admin@example.com'));
   await db.exec("set role authenticated; update public.members set status='active' where email='learner@example.com'");
+  assert.equal((await db.query('select public.kpss_is_admin() as allowed')).rows[0].allowed, true);
   await setClaims(claims(userId, 'learner@example.com'));
   await db.exec(`insert into public.user_data ("userId", "kind", "payload") values ('${userId}', 'favorites', '[]'::jsonb)`);
   assert.equal((await db.query('select count(*)::int as n from public.user_data')).rows[0].n, 1);

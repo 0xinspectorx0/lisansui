@@ -29,6 +29,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.16",
     "@types/react": "~19.2.2",
+    "esbuild": "^0.28.2",
     "typescript": "~6.0.3"
   },
   "engines": {
@@ -51,8 +52,9 @@
     "sync:sql:check": "node scripts/sync-sql-copy.mjs --check",
     "test:db": "bash scripts/db-contract.sh",
     "test:approval-db": "node scripts/approval-db.test.mjs",
+    "test:admin-gate": "node scripts/admin-gate.test.mjs",
     "prebuild": "node scripts/sync-sql-copy.mjs --check",
-    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest",
+    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:admin-gate && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest",
     "migrate:content": "node scripts/migrate-to-supabase.mjs"
   },
   "private": true

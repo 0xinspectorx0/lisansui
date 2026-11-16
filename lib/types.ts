@@ -98,7 +98,6 @@ export type RootStackParamList = {
   CourseTopics: { courseId?: CourseId } | undefined;
   Quiz: { session?: QuizSessionPayload } | undefined;
   QuizResult: { result?: QuizResultPayload } | undefined;
-  AdminLogin: undefined;
   AdminPanel: undefined;
   AdminTopics: { courseId?: CourseId; focusDocId?: string } | undefined;
   AdminQuestions: { courseId?: CourseId; topicDocId?: string } | undefined;

@@ -202,7 +202,7 @@ export const AdminUsersScreen: React.FC = () => {
     async (row: AdminUser) => {
       const next = row.role === 'user' ? 'editor' : 'user';
       if (row.remoteId) {
-        const res = await membership.adminSetRole(row.remoteId, next === 'editor' ? 'admin' : 'user');
+        const res = await membership.adminSetRole(row.remoteId, next);
         if (!res.ok) {
           cloudError(res.error);
           return;
@@ -592,6 +592,9 @@ export const AdminUsersScreen: React.FC = () => {
                 { id: 'owner', label: 'Kurucu' },
               ]}
             />
+            <Text style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 18 }}>
+              Profil rolü panel yetkisi vermez; yönetici erişimi Supabase public.admins tablosundan doğrulanır.
+            </Text>
             <AdminSegmented
               label="Erişim durumu"
               value={editor.draft.status}

@@ -53,7 +53,6 @@ import {
 } from '../components/admin/ui';
 import { AdminGate } from '../components/admin/AdminGate';
 import {
-  addAdminEmail,
   readAdminList,
   readMembershipLockdown,
   ADMINS_DOC_PATH,
@@ -71,7 +70,6 @@ import {
   readDeviceApiKey,
   resolveAuthConfig,
   resetAuthConfigCache,
-  signOut as authSignOut,
   repoConfigFile,
 } from '../lib/authClient';
 import { hasRepoApiKey } from '../config/supabaseApp';
@@ -86,10 +84,6 @@ export const AdminSettingsScreen: React.FC = () => {
   const membershipPolicy = settings.membership;
   const membership = useMembership();
 
-  const [pinSheet, setPinSheet] = useState(false);
-  const [pinDraft, setPinDraft] = useState('');
-  const [pinConfirm, setPinConfirm] = useState('');
-  const [pinError, setPinError] = useState<string | null>(null);
   const [dataSheet, setDataSheet] = useState<'export' | 'import' | null>(null);
   const [importDraft, setImportDraft] = useState('');
   const [importMsg, setImportMsg] = useState<string | null>(null);
@@ -233,22 +227,6 @@ export const AdminSettingsScreen: React.FC = () => {
         lock.ok ? (lock.data ? 'kilit AÇIK' : 'kilit kapalı') : 'kilit durumu okunamadı',
       ].join(' • '),
     });
-  };
-
-  const promoteSelf = async () => {
-    const email = membership.member?.email || membership.member?.emailNormalized || '';
-    if (!email) {
-      setGov(g => ({ ...g, note: 'Önce üye olarak giriş yap; listenizdeki e-posta eklenir.' }));
-      return;
-    }
-    setGov(g => ({ ...g, busy: true, note: 'Yazılıyor…' }));
-    const res = await addAdminEmail(email);
-    if (!res.ok) {
-      setGov({ ...gov, busy: false, note: `Eklenemedi: ${res.error}` });
-      return;
-    }
-    const lock = await readMembershipLockdown();
-    setGov({ busy: false, emails: res.data, locked: lock.ok ? lock.data : null, note: `Listede ${res.data.length} e-posta • ${lock.ok && lock.data ? 'kilit AÇIK (liste artık Console’dan)' : 'kilit kapalı'}` });
   };
 
   /* Supabase Auth durumu */
@@ -720,7 +698,7 @@ export const AdminSettingsScreen: React.FC = () => {
                 tone="neutral"
                 label="Oturumu kapat"
                 onPress={() => {
-                  void authSignOut().then(() =>
+                  void membership.signOut().then(() =>
                     setAuthInfo('Oturum kapatıldı (üyelik belgesine dokunulmadı).')
                   );
                 }}
@@ -730,15 +708,7 @@ export const AdminSettingsScreen: React.FC = () => {
           <AdminRow
             icon="people-outline"
             title="Yönetici listesi"
-            subtitle={gov.emails.length ? gov.emails.join(', ') : 'public.admins tablosu boş — “Kendimi ekle” ile ilk yöneticiyi sen yazarsın (sunucu anahtarı gerekmez).'}
-            right={
-              <AdminButton
-                small
-                label="Kendimi ekle"
-                disabled={gov.busy || gov.locked === true}
-                onPress={() => void promoteSelf()}
-              />
-            }
+            subtitle={gov.emails.length ? gov.emails.join(', ') : 'Yetki public.admins tablosundan doğrulanır; listeyi yenileyin.'}
           />
           <AdminRow
             icon="lock-closed-outline"
@@ -1135,36 +1105,6 @@ export const AdminSettingsScreen: React.FC = () => {
           />
         </AdminCard>
 
-        {/* Security */}
-        <AdminSectionTitle label="Güvenlik" hint="Panele erişim PIN’i" />
-        <AdminCard pad={4}>
-          <AdminRow
-            compact
-            icon="key-outline"
-            title="PIN kodu"
-            subtitle={
-              admin.pinIsDefault
-                ? 'Varsayılan PIN kullanılıyor — değiştirmen önerilir'
-                : 'Özel PIN aktif'
-            }
-            right={<AdminChip label={admin.pinIsDefault ? 'Varsayılan' : 'Güvenli'} tone={admin.pinIsDefault ? 'warning' : 'success'} compact />}
-            onPress={() => {
-              setPinDraft('');
-              setPinConfirm('');
-              setPinError(null);
-              setPinSheet(true);
-            }}
-          />
-          <AdminRow
-            compact
-            icon="lock-closed-outline"
-            title="Oturumu kilitle"
-            subtitle="Panel girişi 15 dakika sonra otomatik kilitlenir"
-            right={<AdminChip label={admin.unlocked ? 'Açık' : 'Kilitli'} tone={admin.unlocked ? 'success' : 'danger'} compact />}
-            onPress={admin.lock}
-          />
-        </AdminCard>
-
         {/* Data */}
         <AdminSectionTitle label="Veri" hint="Yedeğini al, başka cihaza taşı" />
         <AdminCard>
@@ -1227,57 +1167,6 @@ export const AdminSettingsScreen: React.FC = () => {
           </Text>
         </AdminCard>
       </AdminGate>
-
-      {/* PIN sheet */}
-      <AdminSheet
-        visible={pinSheet}
-        title="PIN kodunu değiştir"
-        onClose={() => setPinSheet(false)}
-        footer={
-          <>
-            <AdminButton label="Vazgeç" tone="neutral" onPress={() => setPinSheet(false)} flex />
-            <AdminButton
-              label="Kaydet"
-              icon="checkmark"
-              onPress={() => {
-                if (pinDraft.length < 4) {
-                  setPinError('En az 4 haneli bir kod gir.');
-                  return;
-                }
-                if (pinDraft !== pinConfirm) {
-                  setPinError('Kodlar eşleşmedi.');
-                  return;
-                }
-                admin.setPin(pinDraft);
-                setPinSheet(false);
-              }}
-              flex
-            />
-          </>
-        }
-      >
-        <AdminField
-          label="Yeni PIN"
-          value={pinDraft}
-          onChangeText={t => setPinDraft(t.replace(/\D/g, '').slice(0, 8))}
-          keyboardType="numeric"
-          maxLength={8}
-          hint="4-8 hane. Bu PIN yalnızca bu cihazda saklanır."
-        />
-        <AdminField
-          label="Yeni PIN (tekrar)"
-          value={pinConfirm}
-          onChangeText={t => setPinConfirm(t.replace(/\D/g, '').slice(0, 8))}
-          keyboardType="numeric"
-          maxLength={8}
-        />
-        {!!pinError && (
-          <View style={styles.errorRow}>
-            <Ionicons name="alert-circle" size={14} color={colors.danger} />
-            <Text style={{ fontSize: 12, fontWeight: '700', color: colors.danger }}>{pinError}</Text>
-          </View>
-        )}
-      </AdminSheet>
 
       {/* Export / import */}
       <AdminSheet
