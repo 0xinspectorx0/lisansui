@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -112,20 +112,22 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
     });
   }, [topics, filterMode, search]);
 
-  const handleOpenTopic = useCallback(
-    async (topic: TopicMeta) => {
-      setSelectedTopic(topic);
-      setSheetLoading(true);
-      setSheetQuestions([]);
-      try {
-        const qs = await fetchTopicQuestions(courseId, topic.docId, topic.name);
-        setSheetQuestions(qs);
-      } finally {
-        setSheetLoading(false);
-      }
-    },
-    [courseId]
-  );
+  // A catalog refresh also refreshes an open sheet; cancellation prevents a
+  // slow previous topic request from replacing the current selection.
+  useEffect(() => {
+    if (!selectedTopic) return;
+    let cancelled = false;
+    setSheetLoading(true);
+    void fetchTopicQuestions(courseId, selectedTopic.docId, selectedTopic.name)
+      .then(qs => { if (!cancelled) setSheetQuestions(qs); })
+      .finally(() => { if (!cancelled) setSheetLoading(false); });
+    return () => { cancelled = true; };
+  }, [courseId, selectedTopic, topics]);
+
+  const handleOpenTopic = useCallback((topic: TopicMeta) => {
+    setSheetQuestions([]);
+    setSelectedTopic(topic);
+  }, []);
 
   const handleStartCourseMixed = async () => {
     if (startingMixed) return;
