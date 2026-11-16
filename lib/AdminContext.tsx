@@ -122,6 +122,7 @@ interface AdminContextValue {
   deleteTip: (index: number) => void;
   moveTip: (index: number, dir: -1 | 1) => void;
   restoreTips: () => Promise<void>;
+  publishTipsDraft: () => Promise<void>;
 
   /* users */
   upsertUser: (user: AdminUser) => void;
@@ -741,6 +742,12 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [mutateTips]
   );
 
+  // Explicit recovery for a draft left on this device after a failed write.
+  const publishTipsDraft = useCallback(async () => {
+    const draft = getAdminState().content.tips;
+    if (draft !== null && draft !== undefined) await writeTipsDoc(draft);
+  }, []);
+
   const restoreTips = useCallback(async () => {
     clearTipsOverride();
     touch({ icon: 'cloud-download-outline', label: 'Hap bilgiler buluttan geri yüklendi' });
@@ -1077,6 +1084,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       deleteTip,
       moveTip,
       restoreTips,
+      publishTipsDraft,
       upsertUser,
       deleteUser,
       patchUser,
@@ -1138,6 +1146,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       deleteTip,
       moveTip,
       restoreTips,
+      publishTipsDraft,
       upsertUser,
       deleteUser,
       patchUser,

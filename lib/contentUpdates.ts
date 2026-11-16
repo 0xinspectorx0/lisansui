@@ -29,6 +29,7 @@ export function watchContentUpdates(refresh: () => void): () => void {
       });
       client.channel('content-updates')
         .on('postgres_changes', { event: '*', schema: target.schema, table: 'topics' }, notify)
+        .on('postgres_changes', { event: '*', schema: target.schema, table: 'tips' }, notify)
         .subscribe(status => { if (status === 'SUBSCRIBED') notify(); });
     } catch {
       // Polling and foreground refresh remain available when Realtime is blocked.

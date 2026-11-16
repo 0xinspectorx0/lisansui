@@ -32,7 +32,15 @@ globalThis.listDocs=async()=>({ok:true,data:[]}); assert.deepEqual(await api.ref
 let resolve; let count=0; globalThis.readDoc=()=> ++count === 1 ? new Promise(r=>resolve=r) : Promise.resolve({ok:true,data:{questions:{arrayValue:{values:[q('latest')]}}}});
 api.invalidateLiveContent(); const pending=api.fetchTopicQuestions('tarih','a'); api.invalidateLiveContent(); resolve({ok:true,data:{questions:{arrayValue:{values:[q('stale')]}}}});
 assert.equal((await pending)[0].id,'latest');
+// Hap bilgi reads distinguish an empty cloud list from an unavailable cloud.
+globalThis.readDoc = async () => ({ok:true,data:{list:{arrayValue:{values:[{stringValue:'Yeni bilgi'}, {stringValue:'ABC'}]}}}});
+assert.deepEqual(await api.fetchCloudDailyTips(), ['Yeni bilgi', 'ABC']);
+globalThis.readDoc = async () => ({ok:true,data:null});
+assert.deepEqual(await api.fetchCloudDailyTips(), []);
+globalThis.readDoc = async () => ({ok:false,error:'offline'});
+assert.equal(await api.fetchCloudDailyTips(), null);
 const watch=readFileSync('lib/contentUpdates.ts','utf8');
-assert.match(watch,/postgres_changes/); assert.match(watch,/30_000/); assert.match(watch,/state === 'active'/);
+assert.match(watch,/postgres_changes/); assert.match(watch,/table: 'tips'/); assert.match(watch,/30_000/); assert.match(watch,/state === 'active'/);
 assert.match(readFileSync('supabase/migrations/0004_content_realtime.sql','utf8'),/alter publication supabase_realtime add table public\.topics/i);
+assert.match(readFileSync('supabase/migrations/0005_tips_realtime.sql','utf8'),/alter publication supabase_realtime add table public\.tips/i);
 console.log('✓ Content cache invalidation, race, empty results, counts and sync fallback');
