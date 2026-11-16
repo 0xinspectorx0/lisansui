@@ -70,7 +70,7 @@ const SHORTCUTS: {
   {
     id: 'settings',
     label: 'Uygulama Ayarları',
-    desc: 'Duyuru, bakım, VIP kapıları, PIN',
+    desc: 'Duyuru, bakım ve VIP kapıları',
     icon: 'settings-outline',
     route: 'AdminSettings',
   },
@@ -90,7 +90,6 @@ export const AdminPanelScreen: React.FC = () => {
     overrides,
     isVip,
     localUser,
-    lock,
     announcement,
     maintenanceActive,
   } = admin;
@@ -119,20 +118,6 @@ export const AdminPanelScreen: React.FC = () => {
       title="Yönetim Paneli"
       subtitle={`${stats.questionCount.toLocaleString('tr-TR')} soru • ${users.length} kullanıcı`}
       icon="shield-checkmark-outline"
-      right={
-        admin.unlocked ? (
-          <Pressable
-            onPress={lock}
-            hitSlop={8}
-            style={[
-              styles.lockBtn,
-              { backgroundColor: colors.surfaceSecondary, borderColor: colors.border },
-            ]}
-          >
-            <Ionicons name="lock-closed-outline" size={16} color={colors.textSecondary} />
-          </Pressable>
-        ) : null
-      }
     >
       <AdminGate>
         <View style={styles.statusRow}>
@@ -382,13 +367,6 @@ export const AdminPanelScreen: React.FC = () => {
 
         <AdminSectionTitle label="Panel" />
         <View style={styles.footer}>
-          <AdminButton
-            label="Kilidi kapat"
-            tone="neutral"
-            icon="lock-closed-outline"
-            onPress={lock}
-            flex
-          />
           <AdminButton
             label="Tüm yönetimi sıfırla"
             tone="danger"

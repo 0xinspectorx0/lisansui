@@ -6,18 +6,20 @@ import { useNavigation } from '@react-navigation/native';
 
 import { useAppTheme } from '../../lib/theme';
 import { useAdmin } from '../../lib/AdminContext';
+import { useAdminAccess } from '../../lib/AdminAccessContext';
 import { AdminButton } from './ui';
 
 /**
  * Blocks the student-facing app while the admin has maintenance mode on.
- * An unlocked admin session always passes through, so the panel stays reachable.
+ * A verified admin session passes through; sign-in remains reachable during maintenance.
  */
 export const AdminMaintenanceGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { colors } = useAppTheme();
   const navigation = useNavigation<any>();
-  const { maintenanceActive, unlocked, settings } = useAdmin();
+  const { maintenanceActive, settings } = useAdmin();
+  const { allowed } = useAdminAccess();
 
-  if (!maintenanceActive || unlocked) return <>{children}</>;
+  if (!maintenanceActive || allowed) return <>{children}</>;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]}>
@@ -33,9 +35,9 @@ export const AdminMaintenanceGate: React.FC<{ children: React.ReactNode }> = ({ 
         </Text>
         <View style={styles.actions}>
           <AdminButton
-            label="Yönetici girişi"
-            icon="shield-checkmark-outline"
-            onPress={() => navigation.navigate('AdminLogin')}
+            label="Üye girişi"
+            icon="person-outline"
+            onPress={() => navigation.navigate('Auth', { mode: 'giris' })}
             flex
           />
         </View>

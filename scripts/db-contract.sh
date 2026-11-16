@@ -40,6 +40,7 @@ bundle lib/authClient.ts /tmp/authBundleNoEnv.mjs noenv
 
 # 3) Bulut okuma/yazma katmanı (geçit + belge API'si) ve kullanıcı verisi eşi.
 bundle lib/cloudApi.ts /tmp/cloudApiBundle.mjs
+bundle lib/adminAccess.ts /tmp/adminAccessBundle.mjs
 bundle lib/userDataSync.ts /tmp/userDataSyncBundle.mjs
 
 # 4) Anlık bulut yazıları (politika + konu/hap bilgi belgeleri).

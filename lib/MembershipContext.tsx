@@ -331,18 +331,12 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const isVip = useMemo(() => {
     if (!membershipCfg.cloudVip) return localAdminUser.vip && localAdminUser.status === 'active';
-    return cloudVip || (admin.unlocked && localAdminUser.vip);
-  }, [admin.unlocked, cloudVip, localAdminUser.status, localAdminUser.vip, membershipCfg.cloudVip]);
+    return cloudVip;
+  }, [cloudVip, localAdminUser.status, localAdminUser.vip, membershipCfg.cloudVip]);
 
   const vipSource: MembershipContextValue['vipSource'] = membershipCfg.cloudVip
-    ? cloudVip
-      ? 'cloud'
-      : admin.unlocked && localAdminUser.vip
-      ? 'local-admin'
-      : 'none'
-    : localAdminUser.vip
-    ? 'local-admin'
-    : 'none';
+    ? cloudVip ? 'cloud' : 'none'
+    : localAdminUser.vip && localAdminUser.status === 'active' ? 'local-admin' : 'none';
 
   const quota = useMemo<QuotaState>(
     () => ({
@@ -1156,7 +1150,7 @@ export const MembershipProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       noteCloud(res);
       if (res.ok) {
         setMembersVersion(v => v + 1);
-        admin.syncCloudMemberPatch(memberId, { role: role === 'user' ? 'user' : 'admin' });
+        admin.syncCloudMemberPatch(memberId, { role });
       }
       return res.ok ? { ok: true, data: true } : res;
     },

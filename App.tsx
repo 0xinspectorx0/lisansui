@@ -18,6 +18,8 @@ import { ThemeProvider, useAppTheme } from './lib/theme';
 import { AppProvider, useApp } from './lib/AppContext';
 import { AdminProvider } from './lib/AdminContext';
 import { MembershipProvider } from './lib/MembershipContext';
+import { AdminAccessProvider } from './lib/AdminAccessContext';
+import { AdminGate } from './components/admin/AdminGate';
 import { hasPendingAuthRedirect } from './lib/authClient';
 import { MainTabParamList, RootStackParamList } from './lib/types';
 
@@ -28,7 +30,6 @@ import { FocusStatsScreen } from './screens/FocusStatsScreen';
 import { CourseTopicsScreen } from './screens/CourseTopicsScreen';
 import { QuizScreen } from './screens/QuizScreen';
 import { QuizResultScreen } from './screens/QuizResultScreen';
-import { AdminLoginScreen } from './screens/AdminLoginScreen';
 import { AdminPanelScreen } from './screens/AdminPanelScreen';
 import { AdminTopicsScreen } from './screens/AdminTopicsScreen';
 import { AdminQuestionsScreen } from './screens/AdminQuestionsScreen';
@@ -42,6 +43,21 @@ import { ProfileScreen } from './screens/ProfileScreen';
 import { MembershipPaywallScreen } from './screens/MembershipPaywallScreen';
 import { AdminMaintenanceGate } from './components/admin/MaintenanceGate';
 import { SqlDeliveryScreen, sqlDeliveryRequested } from './screens/SqlDeliveryScreen';
+
+// Gate before mounting the screen, so even its effects cannot run for non-admins.
+function protectAdmin(Component: React.ComponentType<any>) {
+  return function ProtectedAdminRoute(props: any) {
+    return <AdminGate><Component {...props} /></AdminGate>;
+  };
+}
+const ProtectedAdminPanel = protectAdmin(AdminPanelScreen);
+const ProtectedAdminTopics = protectAdmin(AdminTopicsScreen);
+const ProtectedAdminQuestions = protectAdmin(AdminQuestionsScreen);
+const ProtectedAdminUsers = protectAdmin(AdminUsersScreen);
+const ProtectedAdminTips = protectAdmin(AdminTipsScreen);
+const ProtectedAdminCourses = protectAdmin(AdminCoursesScreen);
+const ProtectedAdminSettings = protectAdmin(AdminSettingsScreen);
+const ProtectedAdminMembership = protectAdmin(AdminMembershipScreen);
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -65,7 +81,6 @@ const linking: LinkingOptions<RootStackParamList> = {
       Profile: 'profil',
       MembershipPaywall: 'vip',
       AdminPanel: 'admin',
-      AdminLogin: 'admin/giris',
       AdminTopics: 'admin/konular/:courseId?',
       AdminQuestions: 'admin/sorular/:courseId?/:topicDocId?',
       AdminUsers: 'admin/uyeler',
@@ -85,7 +100,7 @@ const linking: LinkingOptions<RootStackParamList> = {
     else if (pathname === 'sifremi-unuttum') mapped = '/giris/sifremi-unuttum';
     else if (pathname === 'yeni-sifre') mapped = '/giris/yeni-sifre';
     else if (pathname === 'hesabim') mapped = '/profil';
-    else if (pathname === 'yonetici') mapped = '/admin';
+    else if (pathname === 'yonetici' || pathname === 'admin/giris') mapped = '/admin';
     return defaultGetStateFromPath(`${mapped}${search}`, options);
   },
 };
@@ -303,15 +318,14 @@ function RootNavigator() {
               component={QuizResultScreen}
               options={{ gestureEnabled: false }}
             />
-            <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
-            <Stack.Screen name="AdminPanel" component={AdminPanelScreen} />
-            <Stack.Screen name="AdminTopics" component={AdminTopicsScreen} />
-            <Stack.Screen name="AdminQuestions" component={AdminQuestionsScreen} />
-            <Stack.Screen name="AdminUsers" component={AdminUsersScreen} />
-            <Stack.Screen name="AdminTips" component={AdminTipsScreen} />
-            <Stack.Screen name="AdminCourses" component={AdminCoursesScreen} />
-            <Stack.Screen name="AdminSettings" component={AdminSettingsScreen} />
-            <Stack.Screen name="AdminMembership" component={AdminMembershipScreen} />
+            <Stack.Screen name="AdminPanel" component={ProtectedAdminPanel} />
+            <Stack.Screen name="AdminTopics" component={ProtectedAdminTopics} />
+            <Stack.Screen name="AdminQuestions" component={ProtectedAdminQuestions} />
+            <Stack.Screen name="AdminUsers" component={ProtectedAdminUsers} />
+            <Stack.Screen name="AdminTips" component={ProtectedAdminTips} />
+            <Stack.Screen name="AdminCourses" component={ProtectedAdminCourses} />
+            <Stack.Screen name="AdminSettings" component={ProtectedAdminSettings} />
+            <Stack.Screen name="AdminMembership" component={ProtectedAdminMembership} />
             <Stack.Screen name="Auth" component={AuthScreen} />
             <Stack.Screen name="Profile" component={ProfileScreen} />
             <Stack.Screen
@@ -350,7 +364,9 @@ export default function App() {
         <AppProvider>
           <AdminProvider>
             <MembershipProvider>
-              <RootNavigator />
+              <AdminAccessProvider>
+                <RootNavigator />
+              </AdminAccessProvider>
             </MembershipProvider>
           </AdminProvider>
         </AppProvider>

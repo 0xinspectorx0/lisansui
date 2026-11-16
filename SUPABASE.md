@@ -75,7 +75,13 @@ commit;
 
 `UPDATE 0` görülürse hesap için `members` kaydı yoktur; önce e-postayı doğrulayıp bir
 kez giriş deneyin. Bu işlem Supabase Auth hesabının varlığını veya e-posta doğrulamasını
-oluşturmaz. Admin PIN'i tek başına Supabase yönetici yetkisi vermez.
+oluşturmaz. Yönetim paneline ayrıca PIN ile girilmez: uygulamada aktif yönetici
+hesabıyla oturum açılmalı ve `kpss_is_admin()` bu oturum için true döndürmelidir.
+Üyelik satırındaki `role` alanı tek başına yönetim yetkisi vermez; yetki
+`public.admins` veya sunucunun güvenilir yönetici claim'i üzerinden denetlenir.
+Yetki doğrulanamazsa panel açılmaz; mevcut panel erişimi yaklaşık 15 saniyede bir
+ve uygulama ön plana geldiğinde tekrar kontrol edilir. Sunucu RLS kuralları her
+istekte ayrıca uygulanır.
 
 ## 2) Bir kez: tablolar ve RLS
 

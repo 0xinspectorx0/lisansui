@@ -163,14 +163,6 @@ export const MembershipCta: React.FC<{ reason?: 'expired' | 'none' | 'guest' }> 
           onPress={() => navigation.navigate(signedIn ? 'Profile' : 'Auth')}
           flex
         />
-        <AdminButton
-          small
-          tone="ghost"
-          label="Yönetici onaylasın"
-          icon="shield-checkmark-outline"
-          onPress={() => navigation.navigate('AdminLogin')}
-          flex
-        />
       </View>
     </AdminCard>
   );

@@ -676,6 +676,9 @@ export const AdminMembershipScreen: React.FC = () => {
               value={draft.role}
               onChange={id => setDraft({ ...draft, role: id as MemberRole })}
             />
+            <Text style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 18 }}>
+              Bu profil rolü tek başına yönetim paneli yetkisi vermez. Yetki Supabase public.admins tablosundan doğrulanır.
+            </Text>
             <AdminField
               label="Şehir"
               value={draft.city}
