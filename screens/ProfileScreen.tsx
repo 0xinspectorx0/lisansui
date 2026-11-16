@@ -8,6 +8,7 @@ import { useAppTheme, COURSES } from '../lib/theme';
 import { useApp } from '../lib/AppContext';
 import { useAdmin } from '../lib/AdminContext';
 import { useMembership } from '../lib/MembershipContext';
+import { useAdminAccess } from '../lib/AdminAccessContext';
 import { CourseId } from '../lib/types';
 import { PLAN_LABEL, STATUS_LABEL, daysLeft } from '../lib/membership';
 import {
@@ -27,6 +28,7 @@ export const ProfileScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const { catalog } = useApp();
   const admin = useAdmin();
+  const { allowed: isAdmin } = useAdminAccess();
   const membership = useMembership();
   const { member, signedIn, isVip, quota, busy, error } = membership;
 
@@ -184,54 +186,58 @@ export const ProfileScreen: React.FC = () => {
         <AdminSectionTitle label="Test hakların" hint={quota.enforced ? (quota.isVip ? 'VIP: sınır yok' : `Ücretsiz plan: dersten ${quota.freeTestsPerCourse} test`) : 'Hak sınırı kapalı'} />
         <QuotaList rows={rows} />
 
-        <AdminSectionTitle label="Bulut" hint="Sayılarını Supabase’e mirrora et, panelden onaylat" />
-        <AdminCard>
-          <AdminRow
-            compact
-            icon="cloud-upload-outline"
-            title="Deneme sayılarımı buluta yaz"
-            subtitle="Yeni cihazda haklarının sıfırlanmaması için yerel kayıtlarını üye belgesine işler"
-            right={<AdminChip label={busy ? 'çalışıyor' : 'hazır'} tone="info" compact />}
-            onPress={async () => {
-              const courseUsage: Record<string, number> = {};
-              (Object.keys(catalog) as CourseId[]).forEach(id => {
-                courseUsage[id] = membership.usedFor(id);
-              });
-              const res = await membership.syncUsageToCloud({
-                courseUsage,
-                testsCompleted: totalUsed,
-                questionsSolved: localUser.solved || 0,
-              });
-              setNote(res.ok ? 'Yerel sayılar üyelik belgenize yazıldı' : 'Buluta yazılamadı — kural/çevrimdışı kontrol et');
-              setTimeout(() => setNote(null), 2800);
-            }}
-          />
-          <AdminRow
-            compact
-            icon="cloud-download-outline"
-            title="Buluttaki haklarımı geri yükle"
-            subtitle="Bu cihazdan silinmiş deneme geçmişini üye belgesindeki sayaçlardan tamamlar"
-            onPress={async () => {
-              const r = await membership.restoreFromCloud();
-              setNote(r.ok ? `Bulut sayaçları yerel geçmişe işlendi (${r.restored} ders)` : 'Bu işlem için giriş gerekli');
-              setTimeout(() => setNote(null), 2600);
-            }}
-          />
-          <AdminRow
-            compact
-            icon="refresh-outline"
-            title="Üyelik belgesini yenile"
-            subtitle="VIP onayı verdiysen panelde, burada tek dokunuşla güncellenir"
-            onPress={() => membership.refreshMember()}
-          />
-          <AdminRow
-            compact
-            icon={localUser.vip ? 'diamond' : 'diamond-outline'}
-            title="Bu cihazı VIP göster (yalnızca yönetici)"
-            subtitle="Panelde açıkken çalışır; Supabase belgeni değiştirmez"
-            onPress={() => admin.toggleVip(localUser.id)}
-          />
-        </AdminCard>
+        {isAdmin && (
+          <>
+            <AdminSectionTitle label="Bulut" hint="Sayılarını Supabase’e mirrora et, panelden onaylat" />
+            <AdminCard>
+              <AdminRow
+                compact
+                icon="cloud-upload-outline"
+                title="Deneme sayılarımı buluta yaz"
+                subtitle="Yeni cihazda haklarının sıfırlanmaması için yerel kayıtlarını üye belgesine işler"
+                right={<AdminChip label={busy ? 'çalışıyor' : 'hazır'} tone="info" compact />}
+                onPress={async () => {
+                  const courseUsage: Record<string, number> = {};
+                  (Object.keys(catalog) as CourseId[]).forEach(id => {
+                    courseUsage[id] = membership.usedFor(id);
+                  });
+                  const res = await membership.syncUsageToCloud({
+                    courseUsage,
+                    testsCompleted: totalUsed,
+                    questionsSolved: localUser.solved || 0,
+                  });
+                  setNote(res.ok ? 'Yerel sayılar üyelik belgenize yazıldı' : 'Buluta yazılamadı — kural/çevrimdışı kontrol et');
+                  setTimeout(() => setNote(null), 2800);
+                }}
+              />
+              <AdminRow
+                compact
+                icon="cloud-download-outline"
+                title="Buluttaki haklarımı geri yükle"
+                subtitle="Bu cihazdan silinmiş deneme geçmişini üye belgesindeki sayaçlardan tamamlar"
+                onPress={async () => {
+                  const r = await membership.restoreFromCloud();
+                  setNote(r.ok ? `Bulut sayaçları yerel geçmişe işlendi (${r.restored} ders)` : 'Bu işlem için giriş gerekli');
+                  setTimeout(() => setNote(null), 2600);
+                }}
+              />
+              <AdminRow
+                compact
+                icon="refresh-outline"
+                title="Üyelik belgesini yenile"
+                subtitle="VIP onayı verdiysen panelde, burada tek dokunuşla güncellenir"
+                onPress={() => membership.refreshMember()}
+              />
+              <AdminRow
+                compact
+                icon={localUser.vip ? 'diamond' : 'diamond-outline'}
+                title="Bu cihazı VIP göster (yalnızca yönetici)"
+                subtitle="Panelde açıkken çalışır; Supabase belgeni değiştirmez"
+                onPress={() => admin.toggleVip(localUser.id)}
+              />
+            </AdminCard>
+          </>
+        )}
 
         {!!error && (
           <View style={[styles.note, { backgroundColor: colors.dangerSoft, borderColor: colors.border }]}>

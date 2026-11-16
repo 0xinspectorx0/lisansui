@@ -45,3 +45,10 @@ for (const name of ['Panel', 'Topics', 'Questions', 'Users', 'Tips', 'Courses', 
 }
 assert.doesNotMatch(app, /name="AdminLogin"/);
 console.log('✓ Admin gate renders only for allowed access; all admin routes are protected');
+
+// Manual cloud controls are administrative, while errors remain visible to users.
+const profileSource = readFileSync('screens/ProfileScreen.tsx', 'utf8');
+assert.match(profileSource, /const \{ allowed: isAdmin \} = useAdminAccess\(\)/);
+assert.match(profileSource, /\{isAdmin && \(\s*<>\s*<AdminSectionTitle label="Bulut"[\s\S]*?<\/AdminCard>\s*<\/>\s*\)\}/);
+assert.match(profileSource, /<CloudStatusBanner compact \/>/);
+console.log('✓ Profile cloud tools restricted to verified administrators');
