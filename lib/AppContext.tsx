@@ -1,5 +1,6 @@
 import { watchContentUpdates } from './contentUpdates';
 import { watchUserData } from './watchUserData';
+import { finishPersonalLoad, subscribePersonalReload } from './personalLoadBarrier';
 import React, {
   createContext,
   useCallback,
@@ -136,7 +137,7 @@ interface AppContextValue {
   settings: UserSettings;
 
   refreshCourse: (courseId: CourseId) => Promise<void>;
-  refreshAllCourses: () => Promise<void>;
+  refreshAllCourses: (strict?: boolean) => Promise<void>;
   refreshTips: () => Promise<void>;
   toggleFavorite: (q: Question) => void;
   isFavorite: (questionId: string) => boolean;
@@ -282,7 +283,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const request = ++requestId;
       const versions = { ...revisionsRef.current };
       const response = await pullUserData();
-      if (cancelled || request !== requestId || !response.ok || !response.data) return;
+      if (cancelled || request !== requestId) return;
+      if (!response.ok || !response.data) { finishPersonalLoad(binding, false); return; }
       const data = response.data;
       for (const key of keys) {
         const kind = STORAGE_KIND[key];
@@ -295,8 +297,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         apply(key, value);
         void AsyncStorage.setItem(personalCacheKey(key, binding), JSON.stringify(value)).catch(() => {});
       }
+      finishPersonalLoad(binding, true);
     };
     const stopWatching = binding ? watchUserData(binding, () => void refresh()) : () => {};
+    const stopReload = subscribePersonalReload(requested => {
+      if (binding?.email === requested.email && binding?.userId === requested.userId) void refresh();
+    });
     void (async () => {
       const entries = await Promise.all(keys.map(async key => [key, await AsyncStorage.getItem(personalCacheKey(key, binding))] as const));
       if (cancelled) return;
@@ -308,7 +314,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsHydrated(true);
       if (binding || refreshPending) void refresh();
     })().catch(() => { if (!cancelled) { cacheReady = true; setIsHydrated(true); void refresh(); } });
-    return () => { cancelled = true; stopWatching(); };
+    return () => { cancelled = true; stopWatching(); stopReload(); };
   }, [binding]);
 
   // The admin panel is a second source of truth for content. Whenever it
@@ -330,11 +336,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
    * Re-reads every course (used right after an admin override is cleared so the
    * live cloud content shows up immediately instead of the stale in-memory copy).
    */
-  const refreshAllCourses = useCallback(async () => {
+  const refreshAllCourses = useCallback(async (strict = false) => {
     try {
-      const entries = await Promise.all(
-        ALL_COURSE_IDS.map(async id => [id, await refreshCourseTopics(id)] as const)
-      );
+      const [entries] = await Promise.all([
+        Promise.all(ALL_COURSE_IDS.map(async id => [id, await refreshCourseTopics(id, strict)] as const)),
+        refreshTips(),
+      ]);
       setCatalog(prev => {
         const next = { ...prev };
         entries.forEach(([id, topics]) => {
@@ -342,8 +349,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         return next;
       });
-      await refreshTips();
-    } catch {
+    } catch (error) {
+      if (strict) throw error;
       // keep whatever is cached
     }
   }, [refreshTips]);

@@ -8,7 +8,10 @@ import { useAppTheme } from '../lib/theme';
 import { useAdmin } from '../lib/AdminContext';
 import { useMembership } from '../lib/MembershipContext';
 import { consumeAuthRedirect } from '../lib/authClient';
-import { EXAM_PRESETS } from '../lib/AppContext';
+import { EXAM_PRESETS, useApp } from '../lib/AppContext';
+import { invalidateLiveContent } from '../lib/kpssApi';
+import { currentBinding } from '../lib/userDataSync';
+import { requestPersonalReload, waitForPersonalLoad } from '../lib/personalLoadBarrier';
 import { AuthRouteMode } from '../lib/types';
 import { AdminButton, AdminCard, AdminField, AdminSectionTitle } from '../components/admin/ui';
 import { CloudStatusBanner } from '../components/membership/ui';
@@ -34,6 +37,7 @@ export const AuthScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const membership = useMembership();
+  const { refreshAllCourses } = useApp();
   const admin = useAdmin();
   const { settings, patchSettings } = admin;
 
@@ -48,11 +52,13 @@ export const AuthScreen: React.FC = () => {
   const [localError, setLocalError] = useState<string | null>(null);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
+  const [loadingLoginData, setLoadingLoginData] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [cooldownSec, setCooldownSec] = useState(0);
   const [awaitingEmailConfirm, setAwaitingEmailConfirm] = useState(false);
 
   const error = localError || membership.error;
-  const busy = membership.busy || resetBusy;
+  const busy = membership.busy || resetBusy || loadingLoginData;
   const canSignUp = settings.registrationOpen;
 
   useEffect(() => {
@@ -194,9 +200,39 @@ export const AuthScreen: React.FC = () => {
     setLocalError(null);
     setLocalNotice(null);
     if (mode === 'signin') {
-      const res = await membership.signIn(email, password);
-      if (res.ok) {
+      setLoadingLoginData(true);
+      try {
+        if (!loadFailed) {
+          const res = await membership.signIn(email, password);
+          if (!res.ok) return;
+        }
+        const binding = currentBinding();
+        if (!binding) {
+          setLocalError('Oturum doğrulandı ancak kullanıcı verileri için kimlik alınamadı.');
+          setLoadFailed(true);
+          return;
+        }
+        if (loadFailed) requestPersonalReload(binding);
+        // A pre-login anonymous content read may have produced an empty catalog.
+        // Re-read after authentication and invalidate any guest question cache.
+        invalidateLiveContent();
+        const [loaded, catalogLoaded] = await Promise.all([
+          waitForPersonalLoad(binding),
+          Promise.race([
+            refreshAllCourses(true).then(() => true, () => false),
+            new Promise<boolean>(resolve => setTimeout(() => resolve(false), 12000)),
+          ]),
+        ]);
+        if (currentBinding()?.email !== binding.email || currentBinding()?.userId !== binding.userId) return;
+        if (!loaded || !catalogLoaded) {
+          setLocalError('Kullanıcı verileri veya dersler yüklenemedi. Bağlantınızı kontrol edip tekrar deneyin.');
+          setLoadFailed(true);
+          return;
+        }
+        setLoadFailed(false);
         goHomeOrBack();
+      } finally {
+        setLoadingLoginData(false);
       }
       return;
     }
@@ -212,7 +248,7 @@ export const AuthScreen: React.FC = () => {
           : 'Kaydınız alındı. Yönetici onayından sonra giriş yapabilirsiniz.'
       );
     }
-  }, [city, doCompleteRecovery, doResetRequest, email, exam, goHomeOrBack, membership, mode, name, password, switchMode]);
+  }, [city, doCompleteRecovery, doResetRequest, email, exam, goHomeOrBack, membership, mode, name, password, switchMode, refreshAllCourses, loadFailed]);
 
   const quotaHint = useMemo(
     () =>
@@ -422,7 +458,9 @@ export const AuthScreen: React.FC = () => {
                 <AdminButton
                   label={
                     busy
-                      ? 'İşleniyor…'
+                      ? (loadingLoginData ? 'Veriler yükleniyor…' : 'İşleniyor…')
+                      : loadFailed && mode === 'signin'
+                      ? 'Verileri tekrar yükle'
                       : mode === 'signin'
                       ? 'Giriş yap'
                       : cooldownSec > 0
@@ -434,6 +472,10 @@ export const AuthScreen: React.FC = () => {
                   disabled={busy || (mode === 'signup' && cooldownSec > 0)}
                   style={{ alignSelf: 'stretch', marginTop: 4 }}
                 />
+
+                {mode === 'signin' && loadFailed && (
+                  <AdminButton label="Şimdilik devam et" tone="neutral" onPress={goHomeOrBack} disabled={busy} />
+                )}
 
                 {mode === 'signin' &&
                 membership.authMode &&

@@ -16,6 +16,7 @@
  */
 
 import { restFetch } from './sbGateway';
+import { beginPersonalLoad } from './personalLoadBarrier';
 import type { TestResult } from './types';
 
 /* ------------------------------------------------------------ türler/eşlemeler */
@@ -110,6 +111,7 @@ export function bindMember(next: MemberBinding | null): void {
   const updated = next && next.email ? { email: next.email.toLowerCase(), userId: next.userId || null } : null;
   if (bound?.email === updated?.email && bound?.userId === updated?.userId) return;
   bound = updated;
+  beginPersonalLoad(updated);
   bindingListeners.forEach(listener => listener());
   emit({
     bound: !!bound,
@@ -199,7 +201,7 @@ export async function pullUserData(): Promise<{
   error?: string;
 }> {
   const binding = bound;
-  if (!binding) return { ok: false, error: 'Bağlı üye yok' };
+  if (!binding?.userId) return { ok: false, error: 'Bulut kullanıcı kimliği bulunamadı' };
   try {
     const [rows, tests] = await Promise.all([
       binding.userId
@@ -233,7 +235,9 @@ export async function pullUserData(): Promise<{
     emit({ pulledAt: new Date().toISOString() });
     return { ok: true, data: out };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    const message = e instanceof Error ? e.message : String(e);
+    emit({ error: message });
+    return { ok: false, error: message };
   }
 }
 
