@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
@@ -37,7 +37,7 @@ export const VipLockedScreen: React.FC<{ title: string; hint?: string }> = ({
       edges={['top']}
       style={{ flex: 1, backgroundColor: colors.background }}
     >
-      <View style={styles.wrap}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.wrap}>
         <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={[styles.crown, { backgroundColor: colors.warningSoft }]}>
             <Ionicons name="diamond" size={22} color={colors.warning} />
@@ -63,7 +63,7 @@ export const VipLockedScreen: React.FC<{ title: string; hint?: string }> = ({
             />
           </View>
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -82,7 +82,7 @@ export const VipBadge: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  wrap: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   card: {
     borderRadius: 18,
     borderWidth: 1,

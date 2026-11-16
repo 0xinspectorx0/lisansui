@@ -272,6 +272,7 @@ export const AdminMembershipScreen: React.FC = () => {
 
   return (
     <AdminScaffold
+      scroll={false}
       title="Üyelikler"
       subtitle={`${members.length} Supabase kaydı • ${vipCount} VIP • ${policy.enforce ? `her ders ${policy.freeTestsPerCourse} test` : 'limit kapalı'}`}
       icon="person-badge-outline"
