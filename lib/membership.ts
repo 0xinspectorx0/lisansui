@@ -63,6 +63,11 @@ export const STATUS_LABEL: Record<MembershipStatus, string> = {
 
 export const FREE_TESTS_PER_COURSE = 1;
 
+/** An authenticated identity is not an admitted application member. */
+export function canEnterMembership(status: string | null | undefined): boolean {
+  return status === 'active';
+}
+
 export function emptyMember(id: string): MemberDoc {
   const now = new Date().toISOString();
   return {

@@ -352,14 +352,6 @@ export const AdminMembershipScreen: React.FC = () => {
           </View>
           <View style={styles.divider} />
           <AdminToggle
-            label="Yeni kayıtlar onay beklesin"
-            description="Açıkken kaydolunca durum `pending` olur; VIP verilene kadar üye onaylanmaz."
-            value={policy.requireApproval}
-            onValueChange={v => patchPolicy({ requireApproval: v })}
-            icon="hourglass-outline"
-          />
-          <View style={styles.divider} />
-          <AdminToggle
             label="VIP Supabase’dan okunsun"
             description="Kapatınca yalnızca bu cihazın yerel VIP etiketi geçerli olur (test amaçlı)."
             value={policy.cloudVip}
