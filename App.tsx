@@ -17,7 +17,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { ThemeProvider, useAppTheme } from './lib/theme';
 import { AppProvider, useApp } from './lib/AppContext';
 import { AdminProvider } from './lib/AdminContext';
-import { MembershipProvider } from './lib/MembershipContext';
+import { MembershipProvider, useMembership } from './lib/MembershipContext';
+import { ProfileIcon } from './components/ProfileButton';
 import { AdminAccessProvider } from './lib/AdminAccessContext';
 import { AdminGate } from './components/admin/AdminGate';
 import { hasPendingAuthRedirect } from './lib/authClient';
@@ -108,6 +109,7 @@ const linking: LinkingOptions<RootStackParamList> = {
 function MainTabsNavigator() {
   const { colors } = useAppTheme();
   const { mistakes } = useApp();
+  const membership = useMembership();
   // Alt güvenli alan (iPhone çentiği/Android gezinme çubuğu) — kütüphanenin kendi
   // `paddingBottom: insets.bottom` değeri biz tabBarStyle'da paddingBottom yazınca
   // eziliyor; bu yüzden inset'i kendimiz ekliyoruz. Web'de 0 (iOS Safari'de >0).
@@ -223,6 +225,26 @@ function MainTabsNavigator() {
               size={21}
               color={color}
             />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="ProfileTab"
+        component={HomeScreen}
+        listeners={({ navigation }) => ({
+          tabPress: event => {
+            event.preventDefault();
+            const parent = navigation.getParent();
+            if (membership.signedIn) parent?.navigate('Profile');
+            else parent?.navigate('Auth');
+          },
+        })}
+        options={{
+          title: membership.signedIn ? (membership.isVip ? 'VIP Profil' : 'Profil') : 'Giriş',
+          tabBarAccessibilityLabel: membership.signedIn
+            ? (membership.isVip ? 'Hesabım, VIP üye' : 'Hesabım') : 'Giriş yap',
+          tabBarIcon: ({ color }) => (
+            <ProfileIcon signedIn={membership.signedIn} isVip={membership.isVip} color={color} />
           ),
         }}
       />

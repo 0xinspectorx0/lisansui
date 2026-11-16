@@ -116,4 +116,5 @@ export type MainTabParamList = {
   TipsTab: undefined;
   ReviewTab: undefined;
   FocusStatsTab: undefined;
+  ProfileTab: undefined;
 };
