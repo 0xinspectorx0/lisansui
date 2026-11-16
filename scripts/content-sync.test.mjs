@@ -40,7 +40,7 @@ assert.deepEqual(await api.fetchCloudDailyTips(), []);
 globalThis.readDoc = async () => ({ok:false,error:'offline'});
 assert.equal(await api.fetchCloudDailyTips(), null);
 const watch=readFileSync('lib/contentUpdates.ts','utf8');
-assert.match(watch,/postgres_changes/); assert.match(watch,/table: 'tips'/); assert.match(watch,/30_000/); assert.match(watch,/state === 'active'/);
+assert.match(watch,/postgres_changes/); assert.match(watch,/table: 'tips'/); assert.doesNotMatch(watch,/setInterval/); assert.match(watch,/state === 'active'/);
 assert.match(readFileSync('supabase/migrations/0004_content_realtime.sql','utf8'),/alter publication supabase_realtime add table public\.topics/i);
 assert.match(readFileSync('supabase/migrations/0005_tips_realtime.sql','utf8'),/alter publication supabase_realtime add table public\.tips/i);
 console.log('✓ Content cache invalidation, race, empty results, counts and sync fallback');

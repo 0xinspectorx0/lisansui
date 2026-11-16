@@ -22,7 +22,7 @@ try {
     grant execute on function auth.uid() to anon, authenticated;
   `);
   await setClaims('{}');
-  for (const name of ['0001_init.sql', '0002_fix_member_write_format.sql', '0003_approval_queue.sql']) {
+  for (const name of ['0001_init.sql', '0002_fix_member_write_format.sql', '0003_approval_queue.sql', '0006_fix_content_delete.sql']) {
     await db.exec(readFileSync(`supabase/migrations/${name}`, 'utf8'));
   }
   // Existing configuration cannot disable the approval requirement.
@@ -44,6 +44,12 @@ try {
   await setClaims(claims(adminId, 'admin@example.com'));
   await db.exec("set role authenticated; update public.members set status='active' where email='learner@example.com'");
   assert.equal((await db.query('select public.kpss_is_admin() as allowed')).rows[0].allowed, true);
+  // Replacing a nonempty tips list must actually delete the old rows first.
+  await db.query("select public.kpss_write_doc('daily_tips/main', $1::jsonb)", [JSON.stringify({list:['İlk bilgi'], schemaVersion:1})]);
+  await db.query("select public.kpss_write_doc('daily_tips/main', $1::jsonb)", [JSON.stringify({list:['Yeni bilgi', 'İkinci'], schemaVersion:1})]);
+  assert.deepEqual((await db.query('select "body" from public.tips order by "ord"')).rows.map(x => x.body), ['Yeni bilgi', 'İkinci']);
+  await db.query("select public.kpss_write_doc('daily_tips/main', $1::jsonb)", [JSON.stringify({list:[], schemaVersion:1})]);
+  assert.equal((await db.query('select count(*)::int as n from public.tips')).rows[0].n, 0);
   await setClaims(claims(userId, 'learner@example.com'));
   await db.exec(`insert into public.user_data ("userId", "kind", "payload") values ('${userId}', 'favorites', '[]'::jsonb)`);
   assert.equal((await db.query('select count(*)::int as n from public.user_data')).rows[0].n, 1);

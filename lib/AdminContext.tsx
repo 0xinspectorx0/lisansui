@@ -7,6 +7,7 @@ import React, {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { AppState } from 'react-native';
 import { CourseId, Question, TopicMeta } from './types';
 import {
   AdminActivity,
@@ -122,7 +123,6 @@ interface AdminContextValue {
   deleteTip: (index: number) => void;
   moveTip: (index: number, dir: -1 | 1) => void;
   restoreTips: () => Promise<void>;
-  publishTipsDraft: () => Promise<void>;
 
   /* users */
   upsertUser: (user: AdminUser) => void;
@@ -194,7 +194,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const state = useSyncExternalStore(subscribeAdmin, getAdminState, getAdminState);
   const cloudWrite = useSyncExternalStore(subscribeCloudWrite, getCloudWriteStatus, getCloudWriteStatus);
   const [policySource, setPolicySource] = useState<'unknown' | 'cloud' | 'device' | 'denied'>('unknown');
-  const { catalog, dailyTips, refreshAllCourses, streak, results, favorites, mistakes } =
+  const { catalog, dailyTips, refreshAllCourses, refreshTips, streak, results, favorites, mistakes } =
     useApp();
   // Loading the saved overrides bumps the store revision, which makes AppContext
   // re-resolve the catalog and tip list — no cache drop needed.
@@ -688,7 +688,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const next = mutator(base);
       writeTipsOverride(next);
       touch(activity);
-      void writeTipsDoc(next);
     },
     [dailyTips, touch]
   );
@@ -742,11 +741,45 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [mutateTips]
   );
 
-  // Explicit recovery for a draft left on this device after a failed write.
-  const publishTipsDraft = useCallback(async () => {
-    const draft = getAdminState().content.tips;
-    if (draft !== null && draft !== undefined) await writeTipsDoc(draft);
-  }, []);
+  // The pending bit is persisted with the draft. Retry transient failures without
+  // requiring a button, and never mark a newer edit as sent by an older request.
+  useEffect(() => {
+    const draft = state.content.tips;
+    if (!state.content.tipsPending || !draft) return;
+    let stopped = false;
+    let inFlight = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = 1000;
+    const attempt = async () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      if (timer) clearTimeout(timer);
+      const res = await writeTipsDoc(draft);
+      inFlight = false;
+      if (stopped) return;
+      if (res.ok) {
+        await refreshTips();
+        if (stopped) return;
+        updateAdminState(s => {
+          if (s.content.tips !== draft || !s.content.tipsPending) return s;
+          return { ...s, content: { ...s.content, tips: null, tipsPending: false } };
+        });
+      } else {
+        timer = setTimeout(() => void attempt(), delay);
+        delay = Math.min(delay * 2, 16000);
+      }
+    };
+    const app = AppState.addEventListener('change', status => { if (status === 'active') void attempt(); });
+    const online = () => { void attempt(); };
+    if (typeof window !== 'undefined') window.addEventListener('online', online);
+    void attempt();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      app.remove();
+      if (typeof window !== 'undefined') window.removeEventListener('online', online);
+    };
+  }, [state.content.tips, state.content.tipsPending, refreshTips]);
 
   const restoreTips = useCallback(async () => {
     clearTipsOverride();
@@ -1084,7 +1117,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       deleteTip,
       moveTip,
       restoreTips,
-      publishTipsDraft,
       upsertUser,
       deleteUser,
       patchUser,
@@ -1146,7 +1178,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       deleteTip,
       moveTip,
       restoreTips,
-      publishTipsDraft,
       upsertUser,
       deleteUser,
       patchUser,
