@@ -17,20 +17,20 @@ export const ProfileButton: React.FC<{
       accessibilityLabel={signedIn ? (isVip ? 'Hesabım, VIP üye' : 'Hesabım') : 'Giriş yap'}
       onPress={onPress}
       hitSlop={8}
-      style={[styles.control, isVip && styles.vipControl]}
+      style={styles.control}
     >
-      <View style={[styles.avatar, {
+      <View style={[styles.avatar, isVip && styles.vipAvatar, {
         backgroundColor: signedIn ? colors.successSoft : colors.surface,
         borderColor: isVip ? colors.warning : colors.border,
       }]}>
         <Ionicons
           name={signedIn ? 'person' : 'person-add-outline'}
-          size={19}
+          size={isVip ? 14 : 19}
           color={signedIn ? colors.success : colors.text}
         />
         {isVip && (
           <View pointerEvents="none" style={styles.crown}>
-            <MaterialCommunityIcons name="crown" size={19} color={colors.warning} />
+            <MaterialCommunityIcons name="crown" size={12} color={colors.warning} />
           </View>
         )}
       </View>
@@ -40,9 +40,9 @@ export const ProfileButton: React.FC<{
 };
 
 const styles = StyleSheet.create({
-  control: { alignItems: 'center', justifyContent: 'center' },
-  vipControl: { paddingTop: 8 },
+  control: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
   avatar: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  crown: { position: 'absolute', top: -10, alignSelf: 'center' },
-  vipLabel: { fontSize: 10, lineHeight: 12, fontWeight: '900', marginTop: 1 },
+  vipAvatar: { position: 'absolute', top: 5, width: 25, height: 25, borderRadius: 13 },
+  crown: { position: 'absolute', top: -5, alignSelf: 'center' },
+  vipLabel: { position: 'absolute', bottom: 0, fontSize: 8, lineHeight: 8, fontWeight: '900' },
 });

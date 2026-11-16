@@ -258,10 +258,10 @@ export const HomeScreen: React.FC = () => {
         {/* Clean Header */}
         <View style={styles.header}>
           <View style={styles.headerTitle}>
-            <Text style={[styles.appTitle, { color: colors.text }]}>
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.55} style={[styles.appTitle, { color: colors.text }]}>
               KPSS Asistanı
             </Text>
-            <Text style={[styles.appSub, { color: colors.textSecondary }]}>
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={[styles.appSub, { color: colors.textSecondary }]}>
               {totalLiveQuestions.toLocaleString('tr-TR')} soru • Sade çalışma alanı
             </Text>
           </View>
@@ -283,8 +283,8 @@ export const HomeScreen: React.FC = () => {
                   },
                 ]}
               >
-                <Ionicons name="flame" size={15} color={colors.warning} />
-                <Text numberOfLines={1} style={[styles.streakText, { color: colors.warning }]}>
+                <Ionicons name="flame" size={13} color={colors.warning} />
+                <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} style={[styles.streakText, { color: colors.warning }]}>
                   {streak.current} gün
                 </Text>
               </View>
@@ -845,14 +845,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: 8,
+    flexWrap: 'nowrap',
+    gap: 6,
     marginBottom: 16,
   },
   headerTitle: {
     flexGrow: 1,
     flexShrink: 1,
-    minWidth: 140,
+    minWidth: 0,
     maxWidth: '100%',
   },
   appTitle: {
@@ -897,24 +897,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    flexWrap: 'wrap',
-    flexShrink: 1,
+    flexWrap: 'nowrap',
+    flexShrink: 0,
     maxWidth: '100%',
-    gap: 8,
+    gap: 4,
   },
   streakPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
+    gap: 2,
+    paddingHorizontal: 4,
+    width: 64,
     height: HEADER_CONTROL_HEIGHT,
-    maxWidth: 116,
     borderRadius: 999,
     borderWidth: 1,
   },
   streakText: {
     flexShrink: 1,
-    fontSize: 12,
+    minWidth: 0,
+    fontSize: 10,
     fontWeight: '700',
   },
   iconBtn: {
