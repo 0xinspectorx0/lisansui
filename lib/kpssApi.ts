@@ -9,7 +9,6 @@ import { cleanKpssText, cleanOptionText } from './textUtils';
 import {
   applyAdminQuestions,
   applyAdminTopics,
-  getQuestionsOverride,
 } from './adminStore';
 
 /**
@@ -23,6 +22,7 @@ const contentDocPath = (courseId: CourseId, topicDocId: string) =>
 // Fast in-memory session caches
 const topicQuestionsCache = new Map<string, Question[]>();
 const catalogCache = new Map<CourseId, TopicMeta[]>();
+let cacheGeneration = 0;
 
 function parseCloudQuestions(
   rawValues: any[],
@@ -73,7 +73,7 @@ function parseCloudQuestions(
 export function getInitialCatalog(): Record<CourseId, TopicMeta[]> {
   const seed = INITIAL_TOPIC_CATALOG;
   const resolve = (courseId: CourseId): TopicMeta[] =>
-    applyAdminTopics(courseId, catalogCache.get(courseId) || seed[courseId] || []);
+    catalogCache.get(courseId) ?? applyAdminTopics(courseId, seed[courseId] || []);
   return {
     tarih: resolve('tarih'),
     cografya: resolve('cografya'),
@@ -85,8 +85,15 @@ export function getInitialCatalog(): Record<CourseId, TopicMeta[]> {
 
 /** Drops in-memory content caches so the next read re-resolves through admin overrides. */
 export function clearKpssCaches(): void {
+  cacheGeneration++;
   topicQuestionsCache.clear();
   catalogCache.clear();
+}
+
+/** Invalidate question reads while retaining the last catalog for offline use. */
+export function invalidateLiveContent(): void {
+  cacheGeneration++;
+  topicQuestionsCache.clear();
 }
 
 /**
@@ -98,17 +105,10 @@ export async function fetchTopicQuestions(
   topicDocId: string,
   topicName?: string
 ): Promise<Question[]> {
-  // The admin panel is authoritative once it has touched this topic.
-  const override = getQuestionsOverride(courseId, topicDocId);
-  if (override) {
-    return override;
-  }
-
   const cacheKey = `${courseId}:${topicDocId}`;
   const cached = topicQuestionsCache.get(cacheKey);
-  if (cached && cached.length > 0) {
-    return applyAdminQuestions(courseId, topicDocId, cached);
-  }
+  if (cached) return cached;
+  const generation = cacheGeneration;
 
   try {
     const read = await readDocument(contentDocPath(courseId, topicDocId));
@@ -122,10 +122,9 @@ export async function fetchTopicQuestions(
       topicDocId,
       resolvedName
     );
-    if (questions.length > 0) {
-      topicQuestionsCache.set(cacheKey, questions);
-      return applyAdminQuestions(courseId, topicDocId, questions);
-    }
+    if (generation !== cacheGeneration) return fetchTopicQuestions(courseId, topicDocId, topicName);
+    topicQuestionsCache.set(cacheKey, questions);
+    return questions;
   } catch {
     // Offline fallback
   }
@@ -144,6 +143,7 @@ export async function fetchTopicQuestions(
  * Refreshes topic list & live question counts for a course from kpssasistani.com
  */
 export async function refreshCourseTopics(courseId: CourseId): Promise<TopicMeta[]> {
+  const generation = cacheGeneration;
   try {
     const listed = await listDocuments(`courses/${courseId}/topics`, { pageSize: 100 });
     if (!listed.ok) throw new Error(listed.error);
@@ -154,17 +154,11 @@ export async function refreshCourseTopics(courseId: CourseId): Promise<TopicMeta
       const id = f.id?.stringValue || docId;
       const name = f.name?.stringValue || docId;
       const rawValues = f.questions?.arrayValue?.values || [];
-      if (rawValues.length > 0) {
-        const parsed = parseCloudQuestions(rawValues, courseId, docId, name);
-        if (parsed.length > 0) {
-          topicQuestionsCache.set(`${courseId}:${docId}`, parsed);
-        }
-      }
       return {
         docId,
         id,
         name,
-        questionCount: rawValues.length,
+        questionCount: Number(f.questionCount?.integerValue ?? f.questionCount?.doubleValue ?? rawValues.length) || 0,
       };
     });
 
@@ -172,16 +166,14 @@ export async function refreshCourseTopics(courseId: CourseId): Promise<TopicMeta
       a.name.localeCompare(b.name, 'tr', { numeric: true, sensitivity: 'base' })
     );
 
-    if (topics.length > 0) {
-      catalogCache.set(courseId, topics);
-      return applyAdminTopics(courseId, topics);
-    }
+    if (generation !== cacheGeneration) return refreshCourseTopics(courseId);
+    catalogCache.set(courseId, topics);
+    return topics;
   } catch {
     // Keep cached/seed catalog
   }
-  return applyAdminTopics(
-    courseId,
-    catalogCache.get(courseId) || INITIAL_TOPIC_CATALOG[courseId] || []
+  return catalogCache.get(courseId) ?? applyAdminTopics(
+    courseId, INITIAL_TOPIC_CATALOG[courseId] || []
   );
 }
 

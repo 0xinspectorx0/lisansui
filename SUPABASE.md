@@ -212,3 +212,14 @@ npm run test:bulk && npm run test:copy && npm run test:ui
 npm run migrate:content:selftest   # göç script'i sahte sunucuyla
 npm run sync:sql -- --check        # paneldeki SQL kopyası bayatlamış mı?
 ```
+
+### Cihazlar arası canlı içerik
+
+Mevcut projelerde `supabase/migrations/0004_content_realtime.sql` dosyasını SQL
+Editor üzerinden bir kez uygulayın ve Supabase Realtime servisinin etkin olduğunu
+kontrol edin. Yayınlanmış konu/soru değişiklikleri `topics` tablosunun Realtime
+bildirimiyle açık cihazlarda yeniden okunur; bağlantı kurulduğunda ve uygulama
+öne geldiğinde de yenilenir. Realtime engellenirse açık uygulama 30 saniyede bir
+kontrol eder. Değişiklikler yalnızca sunucuya başarıyla kaydedildikten sonra
+başka cihazlara ulaşır. Devam eden sınavın soru listesi değiştirilmez. Yönetici
+cihazındaki kaydedilmemiş veya başarısız taslaklar korunur.

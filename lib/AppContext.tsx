@@ -1,3 +1,4 @@
+import { watchContentUpdates } from './contentUpdates';
 import React, {
   createContext,
   useCallback,
@@ -21,6 +22,7 @@ import {
 } from './types';
 import {
   fetchLiveDailyTips,
+  invalidateLiveContent,
   getInitialCatalog,
   refreshCourseTopics,
 } from './kpssApi';
@@ -364,6 +366,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {
       // keep whatever is cached
     }
+  }, []);
+
+  // Serialize invalidations: an event during a fetch schedules one more pass.
+  useEffect(() => {
+    let stopped = false;
+    let running = false;
+    let pending = false;
+    const update = async () => {
+      invalidateLiveContent();
+      pending = true;
+      if (running) return;
+      running = true;
+      while (pending && !stopped) {
+        pending = false;
+        const entries = await Promise.all(
+          ALL_COURSE_IDS.map(async id => [id, await refreshCourseTopics(id)] as const)
+        );
+        if (!stopped && !pending) {
+          setCatalog(prev => {
+            const next = { ...prev };
+            entries.forEach(([id, topics]) => { next[id] = topics; });
+            return next;
+          });
+        }
+      }
+      running = false;
+    };
+    const unsubscribe = watchContentUpdates(() => { void update(); });
+    void update();
+    return () => { stopped = true; unsubscribe(); };
   }, []);
 
   const refreshTips = useCallback(async () => {

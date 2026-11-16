@@ -9,6 +9,7 @@
     "@react-navigation/bottom-tabs": "~7.20.0",
     "@react-navigation/native": "^7.5.0",
     "@react-navigation/native-stack": "^7.20.0",
+    "@supabase/realtime-js": "2.95.3",
     "expo": "~57.0.26",
     "expo-asset": "^57.0.18",
     "expo-constants": "^57.0.20",
@@ -54,8 +55,9 @@
     "test:approval-db": "node scripts/approval-db.test.mjs",
     "test:admin-gate": "node scripts/admin-gate.test.mjs",
     "prebuild": "node scripts/sync-sql-copy.mjs --check",
-    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:admin-gate && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest",
-    "migrate:content": "node scripts/migrate-to-supabase.mjs"
+    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:content-sync && npm run test:admin-gate && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest",
+    "migrate:content": "node scripts/migrate-to-supabase.mjs",
+    "test:content-sync": "node scripts/content-sync.test.mjs"
   },
   "private": true
 }
