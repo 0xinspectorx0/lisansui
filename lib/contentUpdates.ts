@@ -11,7 +11,6 @@ export function watchContentUpdates(refresh: () => void): () => void {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => { if (active) refresh(); }, 150);
   };
-  const poll = setInterval(notify, 30_000);
   const app = AppState.addEventListener('change', state => {
     if (state === 'active') notify();
   });
@@ -32,12 +31,11 @@ export function watchContentUpdates(refresh: () => void): () => void {
         .on('postgres_changes', { event: '*', schema: target.schema, table: 'tips' }, notify)
         .subscribe(status => { if (status === 'SUBSCRIBED') notify(); });
     } catch {
-      // Polling and foreground refresh remain available when Realtime is blocked.
+      // Foreground refresh remains available when Realtime is blocked.
     }
   }
   return () => {
     active = false;
-    clearInterval(poll);
     if (timer) clearTimeout(timer);
     app.remove();
     if (typeof window !== 'undefined') window.removeEventListener('online', online);

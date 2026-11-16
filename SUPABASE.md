@@ -219,13 +219,12 @@ Mevcut projelerde `supabase/migrations/0004_content_realtime.sql` dosyasını SQ
 Editor üzerinden bir kez uygulayın ve Supabase Realtime servisinin etkin olduğunu
 kontrol edin. Yayınlanmış konu/soru değişiklikleri `topics` tablosunun Realtime
 bildirimiyle açık cihazlarda yeniden okunur; bağlantı kurulduğunda ve uygulama
-öne geldiğinde de yenilenir. Realtime engellenirse açık uygulama 30 saniyede bir
-kontrol eder. Değişiklikler yalnızca sunucuya başarıyla kaydedildikten sonra
+öne geldiğinde de yenilenir. Realtime engellenirse uygulama tekrar öne geldiğinde veya bağlantı yeniden kurulduğunda kontrol eder. Değişiklikler yalnızca sunucuya başarıyla kaydedildikten sonra
 başka cihazlara ulaşır. Devam eden sınavın soru listesi değiştirilmez. Yönetici
 cihazındaki kaydedilmemiş veya başarısız taslaklar korunur.
 
 Hap bilgilerin de açık cihazlarda canlı yenilenmesi için mevcut projelerde ayrıca
 `supabase/migrations/0005_tips_realtime.sql` dosyasını çalıştırın. Realtime
-kullanılamazsa uygulama öne geldiğinde ve 30 saniyede bir bulutu kontrol eder.
-Yönetici ekranında bulut yazma hatası ve yeniden deneme gösterilir. Eski bir yerel
-hap bilgi taslağı elle buluta gönderilebilir; bu işlem tüm bulut listesini değiştirir.
+kullanılamazsa uygulama öne geldiğinde veya bağlantı yeniden kurulduğunda bulutu kontrol eder.
+`supabase/migrations/0006_fix_content_delete.sql` dosyası da mevcut projeye uygulanmalıdır.
+Yeni hap bilgi düzenlemeleri otomatik gönderilir, başarısız yazımlar yeniden denenir.

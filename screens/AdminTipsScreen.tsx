@@ -30,7 +30,7 @@ export const AdminTipsScreen: React.FC = () => {
   const [search, setSearch] = useState('');
   const [sheet, setSheet] = useState<{ mode: 'add' | 'edit'; index: number } | null>(null);
   const [draft, setDraft] = useState('');
-  const [confirm, setConfirm] = useState<{ type: 'delete' | 'restore' | 'publish'; index: number } | null>(
+  const [confirm, setConfirm] = useState<{ type: 'delete' | 'restore'; index: number } | null>(
     null
   );
 
@@ -62,8 +62,8 @@ export const AdminTipsScreen: React.FC = () => {
           <AdminRow
             icon="cloud-offline-outline"
             title="Buluta yazma başarısız"
-            subtitle={`${admin.cloudWrite.error} — taslak bu cihazda korunuyor.`}
-            right={<AdminButton small tone="danger" label="Yeniden dene" onPress={() => void admin.retryCloudWrites()} />}
+            subtitle={`${admin.cloudWrite.error} — taslak korunuyor; otomatik olarak yeniden denenecek.`}
+            right={null}
           />
         ) : null}
         <AdminSearchBar value={search} onChangeText={setSearch} placeholder="Hap bilgide ara" />
@@ -161,12 +161,6 @@ export const AdminTipsScreen: React.FC = () => {
         {overridden && (
           <View style={styles.resetRow}>
             <AdminButton
-              label="Yerel listeyi buluta gönder"
-              icon="cloud-upload-outline"
-              onPress={() => setConfirm({ type: 'publish', index: -1 })}
-              style={{ alignSelf: 'stretch' }}
-            />
-            <AdminButton
               label="Listeyi buluttan geri yükle"
               tone="danger"
               icon="cloud-download-outline"
@@ -227,15 +221,6 @@ export const AdminTipsScreen: React.FC = () => {
           if (confirm) admin.deleteTip(confirm.index);
           setConfirm(null);
         }}
-      />
-
-      <AdminConfirm
-        visible={confirm?.type === 'publish'}
-        title="Yerel liste buluta gönderilsin mi?"
-        message="Bu cihazdaki listenin tamamı buluttaki hap bilgi listesinin yerini alacak. Başka cihazlarda yapılan değişiklikler kaybolabilir."
-        confirmLabel="Buluta gönder"
-        onCancel={() => setConfirm(null)}
-        onConfirm={() => { setConfirm(null); void admin.publishTipsDraft(); }}
       />
 
       <AdminConfirm

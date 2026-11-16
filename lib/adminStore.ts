@@ -145,6 +145,8 @@ export interface AdminContent {
   questions: Record<string, Question[]>;
   /** authoritative daily tips list (string[] in app order) */
   tips: string[] | null;
+  /** Only new edits with a known unsent write are retried after restart. */
+  tipsPending?: boolean;
   courseOrder: CourseId[];
   hiddenCourses: CourseId[];
   courseTitles: Partial<Record<CourseId, string>>;
@@ -522,11 +524,11 @@ export function clearQuestionsOverride(courseId: CourseId, topicDocId: string): 
 }
 
 export function writeTipsOverride(tips: string[]): void {
-  updateAdminState(s => ({ ...s, content: { ...s.content, tips } }));
+  updateAdminState(s => ({ ...s, content: { ...s.content, tips, tipsPending: true } }));
 }
 
 export function clearTipsOverride(): void {
-  updateAdminState(s => ({ ...s, content: { ...s.content, tips: null } }));
+  updateAdminState(s => ({ ...s, content: { ...s.content, tips: null, tipsPending: false } }));
 }
 
 export function updateAdminSettings(patch: Partial<AdminSettings>): void {
