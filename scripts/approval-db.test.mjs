@@ -77,6 +77,39 @@ try {
   await assert.rejects(db.exec(`insert into public.user_tests ("key","memberEmail","userId","courseId") values ('forged','learner@example.com','${userId}','tarih')`), /row-level security/);
   await db.exec('reset role');
   assert.equal((await db.query("select count(*)::int as n from public.user_tests where key='same-test'")).rows[0].n, 2);
+  // Founder must already have a confirmed Auth identity; migration does not invent one.
+  const founderId = '44444444-4444-4444-8444-444444444444';
+  const founderMigration = readFileSync('supabase/migrations/0010_founder_protection.sql', 'utf8');
+  await assert.rejects(db.exec(founderMigration), /existing, verified/);
+  await setClaims('{}');
+  await db.exec(`insert into auth.users values ('${founderId}', 'gokhntekin@gmail.com', now(), '{}')`);
+  await db.exec(founderMigration);
+  await db.exec(founderMigration); // migration can be safely rerun
+  const founder = (await db.query("select role,status,\"authUid\" from public.members where email='gokhntekin@gmail.com'")).rows[0];
+  assert.deepEqual(founder, {role:'owner', status:'active', authUid:founderId});
+  await db.exec('set role authenticated');
+  await setClaims(claims(adminId, 'admin@example.com'));
+  await assert.rejects(db.exec("update public.members set role='user' where email='gokhntekin@gmail.com'"), /Founder identity, role and status/);
+  await assert.rejects(db.exec("update public.members set status='banned' where email='gokhntekin@gmail.com'"), /Founder identity, role and status/);
+  await assert.rejects(db.exec("update public.members set \"authUid\"='fake' where email='gokhntekin@gmail.com'"), /Founder identity, role and status/);
+  await assert.rejects(db.exec("delete from public.members where email='gokhntekin@gmail.com'"), /Founder account cannot be deleted/);
+  await assert.rejects(db.exec(`update public.admins set "userId"='${adminId}' where email='gokhntekin@gmail.com'`), /Founder admin identity|permission denied/);
+  await db.exec("delete from public.admins where email='gokhntekin@gmail.com'");
+  assert.equal((await db.query("select count(*)::int as n from public.admins where email='gokhntekin@gmail.com'")).rows[0].n,1);
+  await db.query("select public.kpss_write_doc('meta/admins', $1::jsonb)", [JSON.stringify({emails:['admin@example.com','gokhntekin@gmail.com']})]);
+  await db.query("select public.kpss_write_doc('meta/admins', $1::jsonb)", [JSON.stringify({emails:['admin@example.com']})]);
+  assert.equal((await db.query("select count(*)::int as n from public.admins where email='gokhntekin@gmail.com'")).rows[0].n,1, 'replacing admin list cannot remove founder');
+  await setClaims(claims(adminId, 'gokhntekin@gmail.com'));
+  assert.equal((await db.query('select public.kpss_is_admin() as allowed')).rows[0].allowed,false,'email claim alone must not impersonate founder');
+  await setClaims(claims(founderId, 'gokhntekin@gmail.com'));
+  assert.equal((await db.query('select public.kpss_is_admin() as allowed')).rows[0].allowed,true);
+  await db.exec("update public.members set \"displayName\"='Kurucu' where email='gokhntekin@gmail.com'");
+  await db.exec('reset role');
+  await assert.rejects(db.exec(`delete from auth.users where id='${founderId}'`), /Founder Auth account cannot be deleted/);
+  await assert.rejects(db.exec(`update auth.users set email='changed@example.com' where id='${founderId}'`), /Founder Auth email and verification/);
+  await assert.rejects(db.exec(`update auth.users set email_confirmed_at=null where id='${founderId}'`), /Founder Auth email and verification/);
+  await db.exec(`update auth.users set raw_user_meta_data='{}' where id='${founderId}'`);
+  console.log('✓ Founder UID, role, status and admin-list protections');
   console.log('✓ PostgreSQL approval, personal data RLS and independent test keys');
 } finally {
   await db.close();

@@ -44,6 +44,25 @@ Secret anahtarı yanlışlıkla **yazmak** da mümkün değil: `--anon-key sb_se
 `config/supabaseApp.ts` yazıldıktan sonra dosya geri okunarak tekrarlanır ve
 `npm run check:supabase` bozuk depoyla yoklama yapmaz.
 
+## Kurucu yönetici koruması
+
+`0010_founder_protection.sql`, `gokhntekin@gmail.com` için mevcut ve e-postası
+onaylanmış Supabase Auth hesabının **UID** değerini kurucuya bağlar. Uygulamadan
+veya başka bir yöneticinin işlemlerinden kurucunun üyelik rolü, durumu, UID'si ve
+yönetici kaydı değiştirilemez ya da silinemez. Auth hesabının silinmesi, e-postasının
+ve doğrulama durumunun değiştirilmesi de engellenir; parola değiştirilebilir. Panel
+erişimi rol etiketinden değil, sunucunun doğruladığı Auth UID'sinden gelir.
+
+**Uygulamadan önce:** Supabase Auth'ta e-posta onayı açık olmalı ve hesabın gerçek
+sahibi adresini doğrulamış olmalıdır. E-posta onayı kapalıyken otomatik doğrulanmış
+bir hesabın adres sahipliği bu SQL ile doğrulanamaz; bu durumda migration'ı çalıştırmayın.
+Hesap yoksa veya onaylanmamışsa migration hata ile durur; hesap veya parola oluşturmaz.
+Mevcut projede önceki migration'lar uygulandıktan sonra `0010` uygulanmalıdır.
+Tüm migration'ları içeren `?sql=1` metnini çalıştırmadan önce de hesap hazır olmalıdır.
+
+Bu koruma uygulama/API işlemleri içindir; Supabase proje sahibi, service-role veya
+veritabanı yöneticisi kimlik doğrulama hesabını ya da SQL kurallarını değiştirebilir.
+
 ## Üyelik onayı ve mevcut kurulumun güncellenmesi
 
 Mevcut projelerde `supabase/migrations/0002_fix_member_write_format.sql` ve ardından
