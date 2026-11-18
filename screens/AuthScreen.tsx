@@ -508,11 +508,6 @@ export const AuthScreen: React.FC = () => {
                 ) : null}
 
                 <Text style={[styles.quota, { color: colors.textMuted }]}>{quotaHint}</Text>
-                {mode === 'signin' && membership.authMode ? (
-                  <Text style={[styles.quota, { color: colors.textMuted }]}>
-                    Parolan Supabase Auth’ta saklanır; uygulamada yalnızca e-posta ve hakların tutulur.
-                  </Text>
-                ) : null}
               </>
             )}
           </AdminCard>
