@@ -1,5 +1,5 @@
-import React from 'react';
-import { Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
+import React, { useCallback, useRef, useState } from 'react';
+import { Alert, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -9,6 +9,8 @@ import {
   DefaultTheme,
   DarkTheme,
   LinkingOptions,
+  createNavigationContainerRef,
+  StackActions,
   getStateFromPath as defaultGetStateFromPath,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -19,6 +21,7 @@ import { AppProvider, useApp } from './lib/AppContext';
 import { AdminProvider } from './lib/AdminContext';
 import { MembershipProvider, useMembership } from './lib/MembershipContext';
 import { ProfileIcon } from './components/ProfileButton';
+import { StackTabBar, type StackTabTarget } from './components/StackTabBar';
 import { AdminAccessProvider } from './lib/AdminAccessContext';
 import { AdminGate } from './components/admin/AdminGate';
 import { hasPendingAuthRedirect } from './lib/authClient';
@@ -264,6 +267,40 @@ function RootNavigator() {
   const { colors } = useAppTheme();
   const { width, height } = useWindowDimensions();
   const isWideWeb = Platform.OS === 'web' && width > 540;
+  const membership = useMembership();
+  const navRef = useRef(createNavigationContainerRef<RootStackParamList>()).current;
+  const [rootRoute, setRootRoute] = useState('MainTabs');
+  const updateRootRoute = useCallback(() => {
+    const state = navRef.getRootState();
+    if (state) setRootRoute(state.routes[state.index]?.name || 'MainTabs');
+  }, [navRef]);
+  const selectTab = useCallback((tab: StackTabTarget) => {
+    if (!navRef.isReady()) return;
+    const destination = tab === 'ProfileTab' ? (membership.signedIn ? 'Profile' : 'Auth') : null;
+    if (destination === rootRoute) return;
+    const state = navRef.getRootState();
+    const currentKey = state?.routes[state.index]?.key;
+    const perform = () => {
+      if (!navRef.isReady()) return;
+      const latest = navRef.getRootState();
+      if (!latest || latest.routes[latest.index]?.key !== currentKey) return;
+      if (destination) {
+        // Replace an unfinished quiz so its timer cannot keep running underneath.
+        if (rootRoute === 'Quiz') navRef.dispatch(StackActions.replace(destination));
+        else navRef.navigate(destination);
+      } else navRef.dispatch(StackActions.popTo('MainTabs', { screen: tab }));
+    };
+    if (rootRoute !== 'Quiz') { perform(); return; }
+    const message = 'Testten ayrılırsanız mevcut yanıtlarınız kaydedilmez. Ayrılmak istiyor musunuz?';
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm(message)) perform();
+    } else {
+      Alert.alert('Testten ayrıl', message, [
+        { text: 'Devam et', style: 'cancel' },
+        { text: 'Ayrıl', style: 'destructive', onPress: perform },
+      ]);
+    }
+  }, [membership.signedIn, navRef, rootRoute]);
 
   // `?sql=1` → PIN'siz, salt-okunur SQL teslim sayfası. Kasıtlı olarak en başta
   // dönülür: veri katmanı/oturum bozukken de açılabilsin (kurulumda panel
@@ -322,8 +359,9 @@ function RootNavigator() {
           },
         ]}
       >
-        <NavigationContainer theme={navTheme} linking={linking}>
+        <NavigationContainer ref={navRef} onReady={updateRootRoute} onStateChange={updateRootRoute} theme={navTheme} linking={linking}>
           <StatusBar style={colors.isDark ? 'light' : 'dark'} />
+          <View style={styles.stackWindow}>
           <Stack.Navigator
             initialRouteName={hasPendingAuthRedirect() ? 'Auth' : 'MainTabs'}
             screenOptions={{
@@ -358,6 +396,8 @@ function RootNavigator() {
               component={MembershipPaywallScreen}
             />
           </Stack.Navigator>
+          </View>
+          {rootRoute !== 'MainTabs' && <StackTabBar routeName={rootRoute} onSelect={selectTab} />}
         </NavigationContainer>
       </View>
     </View>
@@ -370,6 +410,7 @@ const styles = StyleSheet.create({
     minHeight: 0,
     overflow: 'hidden',
   },
+  stackWindow: { flex: 1, minHeight: 0 },
   appFrame: {
     flex: 1,
     minHeight: 0,

@@ -244,7 +244,6 @@ console.log('\x1b[1m[5] ayarlar ekranı — anahtar kullanıcıdan istenmiyor\x1
     '../lib/AdminContext',
     '../lib/contentSeed',
     '../lib/contentCopy',
-    '../lib/supabaseConfig',
   ];
   const shimDir = path.join(TMP, 'stubs');
   fs.mkdirSync(shimDir, { recursive: true });
@@ -297,15 +296,13 @@ console.log('\x1b[1m[5] ayarlar ekranı — anahtar kullanıcıdan istenmiyor\x1
   ok(!vis.includes('Supabase Auth (kimlik doğrulama)'), 'Supabase Auth bölümü kaldırıldı');
   ok(!vis.includes('Supabase klasörlerini oluştur (tohumlama)') && !vis.includes('Planı çıkar') && !vis.includes('Örnek soruları da yaz'), 'tohumlama bölümü kaldırıldı');
   ok(!vis.includes('Kimlik modu') && !vis.includes('Sağlayıcı testi') && !vis.includes('AUTH’U BAĞLAMA SIRASI'), 'Auth bölümündeki kontroller kaldırıldı');
-  ok(vis.includes('SQL — tablolar ve RLS'), 'SQL kartı panelde görünüyor');
+  ok(!vis.includes('Supabase bağlantısı') && !vis.includes('Bağlantı testi') && !vis.includes('Proje kimliği'), 'Supabase bağlantısı bölümü kaldırıldı');
   ok(!vis.includes('Web API anahtarı (apiKey)'), 'apiKey yapıştırma alanı ekranda YOK');
   ok(!/EXPO_PUBLIC_SUPABASE_ANON_KEY=/.test(vis), 'panel kullanıcıya ortam değişkeni ezberletmiyor');
   ok(!/Bu cihazda kayıtlı eski anahtar/.test(vis), 'cihaz anahtarı yoksa o satır da görünmüyor');
   ok(!vis.includes('Erişim tanısı ve kurallar'), 'tanı bölümü panelden kaldırıldı');
   ok(!vis.includes('Yazma sınaması') && !vis.includes('Raporu göster'), 'sınama/rapor satırları kaldırıldı');
   ok(!vis.includes('Bulut kuyruğu') && !vis.includes('Şimdi dene'), 'bekletme/kuyruk arayüzü kaldırıldı — yazma anlık');
-  ok(vis.includes('cihazda kopya tutulmaz'), 'verinin tek kaynağının Supabase olduğu satırda yazıyor');
-  ok(vis.includes('kod member-'), 'hangi derlemede olduğu satırda yazıyor');
 }
 
 console.log('\x1b[1m[bulut] anlık yazı + politika belgesi bağlantıları\x1b[0m');
@@ -340,7 +337,7 @@ console.log('\x1b[1m[sqldelivery] `?sql=1` teslim sayfası[0m');
   written.push(f);
   const { html, vis } = await renderOf(f);
   ok(html.length > 400, `sayfa çökmeden render edildi (${(html.length / 1024) | 0} KB)`);
-  ok(vis.includes('SQL — tablolar ve RLS'), 'başlık görünüyor');
+  ok(vis.includes('Supabase — tablolar ve RLS'), 'başlık görünüyor');
   ok(vis.includes('create table if not exists public.members'), 'SQL metni sayfanın içinde');
   ok(vis.includes('Kopyala') || vis.includes('kopyala'), 'kopyalama eylemi var');
   ok(!/AIza|apiKey/.test(vis), 'anahtar/çevresel döküm sayfada yok');

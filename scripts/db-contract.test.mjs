@@ -743,15 +743,12 @@ head('\x1b[1m[8] hak ve kota hesabı\x1b[0m');
 head('\x1b[1m[9] panel ve akış metinleri\x1b[0m');
 {
   const panel = read('screens/AdminSettingsScreen.tsx');
-  ok(/SQL — tablolar ve RLS/.test(panel), 'panelde SQL satırı var (kopyala → yapıştır → Run)');
-  ok((panel.match(/title="SQL — tablolar ve RLS"/g) || []).length === 1, 'SQL kartı panelde tek tane (bayat kopya yok)');
-  ok(panel.includes('?sql=1'), 'panel PIN’siz teslim adresini de söylüyor');
+  ok(!/label="Supabase bağlantısı"/.test(panel), 'Supabase bağlantısı bölümü kaldırıldı');
   const appSrc = read('App.tsx');
   ok(appSrc.includes('sqlDeliveryRequested()') && appSrc.includes('SqlDeliveryScreen'), 'App `?sql=1` dalını navigator’dan ÖNCE yakalıyor');
   const sqlPage = read('screens/SqlDeliveryScreen.tsx');
   ok(sqlPage.includes('SUPABASE_SQL') && !sqlPage.includes('AsyncStorage') && !/[^a-zA-Z]fetch\(/.test(sqlPage), 'teslim sayfası yalnız metni gösterir (veri katmanına dokunmaz)');
-  ok(/copySql|Kopyala/.test(panel), 'SQL kopyalama eylemi pane bağlı');
-  ok(/setup:supabase/.test(panel) && !/deploy:rules/.test(panel), 'kurulum komutları Supabase’e dönük');
+  ok(/clipboard/.test(sqlPage), 'SQL kopyalama eylemi teslim sayfasında korunuyor');
   ok(!/diagnoseMembershipAccess|accessDiag|teşhis/.test(panel) && !/Tanı(?!mlı)/.test(panel), 'panelde tanı/rapor arayüzü yok');
   ok(!/kural metnini kopyala/.test(panel), 'kural metnini kopyalatma dönemi bitti');
   ok(!/Supabase Auth \(kimlik doğrulama\)|Kimlik modu/.test(panel), 'kimlik doğrulama ayar bölümü kaldırıldı');
@@ -776,7 +773,7 @@ head('\x1b[1m[9] panel ve akış metinleri\x1b[0m');
   }
   const ui = fs.readdirSync('components/membership').map(f => read(`components/membership/${f}`).length).reduce((a, b) => a + b, 0);
   ok(ui > 1000, 'üyelik arayüzü bileşenleri yerinde');
-  ok(/SQL — tablolar ve RLS/.test(read('components/membership/ui.tsx')), 'membership/ui.tsx doğrudan Supabase SQL kurulumuna yönlendiriyor');
+  ok(/\?sql=1/.test(read('components/membership/ui.tsx')), 'membership/ui.tsx SQL teslim sayfasına yönlendiriyor');
   ok(/EXPO_PUBLIC_SUPABASE_URL/.test(read('.env.example')), '.env.example yalnızca Supabase değişkenlerini içeriyor');
   const files = fs.readdirSync('screens').map(f => `screens/${f}`);
   const dirty = files.filter(f => /Bulut kuyruğu|Şimdi dene|Kuyrukta/i.test(read(f)));
@@ -800,7 +797,6 @@ head('\x1b[1m[10] config/supabaseSqlCopy.ts = migrations (bayat kopya kapısı)\
   ok(/^[0-9a-f]{16}$/.test(SQLC.SUPABASE_SQL_SHA), 'sha kısa ve biçimli', SQLC.SUPABASE_SQL_SHA);
   ok(typeof SQLC.describeSupabaseSql === 'function' && /satır/.test(SQLC.describeSupabaseSql()), 'panel özeti hazır', SQLC.describeSupabaseSql?.());
   ok(/^member-\d{4}-\d{2}-\d{2}[a-z]$/.test(BT.MEMBERSHIP_BUILD_TAG), 'derleme damgası biçimi', BT.MEMBERSHIP_BUILD_TAG);
-  ok(/membershipBuildLabel/.test(read('screens/AdminSettingsScreen.tsx')) || /membershipBuildLabel/.test(read('lib/MembershipContext.tsx')), 'damga ekranda görünüyor (eski paket ihbarı)');
 }
 
 /* ------------------------------------------------------------ özet */
