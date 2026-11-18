@@ -97,8 +97,7 @@ supabase link --project-ref <ref> && supabase db push
 
 Kurulanlar: `membership_policy`, `admins`, `members`, `courses`, `topics`, `questions`,
 `user_tests`, `tips`, `user_data` + `kpss_*` geçit fonksiyonları + 19 politika.
-Panelde de aynı metin tek tuşla kopyalanabilir: **Admin → Ayarlar → Supabase bağlantısı →
-"SQL — tablolar ve RLS" → Kopyala**.
+Aynı metin, uygulama adresinin sonuna `?sql=1` eklenerek açılan sayfadan da kopyalanabilir.
 
 Doğrulama:
 

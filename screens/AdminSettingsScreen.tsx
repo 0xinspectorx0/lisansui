@@ -4,13 +4,6 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { useNavigation } from '@react-navigation/native';
 import { useAppTheme } from '../lib/theme';
-import {
-  collectionPath,
-  DEFAULT_TARGET,
-  cloudTarget,
-  probeUrls,
-  type SupabaseTarget,
-} from '../lib/supabaseConfig';
 import { readLockState } from '../lib/contentSeed';
 import {
   describeCopyPlan,
@@ -22,7 +15,6 @@ import {
   type CopyProgress,
   type CopyResult,
 } from '../lib/contentCopy';
-import { SUPABASE_SQL, describeSupabaseSql } from '../config/supabaseSqlCopy';
 import { useAdmin } from '../lib/AdminContext';
 import { useApp } from '../lib/AppContext';
 import { ThemePreference } from '../lib/theme';
@@ -41,7 +33,6 @@ import {
   AdminToggle,
 } from '../components/admin/ui';
 import { AdminGate } from '../components/admin/AdminGate';
-import { membershipBuildLabel } from '../lib/buildTag';
 
 export const AdminSettingsScreen: React.FC = () => {
   const { colors } = useAppTheme();
@@ -55,47 +46,6 @@ export const AdminSettingsScreen: React.FC = () => {
   const [importDraft, setImportDraft] = useState('');
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<'content' | 'all' | null>(null);
-  const [probe, setProbe] = useState<{ busy: boolean; text: string; tone: 'info' | 'success' | 'danger' }>({
-    busy: false,
-    text: 'Henüz test edilmedi',
-    tone: 'info',
-  });
-
-  const fsTarget: SupabaseTarget = cloudTarget();
-  // Sık düşülen tuzak: adres ile şemanın AYNI projeyi göstermemesi (URL yenilenmiş,
-  // app.json'daki eski değer kalmış gibi). Ayar tek yerde durur: config/ + app.json.
-  const rootConfigWarnings: string[] = [];
-  if (!fsTarget.url) {
-    rootConfigWarnings.push(
-      'Supabase hedefi boş — uygulama yerel modda. Geliştirici bir kez `npm run setup:supabase` çalıştırırsa bu satır kaybolur.'
-    );
-  } else if (fsTarget.schema !== DEFAULT_TARGET.schema) {
-    rootConfigWarnings.push(
-      `Şema “${fsTarget.schema}” — tabloların olduğu şema bu mu? Supabase varsayılanı public.`
-    );
-  }
-
-  const [sqlCopied, setSqlCopied] = useState(false);
-  const [sqlNote, setSqlNote] = useState<string | null>(null);
-
-  /** SQL panoya kopyalanır; pano kapalıysa metin seçilebilir hâlde açılır. */
-  const copySql = async () => {
-    setSqlNote(null);
-    try {
-      const nav: any = typeof navigator !== 'undefined' ? navigator : null;
-      if (nav?.clipboard?.writeText) {
-        await nav.clipboard.writeText(SUPABASE_SQL);
-        setSqlCopied(true);
-        setSqlNote('Kopyalandı — Supabase → SQL Editor içine yapıştır ve Run’a bas.');
-        return;
-      }
-    } catch {
-      /* pano erişimi yoksa aşağıdaki seçilebilir blok devreye girer */
-    }
-    setSqlCopied(false);
-    setSqlNote('Pano bu cihazda kapalı — aşağıdaki metni seçip kopyalayabilirsin.');
-  };
-
   /* eski projeden içerik kopyalama (terminal gerekmez) */
   const [copySrc, setCopySrc] = useState(LEGACY_SOURCE.url);
   const [copyPlan, setCopyPlan] = useState<CopyPlan | null>(null);
@@ -130,33 +80,6 @@ export const AdminSettingsScreen: React.FC = () => {
   };
 
   const [lockState, setLockState] = useState<'open' | 'locked' | 'unknown'>('unknown');
-
-  /** İki anonim REST okuması: üyelik koleksiyonu + içerik. Yazma denemez. */
-  const runProbe = async () => {
-    setProbe({ busy: true, text: 'Deniyor…', tone: 'info' });
-    const urls = probeUrls(fsTarget);
-    const hit = async (label: string, url: string) => {
-      try {
-        const res = await fetch(url);
-        if (res.ok) return `${label}: OK`;
-        if (res.status === 404) return `${label}: 404 (koleksiyon/belge henüz yok — normal)`;
-        if (res.status === 403 || res.status === 401) return `${label}: REDDEDİLDİ (rules)`;
-        return `${label}: HTTP ${res.status}`;
-      } catch {
-        return `${label}: ağ hatası`;
-      }
-    };
-    const [members, tips] = await Promise.all([
-      hit('memberships', urls.memberships),
-      hit('daily_tips', urls.tips),
-    ]);
-    const bad = /REDDEDİLDİ|ağ hatası/.test(`${members} ${tips}`);
-    setProbe({
-      busy: false,
-      text: `${members} • ${tips}`,
-      tone: members.includes('REDDEDİLDİ') ? 'danger' : bad ? 'danger' : 'success',
-    });
-  };
 
   return (
     <AdminScaffold
@@ -341,120 +264,6 @@ export const AdminSettingsScreen: React.FC = () => {
             subtitle="Üye oluştur, düzenle, plan/rol değiştir, sil — doğrudan Supabase’e yazar · onay kuralı meta/membership_policy belgesinde durur"
             onPress={() => navigation.navigate('AdminMembership')}
             badge={membershipPolicy.cloudMembers ? 'bulut' : 'yerel'}
-          />
-        </AdminCard>
-
-        {/* Supabase hedefi */}
-        <AdminSectionTitle
-          label="Supabase bağlantısı"
-          hint="İçerik ve üyeliklerin okunduğu proje. Değerler derleme zamanında çözülür: EXPO_PUBLIC_* → app.json (expo.extra.supabase) → depoda gömülü config."
-        />
-        <AdminCard>
-          <AdminRow
-            icon="cloud-outline"
-            title="Proje kimliği"
-            subtitle="URL'den türetilir — Supabase projesinin kısa adı (ref)"
-            right={<Text style={{ fontSize: 12, fontWeight: '900', color: colors.text }}>{fsTarget.projectId}</Text>}
-          />
-          <AdminRow
-            icon="albums-outline"
-            title="Şema"
-            subtitle="Postgres şeması — tablolar ve RLS kuralları burada"
-            right={<Text style={{ fontSize: 12, fontWeight: '900', color: colors.text }}>{fsTarget.databaseId}</Text>}
-          />
-          <AdminRow
-            icon="person-badge-outline"
-            title="Üyelik koleksiyonu"
-            subtitle={`Kayıtlar ve panel listesi bu tabloyu kullanır (public.members) · üyelikler yalnızca Supabase’da, cihazda kopya tutulmaz (kod ${membershipBuildLabel()})`}
-            right={
-              <Text style={{ fontSize: 11, fontWeight: '800', color: colors.textMuted }} numberOfLines={1}>
-                {collectionPath('memberships')}
-              </Text>
-            }
-          />
-          <AdminRow
-            icon="construct-outline"
-            title="SQL — tablolar ve RLS"
-            subtitle={
-              sqlNote ?? `${describeSupabaseSql()} · uygulamanın beklediği tek şema bu; Dashboard → SQL Editor → Run`
-            }
-            right={
-              <AdminButton
-                small
-                tone={sqlNote ? 'success' : 'primary'}
-                label={sqlCopied ? 'Panoda' : 'Kopyala'}
-                onPress={() => void copySql()}
-              />
-            }
-          />
-          {sqlNote && !sqlCopied ? (
-            <Text
-              selectable
-              style={{ fontSize: 10.5, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 15, marginBottom: 6 }}
-            >
-              {SUPABASE_SQL.slice(0, 3000)}
-            </Text>
-          ) : null}
-          <Text style={{ fontSize: 10.5, color: colors.textMuted, lineHeight: 15, marginBottom: 4 }}>
-            Panele erişemiyorsan aynı metin adres üzerinden de açık:{' '}
-            <Text selectable style={{ fontFamily: 'monospace' }}>
-              ?sql=1
-            </Text>{' '}
-            (uygulamanın adresinin sonuna ekle; salt-okunur, PIN sormaz).
-          </Text>
-          <AdminRow
-            icon="code-slash-outline"
-            title="Ayar kaynağı"
-            subtitle={
-              fsTarget.source === 'none'
-                ? 'Repo varsayılanı boş — hedefi bir kez yaz: npm run setup:supabase (config/supabaseApp.ts + app.json + .env.local doldurur, anahtar sende kalmaz)'
-                : `${fsTarget.source} üzerinden verildi`
-            }
-            right={<AdminChip label={fsTarget.source} tone="info" compact />}
-          />
-          <View
-            style={{
-              padding: 10,
-              borderRadius: 10,
-              borderWidth: 1,
-              borderColor: colors.border,
-              backgroundColor: colors.surfaceSecondary,
-              marginBottom: 4,
-            }}
-          >
-            <Text style={{ fontSize: 11, fontWeight: '900', color: colors.textMuted, marginBottom: 4 }}>
-              TEK KOMUTLU KURULUM (terminalde)
-            </Text>
-            <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace' }} selectable>
-              npm run setup:supabase -- --url https://&lt;ref&gt;.supabase.co --anon-key &lt;anon&gt;
-            </Text>
-            <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace', marginTop: 2 }} selectable>
-              npm run check:supabase
-            </Text>
-            <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
-              Birincisi .env.local + config/supabaseApp.ts + app.json dosyalarına hedefi
-              yazar; ikincisi okuma/yazmayı dener. Tablolar ve yetki kuralları (RLS)
-              depoda: supabase/migrations/0001_init.sql → SQL Editor → Run.
-            </Text>
-          </View>
-          {rootConfigWarnings.length ? (
-            <Text style={{ fontSize: 11.5, color: colors.warning, lineHeight: 17, marginTop: 2 }}>
-              {rootConfigWarnings.join(' • ')}
-            </Text>
-          ) : null}
-          <AdminRow
-            icon="pulse-outline"
-            title="Bağlantı testi"
-            subtitle={probe.text}
-            right={
-              <AdminButton
-                small
-                label={probe.busy ? 'Test ediliyor' : 'Test et'}
-                disabled={probe.busy}
-                tone={probe.tone === 'danger' ? 'danger' : probe.tone === 'success' ? 'success' : 'primary'}
-                onPress={() => void runProbe()}
-              />
-            }
           />
         </AdminCard>
 

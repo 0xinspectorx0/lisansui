@@ -73,8 +73,8 @@ export const CloudStatusBanner: React.FC<{ compact?: boolean }> = ({ compact }) 
         )}
         {!compact && denied && (
           <Text style={[styles.bannerText, { color: colors.textMuted }]}>
-            Admin → Ayarlar → “SQL — tablolar ve RLS” bölümündeki SQL metnini Supabase SQL
-            Editor’de çalıştırman yeterli. Üyelik kayıtları yalnızca Supabase’de tutulduğu için
+            Kurulum için SQL metnine uygulama adresinin sonuna ?sql=1 ekleyerek ulaşabilir,
+            metni Supabase SQL Editor’de çalıştırabilirsin. Üyelik kayıtları yalnızca Supabase’de tutulduğu için
             tablolar ve RLS kuralları olmadan kayıt açılamaz.
           </Text>
         )}

@@ -67,8 +67,7 @@ export function SqlDeliveryScreen() {
         </Text>
       </ScrollView>
       <Text style={styles.foot}>
-        Karşılaştırma için aynı metin depoda: supabase/migrations/0001_init.sql — panelde
-        “SQL — tablolar ve RLS” kartı da bunu gösterir.
+        Karşılaştırma için kaynak dosyalar depodaki supabase/migrations klasöründedir.
       </Text>
     </View>
   );
