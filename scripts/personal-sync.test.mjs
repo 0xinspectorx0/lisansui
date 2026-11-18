@@ -44,3 +44,15 @@ assert.doesNotMatch(membership,/applyMember\(patched\.ok/);
 const auth=readFileSync('screens/AuthScreen.tsx','utf8');
 assert.match(auth,/waitForPersonalLoad\(binding\)/); assert.match(auth,/refreshAllCourses\(true\)/); assert.match(auth,/invalidateLiveContent\(\)/);
 console.log('✓ Login readiness, account switching, UID and authenticated content refresh');
+
+// Guests and accounts without an Auth UID retain separate local cache keys.
+const cacheFunction = app.match(/export function personalCacheKey\([\s\S]*?\n\}/)?.[0];
+assert.ok(cacheFunction, 'cache key function exists');
+const cacheBundle = await build({stdin:{contents:`type MemberBinding = { email: string; userId?: string | null };\n${cacheFunction}`,loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false});
+const cacheMod=new Module(path.join(process.cwd(),'scripts/_cache_key.cjs'));cacheMod.filename=path.join(process.cwd(),'scripts/_cache_key.cjs');cacheMod._compile(cacheBundle.outputFiles[0].text,cacheMod.filename);
+const key='@kpss_results_v2'; const cacheKey=cacheMod.exports.personalCacheKey;
+assert.equal(cacheKey(key,null),key);
+assert.notEqual(cacheKey(key,{email:'guest@example.com',userId:null}),key);
+assert.notEqual(cacheKey(key,{email:'guest@example.com',userId:null}),cacheKey(key,{email:'member@example.com',userId:'uid'}));
+assert.match(app,/AsyncStorage\.setItem\(personalCacheKey\(key, owner\), raw\)[\s\S]*?if \(!owner\) return;/);
+console.log('✓ Guest and UID-less local caches are isolated from authenticated accounts');
