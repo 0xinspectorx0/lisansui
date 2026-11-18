@@ -63,6 +63,7 @@ export const HomeScreen: React.FC = () => {
     dailyTips.length > 0 ? Math.floor(Math.random() * dailyTips.length) : 0
   );
   const [startingMixed, setStartingMixed] = useState(false);
+  const [mixedError, setMixedError] = useState<string | null>(null);
   const [goalModalOpen, setGoalModalOpen] = useState(false);
 
   const totalLiveQuestions = useMemo(() => {
@@ -194,8 +195,12 @@ export const HomeScreen: React.FC = () => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
     setStartingMixed(true);
+    setMixedError(null);
     try {
-      const rawQuestions = await buildGeneralMixedExam(catalog, 25);
+      const visibleCatalog = Object.fromEntries(
+        Object.entries(catalog).map(([id, topics]) => [id, admin.hiddenCourses.includes(id as CourseId) ? [] : topics])
+      ) as Record<CourseId, typeof catalog[CourseId]>;
+      const rawQuestions = await buildGeneralMixedExam(visibleCatalog, 25);
       const prepared = prepareQuizQuestions(
         rawQuestions,
         admin.settings.quizDefaults.shuffleQuestions,
@@ -204,14 +209,18 @@ export const HomeScreen: React.FC = () => {
       if (prepared.length > 0) {
         stackNav.navigate('Quiz', {
           session: {
-            title: 'KPSS Karma Deneme (25 Soru)',
+            title: `KPSS Karma Deneme (${prepared.length} Soru)`,
             courseId: 'genel',
             mode: 'mixed',
             questions: prepared,
             timedMinutes: 25,
           },
         });
+      } else {
+        setMixedError('Derslerde henüz soru bulunmuyor.');
       }
+    } catch {
+      setMixedError('Sorular yüklenemedi. Bağlantınızı kontrol edip tekrar deneyin.');
     } finally {
       setStartingMixed(false);
     }
@@ -250,10 +259,6 @@ export const HomeScreen: React.FC = () => {
       edges={['top']}
       style={[styles.safe, { backgroundColor: colors.background }]}
     >
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
         {/* Clean Header */}
         <View style={styles.header}>
           <View style={styles.headerTitle}>
@@ -317,6 +322,11 @@ export const HomeScreen: React.FC = () => {
           </View>
         </View>
 
+      <ScrollView
+        style={styles.contentWindow}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Admin announcement / maintenance */}
         {(admin.announcement.enabled || admin.maintenanceActive) && (
           <View
@@ -447,6 +457,7 @@ export const HomeScreen: React.FC = () => {
           </View>
         </Pressable>
 
+        {mixedError && <Text accessibilityRole="alert" style={{ color: colors.danger, marginBottom: 8 }}>{mixedError}</Text>}
         {/* 1-Tap Quick Actions */}
         <View style={styles.quickGrid}>
           <Pressable
@@ -472,7 +483,7 @@ export const HomeScreen: React.FC = () => {
             </View>
             <Text style={styles.quickPrimaryTitle}>Karma Deneme</Text>
             <Text style={styles.quickPrimarySub}>
-              5 dersten seçme sorularla hızlı prova
+              Derslerdeki mevcut sorularla hızlı prova
             </Text>
           </Pressable>
 
@@ -830,9 +841,10 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
   },
+  contentWindow: { flex: 1, minHeight: 0 },
   scrollContent: {
     paddingHorizontal: 18,
-    paddingTop: 10,
+    paddingTop: 0,
     paddingBottom: 32,
   },
   header: {
@@ -841,6 +853,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     flexWrap: 'nowrap',
     gap: 6,
+    marginHorizontal: 18,
+    marginTop: 10,
     marginBottom: 16,
   },
   headerTitle: {

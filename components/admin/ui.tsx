@@ -99,6 +99,7 @@ export const AdminScaffold: React.FC<{
 
       {scroll ? (
         <ScrollView
+          style={{ flex: 1, minHeight: 0 }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: 40 }}
@@ -106,7 +107,7 @@ export const AdminScaffold: React.FC<{
           {Body}
         </ScrollView>
       ) : (
-        <View style={{ flex: 1 }}>{children}</View>
+        <View style={{ flex: 1, minHeight: 0 }}>{children}</View>
       )}
     </SafeAreaView>
   );

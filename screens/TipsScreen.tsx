@@ -103,7 +103,7 @@ export const TipsScreen: React.FC = () => {
     >
       {/* Header */}
       <View style={styles.header}>
-        <View>
+        <View style={styles.headerText}>
           <Text style={[styles.title, { color: colors.text }]}>Hap Bilgiler</Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
             {learnedCount}/{dailyTips.length} öğrenildi • Nokta atışı KPSS notları
@@ -495,6 +495,7 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     gap: 10,
   },
+  headerText: { flex: 1, minWidth: 0 },
   title: {
     fontSize: 23,
     fontWeight: '800',
@@ -509,6 +510,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     padding: 3,
     borderRadius: 11,
+    flexShrink: 0,
   },
   modeBtn: {
     flexDirection: 'row',
@@ -524,11 +526,13 @@ const styles = StyleSheet.create({
   },
   filterRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     paddingHorizontal: 18,
     gap: 8,
     marginBottom: 12,
   },
   filterChip: {
+    maxWidth: '100%',
     paddingHorizontal: 11,
     paddingVertical: 7,
     borderRadius: 999,

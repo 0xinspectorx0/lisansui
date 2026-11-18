@@ -140,7 +140,11 @@ export const QuizResultScreen: React.FC<Props> = ({ route, navigation }) => {
       edges={['top', 'bottom']}
       style={[styles.safe, { backgroundColor: colors.background }]}
     >
+      <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: 8 }}>
+        <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800' }}>Test Sonucu</Text>
+      </View>
       <ScrollView
+        style={{ flex: 1, minHeight: 0 }}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >

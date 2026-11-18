@@ -262,13 +262,15 @@ function MainTabsScreen() {
 
 function RootNavigator() {
   const { colors } = useAppTheme();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const isWideWeb = Platform.OS === 'web' && width > 540;
 
   // `?sql=1` → PIN'siz, salt-okunur SQL teslim sayfası. Kasıtlı olarak en başta
   // dönülür: veri katmanı/oturum bozukken de açılabilsin (kurulumda panel
   // kilitli kalabilir; tek gereken şey SQL metnini kopyalamak).
-  if (sqlDeliveryRequested()) return <SqlDeliveryScreen />;
+  if (sqlDeliveryRequested()) {
+    return <View style={[styles.outerRoot, Platform.OS === 'web' && { height }]}><SqlDeliveryScreen /></View>;
+  }
 
   const navTheme = colors.isDark
     ? {
@@ -298,6 +300,7 @@ function RootNavigator() {
     <View
       style={[
         styles.outerRoot,
+        Platform.OS === 'web' && { height },
         {
           backgroundColor: isWideWeb
             ? colors.isDark
@@ -364,9 +367,12 @@ function RootNavigator() {
 const styles = StyleSheet.create({
   outerRoot: {
     flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
   },
   appFrame: {
     flex: 1,
+    minHeight: 0,
     width: '100%',
   },
 });

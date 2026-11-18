@@ -35,6 +35,7 @@ const mock = {
   '@react-navigation/native': `export const useNavigation=()=>({canGoBack:()=>false,navigate(){}});`,
   '../lib/theme': `export const useAppTheme=()=>({colors:{}}); export const COURSES={tarih:{title:'Tarih'}};`,
   '../lib/AppContext': `export const useApp=()=>({catalog:{tarih:[]},settings:{dailyGoal:10},updateSettings(){}});`,
+  '../lib/AdminAccessContext': `export const useAdminAccess=()=>({allowed:false});`,
   '../lib/AdminContext': `export const useAdmin=()=>({localUser:{id:'1'}, state:{content:{courseOrder:['tarih']}}});`,
   '../lib/MembershipContext': `export const useMembership=()=>globalThis.__scrollMembership;`,
   '../lib/membership': `export const PLAN_LABEL={}; export const STATUS_LABEL={active:'Aktif'}; export const daysLeft=()=>null;`,
@@ -56,3 +57,29 @@ for (const [name, member, vip, expected] of [
   assert.ok(html.indexOf(expected)>html.indexOf('<section>') && html.indexOf(expected)<html.indexOf('</section>'),`${name}: ${expected} is inside the scroll container`);
 }
 console.log(`✓ ${Object.keys(routeFiles).length} screen scroll paths audited; guest/member profile and VIP paywall states rendered`);
+
+// The shell stays viewport-sized while content grows; the screen heading and
+// navigation remain outside the one vertical scroll area (no gesture trap).
+assert.match(app, /Platform\.OS === 'web' && \{ height \}/);
+assert.match(app, /outerRoot:\s*\{[^}]*minHeight:\s*0[^}]*overflow:\s*'hidden'/);
+const home = src('screens/HomeScreen.tsx');
+assert.ok(home.indexOf('<View style={styles.header}>') < home.indexOf('<ScrollView\n        style={styles.contentWindow}'));
+assert.match(home, /contentWindow:\s*\{\s*flex:\s*1,\s*minHeight:\s*0/);
+const adminShell = src('components/admin/ui.tsx');
+assert.match(adminShell, /<ScrollView\s+style=\{\{ flex: 1, minHeight: 0 \}\}/);
+const resultScreen = src('screens/QuizResultScreen.tsx');
+assert.ok(resultScreen.indexOf('>Test Sonucu</Text>') < resultScreen.indexOf('<ScrollView'));
+const Yoga = (await import('yoga-layout')).default;
+for (const height of [480, 640, 800]) for (const contentHeight of [100, 5000]) {
+  const root = Yoga.Node.create(); root.setWidth(360); root.setHeight(height); root.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
+  const header = Yoga.Node.create(); header.setHeight(60); header.setFlexShrink(0); root.insertChild(header,0);
+  const window = Yoga.Node.create(); window.setFlexGrow(1); window.setFlexShrink(1); window.setMinHeight(0); window.setOverflow(Yoga.OVERFLOW_SCROLL); root.insertChild(window,1);
+  const content = Yoga.Node.create(); content.setHeight(contentHeight); window.insertChild(content,0);
+  const tabs = Yoga.Node.create(); tabs.setHeight(64); tabs.setFlexShrink(0); root.insertChild(tabs,2);
+  root.calculateLayout(undefined,undefined,Yoga.DIRECTION_LTR);
+  assert.equal(root.getComputedHeight(),height);
+  assert.equal(window.getComputedHeight(),height-124);
+  assert.equal(tabs.getComputedTop(),height-64);
+  root.freeRecursive();
+}
+console.log('✓ Viewport-bounded content windows keep header and navigation fixed for long lists');
