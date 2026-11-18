@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -11,17 +11,7 @@ import {
   probeUrls,
   type SupabaseTarget,
 } from '../lib/supabaseConfig';
-import {
-  buildSeedPlan,
-  CONTENT_LOCK_PATH,
-  describePlan,
-  planWarnings,
-  readLockState,
-  runSeed,
-  type SeedPlan,
-  type SeedProgress,
-  type SeedResult,
-} from '../lib/contentSeed';
+import { readLockState } from '../lib/contentSeed';
 import {
   describeCopyPlan,
   LEGACY_SOURCE,
@@ -34,7 +24,6 @@ import {
 } from '../lib/contentCopy';
 import { SUPABASE_SQL, describeSupabaseSql } from '../config/supabaseSqlCopy';
 import { useAdmin } from '../lib/AdminContext';
-import { useMembership } from '../lib/MembershipContext';
 import { useApp } from '../lib/AppContext';
 import { ThemePreference } from '../lib/theme';
 import {
@@ -52,27 +41,6 @@ import {
   AdminToggle,
 } from '../components/admin/ui';
 import { AdminGate } from '../components/admin/AdminGate';
-import {
-  readAdminList,
-  readMembershipLockdown,
-  ADMINS_DOC_PATH,
-  MEMBERSHIP_LOCKDOWN_DOC_PATH,
-} from '../lib/cloudApi';
-import {
-  authConfigSource,
-  clearDeviceApiKey,
-  healForeignAuthProject,
-  currentSession,
-  ensureAuthConfigLoaded,
-  isAuthConfigured,
-  maskKey,
-  probeAuth,
-  readDeviceApiKey,
-  resolveAuthConfig,
-  resetAuthConfigCache,
-  repoConfigFile,
-} from '../lib/authClient';
-import { hasRepoApiKey } from '../config/supabaseApp';
 import { membershipBuildLabel } from '../lib/buildTag';
 
 export const AdminSettingsScreen: React.FC = () => {
@@ -82,7 +50,6 @@ export const AdminSettingsScreen: React.FC = () => {
   const app = useApp();
   const { settings, patchSettings } = admin;
   const membershipPolicy = settings.membership;
-  const membership = useMembership();
 
   const [dataSheet, setDataSheet] = useState<'export' | 'import' | null>(null);
   const [importDraft, setImportDraft] = useState('');
@@ -108,26 +75,8 @@ export const AdminSettingsScreen: React.FC = () => {
     );
   }
 
-  /* Supabase web API anahtarı KULLANICIDAN İSTENMEZ: depoda `config/supabaseApp.ts`
-     içinde durur. Aşağıdaki state yalnız eski kurulumlardan kalan cihaz kaydını
-     göstermek/clear etmek için tutuluyor. */
-  const [deviceKey, setDeviceKey] = useState<string | null>(null);
   const [sqlCopied, setSqlCopied] = useState(false);
   const [sqlNote, setSqlNote] = useState<string | null>(null);
-  const [keyNote, setKeyNote] = useState<string | null>(null);
-  const [keyBusy, setKeyBusy] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      await ensureAuthConfigLoaded();
-      const k = await readDeviceApiKey();
-      if (alive) setDeviceKey(k);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   /** SQL panoya kopyalanır; pano kapalıysa metin seçilebilir hâlde açılır. */
   const copySql = async () => {
@@ -146,29 +95,6 @@ export const AdminSettingsScreen: React.FC = () => {
     setSqlCopied(false);
     setSqlNote('Pano bu cihazda kapalı — aşağıdaki metni seçip kopyalayabilirsin.');
   };
-
-  const removeDeviceKey = async () => {
-    setKeyBusy(true);
-    await clearDeviceApiKey();
-    await ensureAuthConfigLoaded();
-    resetAuthConfigCache();
-    setDeviceKey(null);
-    setKeyBusy(false);
-    setKeyNote(
-      hasRepoApiKey()
-        ? 'Cihaz kaydı silindi — depodaki anahtar (config/supabaseApp.ts) kullanılmaya devam ediyor.'
-        : 'Cihaz kaydı silindi. Depoda anahtar yoksa yerel PBKDF2 moduna dönülür.'
-    );
-  };
-
-  const authSourceLabel =
-    authConfigSource() === 'device'
-      ? 'bu cihazda kayıtlı eski anahtar'
-      : authConfigSource() === 'env'
-        ? '.env.local (pakete gömülü)'
-        : authConfigSource() === 'repo'
-          ? `depoya gömülü config (${repoConfigFile()})`
-          : 'yok';
 
   /* eski projeden içerik kopyalama (terminal gerekmez) */
   const [copySrc, setCopySrc] = useState(LEGACY_SOURCE.url);
@@ -203,100 +129,7 @@ export const AdminSettingsScreen: React.FC = () => {
     setLockState(await readLockState());
   };
 
-  /* yönetim anahtarları (meta/admins + meta/membership_lockdown) */
-  const [gov, setGov] = useState<{
-    busy: boolean;
-    emails: string[];
-    locked: boolean | null;
-    note: string;
-  }>({ busy: false, emails: [], locked: null, note: 'Henüz kontrol edilmedi' });
-
-  const refreshGov = async () => {
-    setGov(g => ({ ...g, busy: true, note: 'Okunuyor…' }));
-    const [admins, lock] = await Promise.all([readAdminList(), readMembershipLockdown()]);
-    if (!admins.ok && !lock.ok) {
-      setGov({ busy: false, emails: [], locked: null, note: `Okunamadı: ${admins.error}` });
-      return;
-    }
-    setGov({
-      busy: false,
-      emails: admins.ok ? admins.data.emails : [],
-      locked: lock.ok ? lock.data : null,
-      note: [
-        admins.ok ? (admins.data.exists ? `${admins.data.emails.length} yönetici kaydı` : 'meta/admins henüz yok') : admins.error,
-        lock.ok ? (lock.data ? 'kilit AÇIK' : 'kilit kapalı') : 'kilit durumu okunamadı',
-      ].join(' • '),
-    });
-  };
-
-  /* Supabase Auth durumu */
-  const [authProbe, setAuthProbe] = useState<{
-    busy: boolean;
-    text: string;
-    tone: 'info' | 'success' | 'danger';
-  }>({ busy: false, text: 'Henüz test edilmedi', tone: 'info' });
-  const [authInfo, setAuthInfo] = useState<string | null>(null);
-  // render sırasında okunur; runAuthProbe cache'i sıfırladığı için anahtar sonradan
-  // .env.local'a eklendiyse test sonrası kart kendini tazeler.
-  const authCfg = resolveAuthConfig();
-
-  const runAuthProbe = async () => {
-    setAuthProbe({ busy: true, text: 'Deniyor…', tone: 'info' });
-    resetAuthConfigCache();
-    try {
-      const r = await probeAuth();
-      const s2 = await currentSession();
-      setAuthInfo(
-        s2
-          ? `${s2.email} • uid ${s2.uid.slice(0, 10)}… • token ${s2.expiresAt > Date.now() ? 'geçerli' : 'yenilenecek'}`
-          : 'Bu cihazda kayıtlı Supabase oturumu yok.'
-      );
-      setAuthProbe({ busy: false, text: r.note, tone: r.ok ? 'success' : 'danger' });
-    } catch (e) {
-      setAuthProbe({ busy: false, text: `Test yapılamadı: ${String(e)}`, tone: 'danger' });
-    }
-  };
-
-  /* içerik tohumlama (bootstrap) */
-  const [seedPlan, setSeedPlan] = useState<SeedPlan | null>(null);
-  const [seedBusy, setSeedBusy] = useState<'plan' | 'write' | null>(null);
-  const [seedProgress, setSeedProgress] = useState<SeedProgress | null>(null);
-  const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
-  const [seedNote, setSeedNote] = useState<string | null>(null);
-  const [includeFallback, setIncludeFallback] = useState(false);
   const [lockState, setLockState] = useState<'open' | 'locked' | 'unknown'>('unknown');
-
-  const checkLock = async () => setLockState(await readLockState());
-
-  const makePlan = async () => {
-    setSeedBusy('plan');
-    setSeedNote(null);
-    setSeedResult(null);
-    try {
-      const plan = await buildSeedPlan({ includeFallbackQuestions: includeFallback });
-      setSeedPlan(plan);
-      setLockState(plan.unlocked === null ? 'unknown' : plan.unlocked ? 'open' : 'locked');
-    } catch (e) {
-      setSeedNote(e instanceof Error ? e.message : 'Plan çıkarılamadı');
-    } finally {
-      setSeedBusy(null);
-    }
-  };
-
-  const writePlan = async () => {
-    if (!seedPlan) return;
-    setSeedBusy('write');
-    setSeedNote(null);
-    setSeedResult(null);
-    const res = await runSeed(seedPlan.docs, p => setSeedProgress(p));
-    setSeedResult(res);
-    setSeedBusy(null);
-    if (res.failed.length) {
-      const first = res.failed[0];
-      setSeedNote(`${res.failed.length} belge yazılamadı — ilk hata: ${first.error}`);
-      void checkLock();
-    }
-  };
 
   /** İki anonim REST okuması: üyelik koleksiyonu + içerik. Yazma denemez. */
   const runProbe = async () => {
@@ -625,180 +458,6 @@ export const AdminSettingsScreen: React.FC = () => {
           />
         </AdminCard>
 
-        {/* Supabase Auth */}
-        <AdminSectionTitle
-          label="Supabase Auth (kimlik doğrulama)"
-          hint="Anahtar uygulamanın içinde: config/supabaseApp.ts (bir kez yazılır, commit’lenir). Tanımlıysa parola Supabase’de doğrulanır ve Supabase istekleri idToken taşır; senden bir yere anahtar yapıştırman istenmez."
-        />
-        <AdminCard>
-          <AdminRow
-            icon="key-outline"
-            title="Kimlik modu"
-            subtitle={
-              isAuthConfigured()
-                ? `Supabase Auth açık — üyelik belgelerinde parola hash’i tutulmuyor. Kaynak: ${authSourceLabel}`
-                : 'Yerel mod — parola cihazda hash’lenip belgeye yazılıyor. Anahtar depoya yazıldığı an bu satır kendiliğinden Supabase Auth’a döner.'
-            }
-            right={
-              <AdminChip
-                label={isAuthConfigured() ? 'supabase-auth' : 'pbkdf2'}
-                tone={isAuthConfigured() ? 'success' : 'info'}
-              />
-            }
-          />
-          {!isAuthConfigured() ? (
-            <View style={{ paddingHorizontal: 2, marginBottom: 6 }}>
-              <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16 }}>
-                {'Anahtarı kendin girmeye çalışman gerekmiyor. Tek yapman gereken anahtarı'}{'\n'}
-                {'geliştiriciye iletmek; o da `config/supabaseApp.ts` içine yazıp commit’liyor.'}{'\n'}
-                {'Uygulama güncellendiği anda Supabase Auth kendiliğinden açılır.'}
-              </Text>
-            </View>
-          ) : null}
-          {deviceKey ? (
-            <AdminRow
-              icon="phone-portrait-outline"
-              title="Bu cihazda kayıtlı eski anahtar"
-              subtitle={`${maskKey(deviceKey)} — depodaki anahtardan önce bunu kullanır. Kaldırırsan config değeri devreye girer.`}
-              right={
-                <AdminButton
-                  small
-                  tone="neutral"
-                  label={keyBusy ? 'Uğraşıyor…' : 'Kaldır'}
-                  disabled={keyBusy}
-                  onPress={() => void removeDeviceKey()}
-                />
-              }
-            />
-          ) : null}
-          {keyNote ? (
-            <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16, marginBottom: 6 }}>
-              {keyNote}
-            </Text>
-          ) : null}
-          {authCfg ? (
-            <AdminRow
-              icon="pulse-outline"
-              title="API anahtarı"
-              subtitle={`Pakete gömülü public web anahtarı (gizli değil; koruma Supabase kurallarında). Kaynak: ${authSourceLabel}`}
-              right={
-                <Text style={{ fontSize: 11.5, fontWeight: '800', color: colors.textMuted }}>
-                  {maskKey(authCfg.apiKey)}
-                </Text>
-              }
-            />
-          ) : null}
-          <AdminRow
-            icon="person-circle-outline"
-            title="Bu cihazdaki oturum"
-            subtitle={authInfo ?? 'Test edince görünür (Supabase işlemleri bu token ile gider).'}
-            right={
-              <AdminButton
-                small
-                tone="neutral"
-                label="Oturumu kapat"
-                onPress={() => {
-                  void membership.signOut().then(() =>
-                    setAuthInfo('Oturum kapatıldı (üyelik belgesine dokunulmadı).')
-                  );
-                }}
-              />
-            }
-          />
-          <AdminRow
-            icon="people-outline"
-            title="Yönetici listesi"
-            subtitle={gov.emails.length ? gov.emails.join(', ') : 'Yetki public.admins tablosundan doğrulanır; listeyi yenileyin.'}
-          />
-          <AdminRow
-            icon="lock-closed-outline"
-            title="Üyelik kilidi"
-            subtitle={`meta/membership_lockdown: ${gov.locked === null ? 'bilinmiyor' : gov.locked ? 'AÇIK — kimliksiz üyelik okuma/yazma kapalı' : 'kapalı (bugünkü davranış)'}`}
-            right={
-              <AdminButton
-                small
-                tone="neutral"
-                label={gov.busy ? 'Okunuyor' : 'Yenile'}
-                disabled={gov.busy}
-                onPress={() => void refreshGov()}
-              />
-            }
-          />
-          <View style={{ paddingHorizontal: 2, gap: 2 }}>
-            <Text style={{ fontSize: 10.5, color: colors.textMuted, lineHeight: 15 }}>
-              Kilit tek satırda durur: public.membership_policy. Panel düğmesi
-              {` ${MEMBERSHIP_LOCKDOWN_DOC_PATH} `} üzerinden aynı satırı çevirir; SQL
-              Editor’dan elle yapmak istersen:
-            </Text>
-            <Text selectable style={{ fontSize: 10.5, color: colors.text, fontFamily: 'monospace', lineHeight: 15 }}>
-              update public.membership_policy set "membershipLockdown" = true where id = 1;  -- kapat{'\n'}
-              update public.membership_policy set "membershipLockdown" = false where id = 1; -- aç
-            </Text>
-            <Text selectable style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'monospace', lineHeight: 14 }}>
-              yönetici listesi: select email from public.admins; • panel yolu → {ADMINS_DOC_PATH}
-            </Text>
-            <Text style={{ fontSize: 10, color: colors.textMuted, lineHeight: 14 }}>
-              Kilit AÇIKKEN kimliksiz üyelik okuma/yazma reddedilir; giriş yapmış üyeler
-              kendi satırlarını görmeye devam eder. Satır yazma kuralları (rol/durum/hak)
-              veritabanındaki bekçide uygulanır, arayüzde değil.
-            </Text>
-          </View>
-          <AdminRow
-            icon="flask-outline"
-            title="Sağlayıcı testi"
-            subtitle={authProbe.text}
-            right={
-              <AdminButton
-                small
-                label={authProbe.busy ? 'Test ediliyor' : 'Test et'}
-                disabled={authProbe.busy}
-                tone={authProbe.tone === 'danger' ? 'danger' : authProbe.tone === 'success' ? 'success' : 'primary'}
-                onPress={() => void runAuthProbe()}
-              />
-            }
-          />
-          <View
-            style={{
-              padding: 10,
-              borderRadius: 10,
-              borderWidth: 1,
-              borderColor: colors.border,
-              backgroundColor: colors.surfaceSecondary,
-              marginBottom: 4,
-            }}
-          >
-            <Text style={{ fontSize: 11, fontWeight: '900', color: colors.textMuted, marginBottom: 4 }}>
-              AUTH’U BAĞLAMA SIRASI
-            </Text>
-            <Text style={{ fontSize: 10.5, color: colors.textSecondary, lineHeight: 16 }}>
-              1) Console → Project settings → General → Your apps → **Add app → Web** → bir ad ver →
-              “Register app” (npm/Next.js adımlarını atla) → çıkan SDK config içindeki `apiKey`{'\n'}
-              (Your apps boşsa anahtar da yoktur; tek yapman gereken bu kayıt.){'\n'}
-              2) Console → Authentication → Sign-in method → **Email/Password → Enable**{'\n'}
-              3) Anahtarı geliştiriciye ilet → o `config/supabaseApp.ts` içine yazar ve commit’ler.
-              Panelden/uygulamadan hiçbir şey girmene gerek yok.{'\n'}
-              3b) Kalıcı/override iki yol daha var (yalnız geliştirici için):
-            </Text>
-            <Text
-              selectable
-              style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace', marginTop: 4 }}
-            >
-              npm run setup:supabase -- --url https://&lt;ref&gt;.supabase.co --anon-key &lt;anon&gt;
-            </Text>
-            <Text style={{ fontSize: 11.5, color: colors.text, fontFamily: 'monospace' }} selectable>
-              npm run sync:sql
-            </Text>
-            <Text style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 }}>
-              4) “Test et” yeşil olmalı — anahtar depoda olduğu için sen hiçbir şey
-              yapmıyorsun; Metro’yu yalnız geliştirici `npx expo start --clear` ile
-              yeniden başlatır.{'\n'}
-              5) Katı mod (kod değişikliği yok): Admin → Ayarlar → “Üyelik kilidi”.
-              Açıkken kimliksiz üyelik okuma/yazma veritabanında reddedilir; kapalıyken
-              serbest. Ayar Supabase’dedir, cihazda değil.
-            </Text>
-          </View>
-        </AdminCard>
-
         {/* Eski projeden kopyala */}
         <AdminSectionTitle
           label="Eski projeden içeriği kopyala"
@@ -903,112 +562,6 @@ export const AdminSettingsScreen: React.FC = () => {
               Console’dan kaldır (belgeyi sil), kopyala, sonra tekrar oluştur.
             </Text>
           ) : null}
-        </AdminCard>
-
-        {/* Content bootstrap */}
-        <AdminSectionTitle
-          label="Supabase klasörlerini oluştur (tohumlama)"
-          hint="courses/{ders}/topics/{konu} ve daily_tips/main yapılarını panel oluşturur; memberships ilk kayıtta kendiliğinden açılır. “Planı çıkar” her konu için içeriği okur (birkaç saniye sürebilir), yazım 6 eşzamanlı istekle yapılır."
-        />
-        <AdminCard>
-          <AdminRow
-            icon="folder-open-outline"
-            title="Yazılacak kök"
-            subtitle={fsTarget.root ? `${fsTarget.projectId} → ${fsTarget.root}` : `${fsTarget.projectId} → veritabanı kökü`}
-            right={
-              <AdminChip
-                label={lockState === 'open' ? 'yazılabilir' : lockState === 'locked' ? 'kilitli' : 'bilinmiyor'}
-                tone={lockState === 'open' ? 'success' : lockState === 'locked' ? 'danger' : 'warning'}
-                icon={lockState === 'locked' ? 'lock-closed' : 'lock-open-outline'}
-                compact
-                onPress={() => void checkLock()}
-              />
-            }
-          />
-          <AdminToggle
-            icon="help-outline"
-            label="Örnek soruları da yaz"
-            description="Panelde düzenlenmemiş konulara repodaki yedek sorular kopyalanır. Kapalıysa yalnızca konu başlıkları oluşur, soruları sonra Console/panel ile eklersin."
-            value={includeFallback}
-            onValueChange={setIncludeFallback}
-          />
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
-            <AdminButton
-              small
-              flex
-              tone="ghost"
-              icon="calculator-outline"
-              label={seedBusy === 'plan' ? 'Çıkarılıyor…' : 'Planı çıkar'}
-              disabled={seedBusy !== null}
-              onPress={() => void makePlan()}
-            />
-            <AdminButton
-              small
-              flex
-              icon="cloud-upload-outline"
-              label={
-                seedBusy === 'write'
-                  ? seedProgress
-                    ? `${seedProgress.done}/${seedProgress.total}`
-                    : 'Yazılıyor…'
-                  : 'Supabase’e yaz'
-              }
-              disabled={seedBusy !== null || !seedPlan}
-              onPress={() => void writePlan()}
-            />
-          </View>
-
-          {seedPlan ? (
-            <Text style={{ fontSize: 12, fontWeight: '800', color: colors.textSecondary, marginTop: 8 }}>
-              {describePlan(seedPlan)} • {seedPlan.docs.length} belge • hedef: {seedPlan.target}
-            </Text>
-          ) : null}
-          {seedProgress && seedBusy === 'write' ? (
-            <Text style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 4 }}>
-              yazılıyor: {seedProgress.current}
-            </Text>
-          ) : null}
-          {seedResult ? (
-            <Text style={{ fontSize: 11.5, color: seedResult.failed.length ? colors.danger : colors.success, marginTop: 4 }}>
-              {seedResult.written} belge yazıldı
-              {seedResult.failed.length ? ` • ${seedResult.failed.length} hata` : ' • Collections Supabase’ta hazır'}
-            </Text>
-          ) : null}
-          {seedPlan && seedPlan.notes.length ? (
-            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>
-              {seedPlan.notes.join(' • ')}
-            </Text>
-          ) : null}
-          {seedPlan && planWarnings(seedPlan).length ? (
-            <Text style={{ fontSize: 11, color: colors.warning, marginTop: 4 }}>
-              {planWarnings(seedPlan).join(' • ')}
-            </Text>
-          ) : null}
-          {seedNote ? (
-            <Text style={{ fontSize: 11.5, color: colors.danger, marginTop: 4 }}>{seedNote}</Text>
-          ) : null}
-
-          <View
-            style={{
-              marginTop: 8,
-              padding: 10,
-              borderRadius: 10,
-              borderWidth: 1,
-              borderColor: colors.border,
-              backgroundColor: colors.surfaceSecondary,
-            }}
-          >
-            <Text style={{ fontSize: 11.5, fontWeight: '800', color: colors.text }}>
-              Yazma penceresini kapat
-            </Text>
-            <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 4, lineHeight: 16 }}>
-              Console → Supabase Data → “Start collection” → koleksiyon kimliği{' '}
-              <Text style={{ fontFamily: 'monospace' }}>meta</Text>, belge kimliği{' '}
-              <Text style={{ fontFamily: 'monospace' }}>content_lock</Text>, alan{' '}
-              <Text style={{ fontFamily: 'monospace' }}>note</Text> = “kilitli”. Bu belge varken
-              uygulama içeriğe yazamaz. (Yol: {CONTENT_LOCK_PATH})
-            </Text>
-          </View>
         </AdminCard>
 
         {/* Feature flags */}
