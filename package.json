@@ -56,7 +56,7 @@
     "test:approval-db": "node scripts/approval-db.test.mjs",
     "test:admin-gate": "node scripts/admin-gate.test.mjs",
     "prebuild": "node scripts/sync-sql-copy.mjs --check",
-    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:content-sync && npm run test:personal-sync && npm run test:admin-gate && npm run test:home-header && npm run test:profile-badge && npm run test:scroll && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest && npm run test:mixed-exam && npm run test:tips-overflow",
+    "verify": "npm run sync:sql:check && npm run test:db && npm run test:approval-db && npm run test:content-sync && npm run test:personal-sync && npm run test:admin-gate && npm run test:home-header && npm run test:profile-badge && npm run test:scroll && npm run test:ui && npm run test:bulk && npm run test:copy && npm run migrate:content:selftest && npm run test:mixed-exam && npm run test:tips-overflow && npm run test:admin-panel-activity",
     "migrate:content": "node scripts/migrate-to-supabase.mjs",
     "test:content-sync": "node scripts/content-sync.test.mjs",
     "test:scroll": "node scripts/scroll-layout.test.mjs",
@@ -64,7 +64,8 @@
     "test:home-header": "node scripts/home-header-layout.test.mjs",
     "test:personal-sync": "node scripts/personal-sync.test.mjs",
     "test:mixed-exam": "node scripts/mixed-exam.test.mjs",
-    "test:tips-overflow": "node scripts/tips-overflow.test.mjs"
+    "test:tips-overflow": "node scripts/tips-overflow.test.mjs",
+    "test:admin-panel-activity": "node scripts/admin-panel-activity.test.mjs"
   },
   "private": true
 }

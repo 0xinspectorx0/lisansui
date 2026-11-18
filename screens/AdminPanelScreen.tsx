@@ -15,6 +15,7 @@ import {
   AdminRow,
   AdminScaffold,
   AdminSectionTitle,
+  AdminSheet,
 } from '../components/admin/ui';
 import { AdminGate } from '../components/admin/AdminGate';
 
@@ -79,11 +80,11 @@ const SHORTCUTS: {
 export const AdminPanelScreen: React.FC = () => {
   const { colors } = useAppTheme();
   const navigation = useNavigation<any>();
-  const { catalog, results, mistakes, favorites, streak, todayStats, refreshAllCourses } =
-    useApp();
+  const { catalog, refreshAllCourses } = useApp();
   const admin = useAdmin();
   const [busy, setBusy] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
   const {
     users,
     activity,
@@ -204,6 +205,12 @@ export const AdminPanelScreen: React.FC = () => {
           />
         </View>
 
+        {stats.expiringSoon > 0 && (
+          <Text style={[styles.expiring, { color: colors.warning }]}>
+            {stats.expiringSoon} kullanıcının VIP süresi 7 gün içinde doluyor.
+          </Text>
+        )}
+
         <AdminSectionTitle label="Bölümler" hint="Her alana doğrudan geç" />
         <View style={styles.shortcutGrid}>
           {SHORTCUTS.map(s => (
@@ -299,71 +306,49 @@ export const AdminPanelScreen: React.FC = () => {
           />
         </AdminCard>
 
-        <AdminSectionTitle label="Bu cihazın ilerlemesi" hint="Yerel profilin gerçek verileri" />
-        <AdminCard>
-          <View style={styles.progressGrid}>
-            <MiniStat label="Deneme" value={String(Object.keys(results).length)} />
-            <MiniStat label="Bugün çözülen" value={String(todayStats.solved)} />
-            <MiniStat label="Bugün odak" value={`${todayStats.focusMinutes} dk`} />
-            <MiniStat label="Hata defteri" value={String(mistakes.length)} />
-            <MiniStat label="Favori" value={String(favorites.length)} />
-            <MiniStat label="Seri" value={`${streak.current} gün`} />
-          </View>
-          <View style={styles.progressActions}>
-            <AdminButton
-              small
-              tone="neutral"
-              icon="refresh-outline"
-              label={busy ? 'Yenileniyor…' : 'İçerikleri yenile'}
-              disabled={busy}
-              onPress={async () => {
-                setBusy(true);
-                try {
-                  await refreshAllCourses();
-                } finally {
-                  setBusy(false);
-                }
-              }}
-              flex
-            />
-            <AdminButton
-              small
-              tone={isVip ? 'danger' : 'ghost'}
-              icon="diamond-outline"
-              label={isVip ? 'VIP’i kapat' : 'VIP ver'}
-              onPress={() => admin.toggleVip(localUser.id)}
-              flex
-            />
-          </View>
-          {stats.expiringSoon > 0 && (
-            <Text style={[styles.expiring, { color: colors.warning }]}>
-              {stats.expiringSoon} kullanıcının VIP süresi 7 gün içinde doluyor.
-            </Text>
-          )}
-        </AdminCard>
+        <View style={{ marginTop: 12, gap: 8 }}>
+          <AdminButton
+            small
+            tone="neutral"
+            icon="refresh-outline"
+            label={busy ? 'Yenileniyor…' : 'İçerikleri yenile'}
+            disabled={busy}
+            onPress={async () => {
+              setBusy(true);
+              try { await refreshAllCourses(); } finally { setBusy(false); }
+            }}
+          />
+          <AdminButton
+            tone="neutral"
+            icon="time-outline"
+            label={`Son işlemler (${activity.length})`}
+            onPress={() => setActivityOpen(true)}
+          />
+        </View>
 
-        <AdminSectionTitle
-          label="Son işlemler"
-          hint={activity.length === 0 ? 'Henüz işlem kaydı yok.' : undefined}
-        />
-        <AdminCard>
+        <AdminSheet visible={activityOpen} title="Son işlemler" onClose={() => setActivityOpen(false)}>
+          <Text style={{ fontSize: 11.5, color: colors.textMuted, marginBottom: 8 }}>
+            Bu cihazda tutulan son 60 işlem gösterilir.
+          </Text>
           {activity.length === 0 ? (
             <Text style={{ fontSize: 12.5, color: colors.textMuted, lineHeight: 18 }}>
-              Panelde yaptığın her değişiklik (soru, konu, kullanıcı, ayar) burada listelenir.
+              Henüz işlem kaydı yok.
             </Text>
           ) : (
-            activity.slice(0, 10).map((a, i, arr) => (
-              <AdminRow
-                key={a.id}
-                compact
-                icon={a.icon}
-                title={a.label}
-                subtitle={formatStamp(a.at)}
-                style={{ borderBottomWidth: i === arr.length - 1 ? 0 : StyleSheet.hairlineWidth }}
-              />
-            ))
+            <AdminCard pad={4}>
+              {activity.map((a, i) => (
+                <AdminRow
+                  key={a.id}
+                  compact
+                  icon={a.icon}
+                  title={a.label}
+                  subtitle={formatStamp(a.at)}
+                  style={{ borderBottomWidth: i === activity.length - 1 ? 0 : StyleSheet.hairlineWidth }}
+                />
+              ))}
+            </AdminCard>
           )}
-        </AdminCard>
+        </AdminSheet>
 
         <AdminSectionTitle label="Panel" />
         <View style={styles.footer}>
@@ -420,16 +405,6 @@ const StatCell: React.FC<{
   );
 };
 
-const MiniStat: React.FC<{ label: string; value: string }> = ({ label, value }) => {
-  const { colors } = useAppTheme();
-  return (
-    <View style={[styles.miniStat, { backgroundColor: colors.surfaceSecondary }]}>
-      <Text style={[styles.miniValue, { color: colors.text }]}>{value}</Text>
-      <Text style={[styles.miniLabel, { color: colors.textMuted }]}>{label}</Text>
-    </View>
-  );
-};
-
 function formatStamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
@@ -475,17 +450,6 @@ const styles = StyleSheet.create({
   },
   shortcutLabel: { fontSize: 13.5, fontWeight: '800' },
   shortcutDesc: { fontSize: 11, lineHeight: 15 },
-  progressGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  miniStat: {
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    flexBasis: '30%',
-    flexGrow: 1,
-  },
-  miniValue: { fontSize: 14, fontWeight: '900' },
-  miniLabel: { fontSize: 10.5 },
-  progressActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
   expiring: { fontSize: 11.5, fontWeight: '700', marginTop: 10, lineHeight: 16 },
   footer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   footerHint: { fontSize: 11, lineHeight: 16, marginTop: 8 },
