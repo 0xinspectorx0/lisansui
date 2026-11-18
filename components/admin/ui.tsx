@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
 import { useAppTheme } from '../../lib/theme';
+import { ModalFrame } from '../ModalFrame';
 
 /** Accent used across the admin area (violet) — keeps it visually distinct. */
 export function useAdminAccent() {
@@ -697,6 +698,7 @@ export const AdminSheet: React.FC<{
   const { colors } = useAdminAccent();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <ModalFrame>
       <Pressable style={{ flex: 1, backgroundColor: 'rgba(2,6,23,0.55)' }} onPress={onClose}>
         <View style={{ flex: 1 }} pointerEvents="box-none" />
       </Pressable>
@@ -730,11 +732,12 @@ export const AdminSheet: React.FC<{
           {children}
         </ScrollView>
         {!!footer && (
-          <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 10 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 10 }}>
             {footer}
           </View>
         )}
       </View>
+      </ModalFrame>
     </Modal>
   );
 };
@@ -750,6 +753,7 @@ export const AdminConfirm: React.FC<{
   const { colors } = useAdminAccent();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <ModalFrame>
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: 'rgba(2,6,23,0.55)' }}>
         <View
           style={{
@@ -764,15 +768,16 @@ export const AdminConfirm: React.FC<{
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <Ionicons name="alert-circle" size={19} color={colors.danger} />
-            <Text style={{ fontSize: 15, fontWeight: '800', color: colors.text }}>{title}</Text>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: colors.text, flex: 1, minWidth: 0 }}>{title}</Text>
           </View>
           <Text style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 19 }}>{message}</Text>
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
             <AdminButton label="Vazgeç" tone="neutral" onPress={onCancel} flex />
             <AdminButton label={confirmLabel} tone="danger" onPress={onConfirm} flex />
           </View>
         </View>
       </View>
+      </ModalFrame>
     </Modal>
   );
 };

@@ -22,6 +22,7 @@ import { AdminProvider } from './lib/AdminContext';
 import { MembershipProvider, useMembership } from './lib/MembershipContext';
 import { ProfileIcon } from './components/ProfileButton';
 import { StackTabBar, type StackTabTarget } from './components/StackTabBar';
+import { APP_FRAME_BREAKPOINT, APP_FRAME_MAX_WIDTH } from './components/ModalFrame';
 import { AdminAccessProvider } from './lib/AdminAccessContext';
 import { AdminGate } from './components/admin/AdminGate';
 import { hasPendingAuthRedirect } from './lib/authClient';
@@ -266,7 +267,7 @@ function MainTabsScreen() {
 function RootNavigator() {
   const { colors } = useAppTheme();
   const { width, height } = useWindowDimensions();
-  const isWideWeb = Platform.OS === 'web' && width > 540;
+  const isWideWeb = Platform.OS === 'web' && width > APP_FRAME_BREAKPOINT;
   const membership = useMembership();
   const navRef = useRef(createNavigationContainerRef<RootStackParamList>()).current;
   const [rootRoute, setRootRoute] = useState('MainTabs');
@@ -351,7 +352,7 @@ function RootNavigator() {
         style={[
           styles.appFrame,
           isWideWeb && {
-            maxWidth: 480,
+            maxWidth: APP_FRAME_MAX_WIDTH,
             alignSelf: 'center',
             borderLeftWidth: 1,
             borderRightWidth: 1,
