@@ -46,9 +46,9 @@ for (const name of ['Panel', 'Topics', 'Questions', 'Users', 'Tips', 'Courses', 
 assert.doesNotMatch(app, /name="AdminLogin"/);
 console.log('✓ Admin gate renders only for allowed access; all admin routes are protected');
 
-// Manual cloud controls are administrative, while errors remain visible to users.
+// Profile no longer exposes manual cloud operations to any role.
 const profileSource = readFileSync('screens/ProfileScreen.tsx', 'utf8');
-assert.match(profileSource, /const \{ allowed: isAdmin \} = useAdminAccess\(\)/);
-assert.match(profileSource, /\{isAdmin && \(\s*<>\s*<AdminSectionTitle label="Bulut"[\s\S]*?<\/AdminCard>\s*<\/>\s*\)\}/);
+assert.doesNotMatch(profileSource, /label="Bulut"|Deneme sayılarımı buluta yaz|Buluttaki haklarımı geri yükle|Üyelik belgesini yenile|Bu cihazı VIP göster|Buluttaki haklarımı oku/);
+assert.doesNotMatch(profileSource, /syncUsageToCloud|restoreFromCloud|toggleVip/);
 assert.match(profileSource, /<CloudStatusBanner compact \/>/);
-console.log('✓ Profile cloud tools restricted to verified administrators');
+console.log('✓ Manual profile cloud controls removed for all users');

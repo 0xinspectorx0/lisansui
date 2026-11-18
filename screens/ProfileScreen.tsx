@@ -6,9 +6,7 @@ import { useNavigation } from '@react-navigation/native';
 
 import { useAppTheme, COURSES } from '../lib/theme';
 import { useApp } from '../lib/AppContext';
-import { useAdmin } from '../lib/AdminContext';
 import { useMembership } from '../lib/MembershipContext';
-import { useAdminAccess } from '../lib/AdminAccessContext';
 import { CourseId } from '../lib/types';
 import { PLAN_LABEL, STATUS_LABEL, daysLeft } from '../lib/membership';
 import {
@@ -27,8 +25,6 @@ export const ProfileScreen: React.FC = () => {
   const { colors } = useAppTheme();
   const navigation = useNavigation<any>();
   const { catalog } = useApp();
-  const admin = useAdmin();
-  const { allowed: isAdmin } = useAdminAccess();
   const membership = useMembership();
   const { member, signedIn, isVip, quota, busy, error } = membership;
 
@@ -42,7 +38,6 @@ export const ProfileScreen: React.FC = () => {
   const [pwNext, setPwNext] = useState('');
   const [confirm, setConfirm] = useState<'signout' | 'delete' | null>(null);
   const [deletePw, setDeletePw] = useState('');
-  const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (member) {
@@ -65,7 +60,6 @@ export const ProfileScreen: React.FC = () => {
 
   const totalUsed = rows.reduce((s, r) => s + r.used, 0);
   const left = member ? daysLeft(member.vipExpiresAt) : null;
-  const localUser = admin.localUser;
   const goBackSafe = () => {
     if (navigation.canGoBack()) navigation.goBack();
     else navigation.navigate('MainTabs');
@@ -93,17 +87,6 @@ export const ProfileScreen: React.FC = () => {
             </Text>
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
               <AdminButton label="Üye ol / Giriş yap" icon="log-in-outline" onPress={() => navigation.navigate('Auth')} flex />
-              <AdminButton
-                label="Buluttaki haklarımı oku"
-                tone="ghost"
-                icon="cloud-download-outline"
-                onPress={async () => {
-                  const r = await membership.restoreFromCloud();
-                  setNote(r.ok ? `${r.restored} ders için bulut sayaçları işlendi` : 'Önce giriş yapman gerekiyor');
-                  setTimeout(() => setNote(null), 2600);
-                }}
-                flex
-              />
             </View>
           </AdminCard>
           <MembershipCta reason="guest" />
@@ -126,13 +109,6 @@ export const ProfileScreen: React.FC = () => {
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 34, gap: 12 }} keyboardShouldPersistTaps="handled">
         <CloudStatusBanner compact />
-        {!!note && (
-          <View style={[styles.note, { backgroundColor: colors.successSoft, borderColor: colors.border }]}>
-            <Ionicons name="checkmark-circle" size={15} color={colors.success} />
-            <Text style={{ flex: 1, fontSize: 12, fontWeight: '700', color: colors.success }}>{note}</Text>
-          </View>
-        )}
-
         <AdminCard style={{ gap: 10 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <View style={[styles.avatar, { backgroundColor: colors.primarySoft }]}>
@@ -185,59 +161,6 @@ export const ProfileScreen: React.FC = () => {
 
         <AdminSectionTitle label="Test hakların" hint={quota.enforced ? (quota.isVip ? 'VIP: sınır yok' : `Ücretsiz plan: dersten ${quota.freeTestsPerCourse} test`) : 'Hak sınırı kapalı'} />
         <QuotaList rows={rows} />
-
-        {isAdmin && (
-          <>
-            <AdminSectionTitle label="Bulut" hint="Sayılarını Supabase’e mirrora et, panelden onaylat" />
-            <AdminCard>
-              <AdminRow
-                compact
-                icon="cloud-upload-outline"
-                title="Deneme sayılarımı buluta yaz"
-                subtitle="Yeni cihazda haklarının sıfırlanmaması için yerel kayıtlarını üye belgesine işler"
-                right={<AdminChip label={busy ? 'çalışıyor' : 'hazır'} tone="info" compact />}
-                onPress={async () => {
-                  const courseUsage: Record<string, number> = {};
-                  (Object.keys(catalog) as CourseId[]).forEach(id => {
-                    courseUsage[id] = membership.usedFor(id);
-                  });
-                  const res = await membership.syncUsageToCloud({
-                    courseUsage,
-                    testsCompleted: totalUsed,
-                    questionsSolved: localUser.solved || 0,
-                  });
-                  setNote(res.ok ? 'Yerel sayılar üyelik belgenize yazıldı' : 'Buluta yazılamadı — kural/çevrimdışı kontrol et');
-                  setTimeout(() => setNote(null), 2800);
-                }}
-              />
-              <AdminRow
-                compact
-                icon="cloud-download-outline"
-                title="Buluttaki haklarımı geri yükle"
-                subtitle="Bu cihazdan silinmiş deneme geçmişini üye belgesindeki sayaçlardan tamamlar"
-                onPress={async () => {
-                  const r = await membership.restoreFromCloud();
-                  setNote(r.ok ? `Bulut sayaçları yerel geçmişe işlendi (${r.restored} ders)` : 'Bu işlem için giriş gerekli');
-                  setTimeout(() => setNote(null), 2600);
-                }}
-              />
-              <AdminRow
-                compact
-                icon="refresh-outline"
-                title="Üyelik belgesini yenile"
-                subtitle="VIP onayı verdiysen panelde, burada tek dokunuşla güncellenir"
-                onPress={() => membership.refreshMember()}
-              />
-              <AdminRow
-                compact
-                icon={localUser.vip ? 'diamond' : 'diamond-outline'}
-                title="Bu cihazı VIP göster (yalnızca yönetici)"
-                subtitle="Panelde açıkken çalışır; Supabase belgeni değiştirmez"
-                onPress={() => admin.toggleVip(localUser.id)}
-              />
-            </AdminCard>
-          </>
-        )}
 
         {!!error && (
           <View style={[styles.note, { backgroundColor: colors.dangerSoft, borderColor: colors.border }]}>
