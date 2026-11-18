@@ -103,7 +103,8 @@ export function invalidateLiveContent(): void {
 export async function fetchTopicQuestions(
   courseId: CourseId,
   topicDocId: string,
-  topicName?: string
+  topicName?: string,
+  strict = false
 ): Promise<Question[]> {
   const cacheKey = `${courseId}:${topicDocId}`;
   const cached = topicQuestionsCache.get(cacheKey);
@@ -122,11 +123,12 @@ export async function fetchTopicQuestions(
       topicDocId,
       resolvedName
     );
-    if (generation !== cacheGeneration) return fetchTopicQuestions(courseId, topicDocId, topicName);
+    if (generation !== cacheGeneration) return fetchTopicQuestions(courseId, topicDocId, topicName, strict);
     topicQuestionsCache.set(cacheKey, questions);
     return questions;
-  } catch {
-    // Offline fallback
+  } catch (error) {
+    if (strict) throw error;
+    // Offline fallback for individual topic tests only.
   }
 
   const fallback = (FALLBACK_QUESTIONS[courseId] || []).map(q => ({
@@ -178,75 +180,44 @@ export async function refreshCourseTopics(courseId: CourseId, strict = false): P
   );
 }
 
-/**
- * Builds a balanced mixed quiz across active topics of a single course
- */
+/** Mixed exams only use actual cloud topic questions, never bundled fallback data. */
+async function mixedCoursePool(courseId: CourseId, topics: TopicMeta[]): Promise<Question[]> {
+  const pools = await Promise.all(topics.map(t => fetchTopicQuestions(courseId, t.docId, t.name, true)));
+  const seen = new Set<string>();
+  return pools.flat().filter(q => {
+    const key = `${q.topicDocId}:${q.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort(() => Math.random() - 0.5);
+}
+
 export async function buildCourseMixedQuestions(
   courseId: CourseId,
   topics: TopicMeta[],
   count = 20
 ): Promise<Question[]> {
-  const activeTopics = topics.filter(t => t.questionCount > 0);
-  if (activeTopics.length === 0) {
-    return (FALLBACK_QUESTIONS[courseId] || []).map(q => ({
-      ...q,
-      courseId,
-      question: cleanKpssText(q.question),
-      explanation: cleanKpssText(q.explanation),
-    }));
-  }
-
-  // Pick up to 5 random active topics in parallel for fast <250ms loading
-  const sampledTopics = [...activeTopics]
-    .sort(() => Math.random() - 0.5)
-    .slice(0, Math.min(5, activeTopics.length));
-
-  const pools = await Promise.all(
-    sampledTopics.map(t => fetchTopicQuestions(courseId, t.docId, t.name))
-  );
-
-  const combined = pools.flat();
-  if (combined.length === 0) {
-    return (FALLBACK_QUESTIONS[courseId] || []).map(q => ({
-      ...q,
-      courseId,
-      question: cleanKpssText(q.question),
-      explanation: cleanKpssText(q.explanation),
-    }));
-  }
-
-  return [...combined].sort(() => Math.random() - 0.5).slice(0, count);
+  return (await mixedCoursePool(courseId, topics)).slice(0, Math.max(0, count));
 }
 
-/**
- * Builds a KPSS Karma Deneme across all 5 courses (Tarih, Coğrafya, Türkçe, Vatandaşlık, Güncel)
- */
+/** Take available questions fairly from all courses, then fill any remaining slots. */
 export async function buildGeneralMixedExam(
   catalog: Record<CourseId, TopicMeta[]>,
   totalQuestions = 25
 ): Promise<Question[]> {
   const courseIds: CourseId[] = ['tarih', 'turkce', 'cografya', 'vatandaslik', 'guncel'];
-  const perCourse = Math.max(3, Math.ceil(totalQuestions / courseIds.length));
-
-  const courseResults = await Promise.all(
-    courseIds.map(async cid => {
-      const active = (catalog[cid] || []).filter(t => t.questionCount > 0);
-      if (active.length === 0) {
-        return (FALLBACK_QUESTIONS[cid] || []).slice(0, perCourse).map(q => ({
-          ...q,
-          courseId: cid,
-        }));
-      }
-      const chosenTopic = active[Math.floor(Math.random() * active.length)];
-      const qs = await fetchTopicQuestions(cid, chosenTopic.docId, chosenTopic.name);
-      return [...qs].sort(() => Math.random() - 0.5).slice(0, perCourse);
-    })
-  );
-
-  return courseResults
-    .flat()
-    .sort(() => Math.random() - 0.5)
-    .slice(0, totalQuestions);
+  const pools = await Promise.all(courseIds.map(id => mixedCoursePool(id, catalog[id] || [])));
+  const selected: Question[] = [];
+  while (selected.length < totalQuestions) {
+    let added = false;
+    for (const pool of pools) {
+      const question = pool.pop();
+      if (question) { selected.push(question); added = true; }
+      if (selected.length >= totalQuestions) break;
+    }
+    if (!added) break;
+  }
+  return selected.sort(() => Math.random() - 0.5);
 }
 
 /**

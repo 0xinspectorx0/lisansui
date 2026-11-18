@@ -287,7 +287,7 @@ export const AuthScreen: React.FC = () => {
           </View>
         </View>
 
-        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+        <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <CloudStatusBanner />
 
           {(mode === 'signin' || mode === 'signup') && (

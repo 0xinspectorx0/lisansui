@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import { build } from 'esbuild';
+import Module from 'node:module';
+import path from 'node:path';
+const bundle=await build({entryPoints:['lib/kpssApi.ts'],bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'mock',setup(b){
+  b.onResolve({filter:/^\.\/cloudApi$/},()=>({path:'cloud',namespace:'mock'}));
+  b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:`export const readDocument=(...a)=>globalThis.__mixedRead(...a); export const listDocuments=async()=>({ok:true,data:[]});`,loader:'js'}));
+}}]});
+const file=path.join(process.cwd(),'scripts/_mixed.cjs');const mod=new Module(file);mod.filename=file;mod.paths=Module._nodeModulePaths(path.dirname(file));mod._compile(bundle.outputFiles[0].text,file);
+const api=mod.exports; const ids=['tarih','turkce','cografya','vatandaslik','guncel'];
+const cat=()=>Object.fromEntries(ids.map(id=>[id,[]]));
+const question=id=>({mapValue:{fields:{id:{stringValue:id},question:{stringValue:`Soru ${id}`},options:{arrayValue:{values:[{stringValue:'A'},{stringValue:'B'}]}},answer:{integerValue:0}}}});
+let data={}; let fail=false;globalThis.__mixedRead=async path=>fail?{ok:false,error:'offline'}:{ok:true,data:{questions:{arrayValue:{values:data[path]||[]}}}};
+assert.deepEqual(await api.buildGeneralMixedExam(cat()),[],'empty catalog does not supply seed questions');
+const catalog=cat();catalog.tarih=[{docId:'a',name:'A',questionCount:0},{docId:'b',name:'B',questionCount:2}];catalog.turkce=[{docId:'c',name:'C',questionCount:1}];
+data={'courses/tarih/topics/a':[question('1')], 'courses/tarih/topics/b':[question('2'),question('3'),question('4')], 'courses/turkce/topics/c':[question('5')]};
+const qs=await api.buildGeneralMixedExam(catalog,25); assert.equal(qs.length,5,'all available questions are used, including topics whose count is stale');assert.deepEqual(new Set(qs.map(q=>q.id)),new Set(['1','2','3','4','5']));
+assert.equal((await api.buildGeneralMixedExam(catalog,2)).length,2);
+assert.equal((await api.buildCourseMixedQuestions('tarih',catalog.tarih,20)).length,4);
+assert.deepEqual(await api.buildCourseMixedQuestions('guncel',[],20),[]);
+api.clearKpssCaches(); fail=true; await assert.rejects(api.buildGeneralMixedExam(catalog),/offline/,'failed reads must not silently use bundled questions');
+console.log('✓ Mixed exams use real course topics only, fill sparse pools and report read failures');

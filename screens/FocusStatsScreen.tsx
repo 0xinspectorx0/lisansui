@@ -202,6 +202,7 @@ export const FocusStatsScreen: React.FC = () => {
 
       {tab === 'stats' ? (
         <ScrollView
+          style={{ flex: 1, minHeight: 0 }}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
@@ -387,6 +388,7 @@ export const FocusStatsScreen: React.FC = () => {
         </ScrollView>
       ) : (
         <ScrollView
+          style={{ flex: 1, minHeight: 0 }}
           contentContainerStyle={styles.timerContainer}
           showsVerticalScrollIndicator={false}
         >

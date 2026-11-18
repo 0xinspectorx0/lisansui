@@ -50,6 +50,7 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
   const [filterMode, setFilterMode] = useState<'ready' | 'all'>('ready');
   const [refreshing, setRefreshing] = useState(false);
   const [startingMixed, setStartingMixed] = useState(false);
+  const [mixedError, setMixedError] = useState<string | null>(null);
 
   // Test Selection Sheet state
   const [selectedTopic, setSelectedTopic] = useState<TopicMeta | null>(null);
@@ -136,6 +137,7 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
       return;
     }
     setStartingMixed(true);
+    setMixedError(null);
     try {
       const qs = await buildCourseMixedQuestions(
         courseId,
@@ -157,7 +159,11 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
             timedMinutes: null,
           },
         });
+      } else {
+        setMixedError('Bu derste henüz soru bulunmuyor.');
       }
+    } catch {
+      setMixedError('Sorular yüklenemedi. Bağlantınızı kontrol edip tekrar deneyin.');
     } finally {
       setStartingMixed(false);
     }
@@ -216,6 +222,7 @@ export const CourseTopicsScreen: React.FC<Props> = ({ route, navigation }) => {
         </Pressable>
       </View>
 
+      {mixedError && <Text accessibilityRole="alert" style={{ color: colors.danger, marginHorizontal: 18, marginBottom: 8 }}>{mixedError}</Text>}
       {Number.isFinite(remainingTests) && (
         <Pressable
           onPress={() => navigation.navigate('MembershipPaywall')}
