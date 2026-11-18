@@ -242,10 +242,8 @@ console.log('\x1b[1m[5] ayarlar ekranı — anahtar kullanıcıdan istenmiyor\x1
   const stubbed = [
     '../lib/AppContext',
     '../lib/AdminContext',
-    '../lib/MembershipContext',
     '../lib/contentSeed',
     '../lib/contentCopy',
-    '../lib/cloudApi',
     '../lib/supabaseConfig',
   ];
   const shimDir = path.join(TMP, 'stubs');
@@ -285,8 +283,8 @@ console.log('\x1b[1m[5] ayarlar ekranı — anahtar kullanıcıdan istenmiyor\x1
     `from '${uiShim('admin-gate.js')}'`
   );
   shadowSrc = shadowSrc.replace(
-    "import React, { useEffect, useState } from 'react';",
-    "import React, { useEffect, useState } from 'react';\nimport { renderToString } from 'react-dom/server';"
+    "import React, { useState } from 'react';",
+    "import React, { useState } from 'react';\nimport { renderToString } from 'react-dom/server';"
   );
   shadowSrc +=
     '\nexport function render() {\n  return renderToString(React.createElement(AdminSettingsScreen as any));\n}\n';
@@ -295,23 +293,12 @@ console.log('\x1b[1m[5] ayarlar ekranı — anahtar kullanıcıdan istenmiyor\x1
   written.push(setFile);
 
   const { html, vis } = await renderOf(setFile);
-  // Depoya gömülü anahtar var mı? (setup:supabase bunu config/supabaseApp.ts'e yazar)
-  const repoKey = ((fs.readFileSync(path.join(REPO, 'config', 'supabaseApp.ts'), 'utf8').match(/DEFAULT_SUPABASE_ANON_KEY = '([^']*)'/) || [])[1] || '').trim();
   ok(html.length > 8000, `ayarlar ekranı çökmeden render edildi (${(html.length / 1024) | 0} KB)`);
-  if (process.env.UI_DUMP) console.log('DUMP>>>', vis.slice(vis.indexOf('Supabase Auth (kimlik'), vis.indexOf('Supabase Auth (kimlik') + 2200));
-  ok(vis.includes('Supabase Auth (kimlik doğrulama)'), 'Supabase Auth bölümü görünüyor');
+  ok(!vis.includes('Supabase Auth (kimlik doğrulama)'), 'Supabase Auth bölümü kaldırıldı');
+  ok(!vis.includes('Supabase klasörlerini oluştur (tohumlama)') && !vis.includes('Planı çıkar') && !vis.includes('Örnek soruları da yaz'), 'tohumlama bölümü kaldırıldı');
+  ok(!vis.includes('Kimlik modu') && !vis.includes('Sağlayıcı testi') && !vis.includes('AUTH’U BAĞLAMA SIRASI'), 'Auth bölümündeki kontroller kaldırıldı');
   ok(vis.includes('SQL — tablolar ve RLS'), 'SQL kartı panelde görünüyor');
   ok(!vis.includes('Web API anahtarı (apiKey)'), 'apiKey yapıştırma alanı ekranda YOK');
-  ok(!/placeholder="AIza[^"]*"/.test(html), 'AIza… placeholder’lı input basılmıyor');
-  ok(vis.includes('config/supabaseApp.ts'), 'ekran anahtarın depodan geldiğini söylüyor');
-  ok(!/Kaydet \| Kaldır/.test(vis), '“Kaydet / Kaldır” anahtar formu kaldırıldı');
-  if (repoKey) {
-    ok(vis.includes('depoya gömülü config (config/supabaseApp.ts)'), 'depoda anahtar var → kaynak “repo” gösteriliyor');
-    ok(vis.includes('Kaynak:'), 'anahtar kaynağı satırı basılıyor');
-  } else {
-    ok(vis.includes('Yerel mod'), 'depoda anahtar yok → yerel mod açıkça söyleniyor');
-    ok(vis.includes('geliştiriciye iletmek'), 'kullanıcıya “yapıştır” değil “ilet” deniyor');
-  }
   ok(!/EXPO_PUBLIC_SUPABASE_ANON_KEY=/.test(vis), 'panel kullanıcıya ortam değişkeni ezberletmiyor');
   ok(!/Bu cihazda kayıtlı eski anahtar/.test(vis), 'cihaz anahtarı yoksa o satır da görünmüyor');
   ok(!vis.includes('Erişim tanısı ve kurallar'), 'tanı bölümü panelden kaldırıldı');

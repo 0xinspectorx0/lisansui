@@ -754,7 +754,7 @@ head('\x1b[1m[9] panel ve akış metinleri\x1b[0m');
   ok(/setup:supabase/.test(panel) && !/deploy:rules/.test(panel), 'kurulum komutları Supabase’e dönük');
   ok(!/diagnoseMembershipAccess|accessDiag|teşhis/.test(panel) && !/Tanı(?!mlı)/.test(panel), 'panelde tanı/rapor arayüzü yok');
   ok(!/kural metnini kopyala/.test(panel), 'kural metnini kopyalatma dönemi bitti');
-  ok(/'supabase-auth'/.test(panel), 'kimlik modu rozeti Supabase’i söylüyor');
+  ok(!/Supabase Auth \(kimlik doğrulama\)|Kimlik modu/.test(panel), 'kimlik doğrulama ayar bölümü kaldırıldı');
   const membership = read('lib/MembershipContext.tsx');
   ok(/“Üye ol”a tekrar bas/.test(membership), 'red mesajı tek cümle + sonraki adımı söylüyor');
   ok(!/kuyruğunda|kuyruğa alındı|sonra gönderilir/.test(membership), '“sonra gönderilir” dili yok');
