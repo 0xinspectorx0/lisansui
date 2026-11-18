@@ -13,6 +13,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Question, TestResult, TopicMeta } from '../lib/types';
 import { useAppTheme } from '../lib/theme';
 import { formatNet } from '../lib/textUtils';
+import { ModalFrame } from './ModalFrame';
 
 const DEFAULT_QUESTIONS_PER_TEST = 20;
 
@@ -108,6 +109,7 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
       animationType="slide"
       onRequestClose={onClose}
     >
+      <ModalFrame>
       <View style={styles.backdrop}>
         <Pressable style={styles.backdropTap} onPress={onClose} />
 
@@ -393,6 +395,7 @@ export const TopicTestSheet: React.FC<TopicTestSheetProps> = ({
           )}
         </View>
       </View>
+      </ModalFrame>
     </Modal>
   );
 };

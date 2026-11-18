@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ModalFrame } from '../components/ModalFrame';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
@@ -523,6 +524,7 @@ export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
         animationType="fade"
         onRequestClose={() => setExitModalVisible(false)}
       >
+        <ModalFrame>
         <View style={styles.modalBackdrop}>
           <View
             style={[
@@ -578,6 +580,7 @@ export const QuizScreen: React.FC<Props> = ({ route, navigation }) => {
             </View>
           </View>
         </View>
+        </ModalFrame>
       </Modal>
     </SafeAreaView>
   );

@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ModalFrame } from '../components/ModalFrame';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -712,6 +713,7 @@ export const HomeScreen: React.FC = () => {
         animationType="fade"
         onRequestClose={() => setGoalModalOpen(false)}
       >
+        <ModalFrame>
         <View style={styles.modalBackdrop}>
           <Pressable
             style={StyleSheet.absoluteFill}
@@ -830,6 +832,7 @@ export const HomeScreen: React.FC = () => {
             </Pressable>
           </View>
         </View>
+        </ModalFrame>
       </Modal>
     </SafeAreaView>
   );
